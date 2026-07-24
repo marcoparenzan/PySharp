@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Marco Parenzan
+#
+# Licensed under the MIT License. See the LICENSE file in the project
+# root for full license information.
+
 # iothub_device_mqtt.py — Azure IoT Hub device on paho-mqtt, run by PySharp.
 #
 # Demonstrates, directly on the IoT Hub MQTT protocol (port 8883, MQTT 3.1.1):

@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Marco Parenzan
+#
+# Licensed under the MIT License. See the LICENSE file in the project
+# root for full license information.
+
 # mqtt_subscribe.py — subscribe (and publish) on an MQTT broker, run by PySharp.
 #
 # Scenario 5 of the roadmap. Uses paho-mqtt (downloaded from PyPI) against a public

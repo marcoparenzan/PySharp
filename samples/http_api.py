@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Marco Parenzan
+#
+# Licensed under the MIT License. See the LICENSE file in the project
+# root for full license information.
+
 # http_api.py — "FastAPI-shaped" synchronous HTTP mini-framework, run by PySharp.
 #
 # Hardening round of phase 2.0 (see ROADMAP.md, scenario 2). Adds, while staying

@@ -1,3 +1,8 @@
+// Copyright (c) 2026 Marco Parenzan
+//
+// Licensed under the MIT License. See the LICENSE file in the project
+// root for full license information.
+
 namespace PySharpLib;
 
 /// <summary>Syntax error raised by lexer/parser, with a position in the source.</summary>

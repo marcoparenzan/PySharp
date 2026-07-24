@@ -1,3 +1,8 @@
+// Copyright (c) 2026 Marco Parenzan
+//
+// Licensed under the MIT License. See the LICENSE file in the project
+// root for full license information.
+
 namespace PySharp.Tests.M6_Stdlib;
 
 /// <summary>yaml module (scenario 9): safe_load/safe_dump over a subset of PyYAML.</summary>

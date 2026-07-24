@@ -1,3 +1,8 @@
+// Copyright (c) 2026 Marco Parenzan
+//
+// Licensed under the MIT License. See the LICENSE file in the project
+// root for full license information.
+
 namespace PySharp.Tests.M4_Functions;
 
 public class ClassTests

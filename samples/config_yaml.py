@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Marco Parenzan
+#
+# Licensed under the MIT License. See the LICENSE file in the project
+# root for full license information.
+
 # config_yaml.py — YAML + JSON (de)serialization, run by PySharp.
 #
 # Scenario 9 of the roadmap. Loads a YAML configuration, inspects it, and converts
