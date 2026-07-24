@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to config.json and fill in ONE of the two sections.",
+
+  "auth": "sas",
+  "connection_string": "HostName=<hub>.azure-devices.net;DeviceId=<device>;SharedAccessKey=<base64key>",
+
+  "_auth_x509": "for certificate: auth='x509' plus the three fields below",
+  "hostname": "<hub>.azure-devices.net",
+  "device_id": "<device>",
+  "x509_cert": "device-cert.pem",
+  "x509_key": "device-key.pem"
+}

@@ -1,0 +1,16 @@
+{
+  // Esegue il file Python attivo con PySharp (il global tool `pysharp`) invece di CPython.
+  // Comando: Terminal > Run Task > "PySharp: run current file"  (o assegna una scorciatoia).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PySharp: run current file",
+      "type": "shell",
+      "command": "pysharp",
+      "args": ["run", "${file}"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}

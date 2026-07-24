@@ -1,0 +1,283 @@
+# Roadmap — PySharp toward CPython
+
+This document tracks **the distance between PySharp and a real CPython** and the strategy to reduce
+it. It is not a commitment to become a CPython replacement: it is the map of *how much is missing* and
+*how it gets filled in*, one step at a time.
+
+> **Goal declared by the project.** The author wants to use **only PySharp** to run their own Python,
+> building it up incrementally through real scenarios. Parity with CPython is not expected — the
+> expectation is to cover, one after another, the scripts that actually matter.
+
+---
+
+## Method: scenario-driven development
+
+Progress does **not** proceed by "abstract features" but by **scenarios**: each scenario is **a real
+Python script, runnable end-to-end**. The scenario dictates which language features and which stdlib
+modules to implement — exactly the method by which paho-mqtt support was born:
+
+```text
+run the script  →  ModuleNotFoundError / SyntaxError  →  implement the missing module/feature
+       ↑                                                             │
+       └────────────────────── repeat until the script runs ────────┘
+```
+
+Guiding principle: **the interpreter is made compatible with the script, not the script with the
+interpreter**. The script comes from PyPI / the real world *identical to the original*; it is PySharp
+that grows.
+
+**Every new scenario brings interpreter feature evolution with it**: adding the scenario means (a)
+writing the script in [samples/](samples/), (b) surfacing what is missing, (c) implementing it in
+`src/PySharpLib/`, (d) covering it with tests, (e) updating this roadmap.
+
+---
+
+## Scenarios
+
+| # | Scenario | Script | Status | Features/modules it drives |
+|---|---|---|---|---|
+| 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
+| 2 | **FastAPI API** (no SQL) | [http_api_min.py](samples/http_api_min.py) · [http_api.py](samples/http_api.py) | 🟡 **In progress** (2.0 + hardening ✅) | `async`/`await` (core), `re`, `datetime`, `inspect`, real `typing`, `contextlib`, `abc`, ASGI, pydantic |
+| 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
+| 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
+| 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
+| 6 | **MQTT broker** (server) | _to be created_ | ⚪ Planned | MQTT server on the C# `socket`: MQTT packet parsing (`struct`), session/topic management |
+| 7 | **AMQP / RabbitMQ** | _to be created_ | ⚪ Planned | AMQP 0-9-1 client (e.g. pure `pika`) on the `socket`, or a C# shim on `RabbitMQ.Client` |
+| 8 | **File system API** | _to be created_ | 🟡 Partial | `os`/`io`/`open` partly exist; complete `os.path`, `pathlib`, `shutil`, `glob` |
+| 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
+| T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` exists; for rich APIs a dedicated **C# wrapper/shim** is created |
+
+Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
+
+Scenarios 4–9 are **backlog** collected with the author. **5** (MQTT subscribe) and **9** (JSON+YAML)
+are **already done** (see below); **4/6/7/8** remain to be prioritized.
+
+> **Realism note on ordering.** Technically scenario 3 (SQL) is **simpler** than scenario 2 (FastAPI):
+> SQLite is a well-bounded C# shim, whereas FastAPI requires the **heaviest work of all** — `async`/
+> `await` in the language core, an ASGI stack, and pydantic. The order here reflects the priority
+> declared by the author (FastAPI first); it stays noted that, if a quick win were wanted first, SQL
+> would be the natural candidate.
+
+### Scenario 1 — Azure IoT Hub device ✅
+
+The script [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) is a **complete IoT device**
+that talks to **Azure IoT Hub** directly over **MQTT 3.1.1 on TLS (port 8883)**, using the standard
+Python library **paho-mqtt** downloaded from PyPI *unmodified*. What it does, in detail:
+
+- **Authentication**, two modes: **SAS token** (derives an HMAC-SHA256 from the connection string,
+  with expiry, used as the MQTT password) or **X.509 client certificate** (self-signed, registered on
+  the device, via `ssl.load_cert_chain`).
+- **TLS connection** to `<hub>.azure-devices.net:8883` with `ssl.SSLContext`, username in the form
+  `<host>/<device>/?api-version=2021-04-12`.
+- **Device-to-cloud telemetry (D2C)**: publishes JSON messages on `devices/<id>/messages/events/`.
+- **Cloud-to-device messages (C2D)**: subscribes to `devices/<id>/messages/devicebound/#` and receives
+  them.
+- **Device twin**: `GET` of the document (`$iothub/twin/GET`), sending **reported properties**
+  (`PATCH .../reported`), and live reception of **desired properties** (`PATCH .../desired`), to which
+  it reacts by reporting the applied state.
+- **Network loop**: a timed loop (`client.loop(timeout=...)`) that processes I/O and callbacks.
+
+**Why it is a severe test for the interpreter.** It is not "hello world": it exercises in one shot
+non-blocking TCP + **TLS** (`socket`/`ssl`/`select` cooperating), **threads and locks** (paho uses
+`threading`), **generators** and protocols, **classes** with callbacks/dunders, `struct` for MQTT
+framing, and `hashlib`/`hmac`/`base64`/`urllib.parse` for the SAS. These are the ~20 stdlib modules
+written in C# *because paho and this script import them* — see the "Interpreter evolution log".
+
+**Status.** Complete and **tested end-to-end against a real Azure hub** (D2C, C2D, twin GET, reported
+and desired). Covered offline by the M9 tests ([IoTHubSampleTests.cs](src/PySharp.Tests/M9_IoTHub/IoTHubSampleTests.cs)):
+connection-string parsing, SAS token compared against the C#-computed HMAC, MQTT client construction
+with credentials. Example config in
+[samples/config.iothub_device_mqtt.json](samples/config.iothub_device_mqtt.json).
+
+### Scenario 2 — FastAPI API (no SQL) 🔴 — **key scenario**
+
+**Why it is key.** An API is the capability that turns PySharp from a *script runner* into a *service
+host*. A script (like the IoT one) starts, does its thing, ends; an API **stays alive, listens,
+responds** — the model of almost all production software. It is the moment when "I use only PySharp
+for my Python" stops being about command-line tools and starts being about real services. That is why
+it is the priority even though it is also the most expensive.
+
+**Phased approach (walking skeleton first).** "Key API" does **not** mean "FastAPI+uvicorn on day 1":
+FastAPI is the heaviest target because it drags in `async`/ASGI/pydantic all together. The strategy is
+to reach a live HTTP endpoint early and then grow toward FastAPI compatibility, with the working API
+as the test bench.
+
+- **2.0 — Minimal HTTP API (no async).** ✅ **Done.** Synchronous HTTP server in **pure Python** over
+  the existing `socket` module ([samples/http_api_min.py](samples/http_api_min.py)): `def` handlers
+  with a `@route` decorator, routing by `(method, path)`, query-string parsing, JSON response, 404.
+  **It ran with no interpreter changes** — the C# `socket` already covered `bind`/`listen`/`accept`/
+  `recv`/`sendall`. Verified with `curl` on `/`, `/health`, `/hello?name=…` and a 404. Zero async,
+  zero pydantic: the first tangible result of the scenario.
+- **2.0+ — "FastAPI-shaped" hardening.** ✅ **Done.** A more expressive mini-framework
+  ([samples/http_api.py](samples/http_api.py)) that replicates FastAPI's **internal mechanism**, still
+  synchronous: **path parameters** (`/items/{item_id}`), JSON body on POST, and above all
+  **type-hint-driven parameter validation + coercion + injection**, read at runtime from
+  `handler.__annotations__` (422 on invalid values, defaults injected). Verified with `curl` on all
+  endpoints + error cases. **Interpreter evolution required and delivered in this round** (see log
+  below): populating `__annotations__` and `__name__` on builtins.
+- **2a — `async`/`await` in the language.** Today the parser **rejects** them (`SyntaxError:
+  async/await is not supported by PySharp v1`). Needed: parsing of `async def`/`await`/`async for`/
+  `async with` and a coroutine execution model in the interpreter.
+- **2b — `asyncio` module.** A .NET-backed event loop (`Task`/`SynchronizationContext`), `sleep`,
+  `gather`, tasks, async synchronization primitives.
+- **2c — cross-cutting stdlib.** `re` (regex — pervasive in routing/validation), `datetime`, `inspect`
+  (FastAPI reads signatures at runtime), **real** `typing` (not the current stub: needs
+  `get_type_hints`, `Annotated`, …), `contextlib`, `abc`, `importlib`, `email`/`http` for the HTTP
+  details.
+- **2d — data validation (pydantic).** `pydantic` v2 depends on `pydantic-core` **compiled in Rust** →
+  a wall. Options to decide: (i) pydantic **v1**, which is pure Python; (ii) a C# shim reimplementing
+  the core; (iii) a minimal ad-hoc validation model for the scenario.
+- **2e — ASGI server + FastAPI.** uvicorn is async-native. Options: a mini ASGI server written over
+  the C# `socket`, or starlette (pure but with async dependencies).
+
+Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
+handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp.
+
+### Scenario 3 — SQL access ⚪
+
+- **3a — `sqlite3` DB-API.** New C# module in `Modules/` exposing `connect`/`Connection`/`Cursor`/
+  `execute`/`executemany`/`fetchone`/`fetchall`, backed by `Microsoft.Data.Sqlite`. Open decision:
+  whether the NuGet dependency goes on "pure" `PySharpLib` or an isolated project/module.
+- **3b — Postgres.** Same DB-API shape backed by `Npgsql` (when a server is available).
+
+### Scenario 5 — MQTT subscribe on a broker ✅
+
+The script [samples/mqtt_subscribe.py](samples/mqtt_subscribe.py) performs a **real MQTT round-trip**:
+it connects to a public broker (`test.mosquitto.org:1883`, plaintext), subscribes to a unique topic,
+publishes 3 JSON messages there and receives them back via `on_message`. **No interpreter changes**:
+paho's subscribe side already ran since scenario 1 (which used `client.subscribe`). It confirms the
+MQTT/network engine is solid outside the IoT Hub case too. Prerequisite: `pysharp install paho-mqtt`.
+
+### Scenario 9 — JSON + YAML (de)serialization ✅
+
+The script [samples/config_yaml.py](samples/config_yaml.py) loads a **YAML** configuration, inspects
+it (correct types: int/bool/str/null, lists, nested mappings) and converts it back and forth between
+YAML and JSON verifying the round-trip. `json` was already present; a **C# `yaml` module** was added
+([YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs)) with `safe_load`/`load`/`safe_dump`/`dump` over
+a **practical PyYAML subset**: block mapping/sequence with indentation, flow style (`[..]`/`{..}`),
+typed scalars, quoting, comments, the `---` marker. Out of scope for v1: block scalars `|`/`>`,
+anchors/aliases, explicit tags, multiple documents. Covered by [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs).
+
+### Cross-cutting — Native libraries 🟡
+
+General rule: **a native library is invoked from C#**, so it is exposed to Python either (a) via
+`ctypes` for simple scalar calls (already supported for basic signatures), or (b) by creating a
+dedicated **C# wrapper/shim** that presents an idiomatic Python API over the .NET/native lib. It is
+the same strategy as scenario 3 (`sqlite3` is a shim on a .NET driver).
+
+---
+
+## Interpreter evolution log (per scenario)
+
+Every scenario brings interpreter feature evolution with it. This records *what was added to the core*
+and *which scenario drove it*.
+
+| Scenario | Interpreter evolution | Files |
+|---|---|---|
+| 1 — IoT Hub | 20 stdlib modules (`socket`, `ssl`, `select`, `threading`, `struct`, …), generators, classes, exceptions | `Modules/`, core |
+| 2.0 — HTTP API | *none* — the existing `socket` was enough | — |
+| 2.0+ — FastAPI-shaped API | **`__annotations__` populated** with the type callables (lazy, best-effort evaluation of parameter annotations); **`__name__`/`__qualname__`/`__module__` on builtin functions** (e.g. `int.__name__`) | [Interp.cs](src/PySharpLib/Interpretation/Interp.cs) `TryGetAttr`; test [IntrospectionTests.cs](src/PySharp.Tests/M4_Functions/IntrospectionTests.cs) |
+| 2.0++ — full signature | **`fn.__code__`** with `co_varnames`/`co_argcount`/`co_kwonlyargcount`/`co_posonlyargcount`/`co_name`: exposes the **parameter names** (including unannotated ones) → full-signature injection, not just annotated parameters | [Callables.cs](src/PySharpLib/Runtime/Callables.cs) `PyCode`; `TryGetAttr`; tests as above |
+| 2.0+++ — return annotation | **`__annotations__['return']`**: the handler's `-> T` is now captured (propagated from `FuncDef.Returns` to `PyFunction`). It promoted the corpus snippet `syntax_type_hint.py` from Xfail to Supported | [Callables.cs](src/PySharpLib/Runtime/Callables.cs) `PyFunction.Returns`; `MakeFunction`; `TryGetAttr` |
+| 5 — MQTT subscribe | *none* — paho's subscribe side already ran | — |
+| 9 — JSON + YAML | new stdlib module **`yaml`** (safe_load/dump, PyYAML subset) | [YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs); test [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs) |
+
+With `co_varnames` (names) + `__annotations__` (types, including `'return'`) the **signature is
+complete**: the framework injects every parameter, treating unannotated ones as `str` (like FastAPI).
+
+**Known remaining gaps for scenario 2** (not yet closed): `inspect.signature` as an idiomatic wrapper
+over `__code__`; evaluating annotations as strings for forward refs; `*args`/`**kwargs` parameters not
+handled by the framework's injector.
+
+---
+
+## Distance from CPython (gap analysis)
+
+Four independent axes. Compatibility with "any PyPI package" would require closing almost all of them
+— which is why the goal stays *per-scenario*, not universal.
+
+### Axis A — Language
+
+| Supported | Missing (out of scope for v1) |
+|---|---|
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), import system, function introspection (`__annotations__`, `__code__`) | `async`/`await`, `match`, `exec()`/`eval()`, complex numbers (`1j`), exception groups (`except*`), `generator.send(v)` with a value, dunders as attributes of builtin *types*, custom metaclasses |
+
+### Axis B — Stdlib
+
+Implemented **~36 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+`errno`, `io`, `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`,
+`hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`, `enum`,
+`functools`, `math`, `logging`, `ctypes`; stubs for `typing`, `dataclasses`, `__future__`.
+
+**High-priority missing** (surfaced by the scenario probes): `re`, `datetime`, `importlib`,
+`itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`, `asyncio`, `decimal`, `sqlite3`.
+
+### Axis C — Native extensions (C/Rust)
+
+The structural wall. Packages like numpy, pandas, psycopg2, cryptography, orjson, **pydantic-core** are
+binaries compiled for CPython: **no Python-in-C# interpreter can load them as they are**. Possible
+strategies, all *per-package*:
+
+1. use a **pure-Python fallback** if the package offers one (often not);
+2. **reimplement the API in C#** as a native module/shim (via `Microsoft.Data.Sqlite`, `Npgsql`,
+   `NativeLibrary`, …);
+3. `ctypes` for calls to native DLLs with simple signatures.
+
+There is no *generic* path without embedding CPython — which the project chose not to do.
+
+### Axis D — Packaging / pip
+
+The mini-pip installs **only pure wheels** (`py3-none-any`) and **does not resolve dependencies**
+(`requires_dist` ignored). A bounded, low-risk improvement: read the transitive dependencies and
+install them (with marker parsing), still rejecting non-pure wheels but with a **clean error** (today
+`install numpy` exits with an unhandled CLR exception — see [TODO.md](TODO.md)).
+
+---
+
+## Process to add a scenario
+
+1. Write the real script in [samples/](samples/) (or install the target package from PyPI).
+2. Run it with the host: `dotnet run --project PySharp -- run samples/<script>.py` (or `pysharp run …`).
+3. Collect the errors (`ModuleNotFoundError`, `SyntaxError`, `AttributeError`).
+4. Implement the missing module/feature in `src/PySharpLib/` (new file in `Modules/` + registration in
+   `StdlibModules.RegisterAll`, or work on the lexer/parser/interpreter).
+5. Add the tests (milestones `Mx_*` in `PySharp.Tests/`).
+6. **Update this roadmap** (scenario status + gap analysis) and [README.md](README.md).
+
+---
+
+## Test strategy: tests can be written in Python
+
+**Yes.** Besides the C# (xUnit) tests that embed Python source as a string, the project already
+supports **tests written as `.py` files**, with a small C# harness that invokes them. It is the
+**corpus** mechanism ([CorpusTests.cs](src/PySharp.Tests/Corpus/CorpusTests.cs)):
+
+- each file in `Corpus/snippets/*.py` **is** a test: it contains its own `assert`s;
+- a data-driven `[Theory]` enumerates the files and for each runs `PyEngine.Run(file)`;
+- "ran without raising" = **pass**; a failed `assert` → `AssertionError` → **fail**;
+- a support module [testutils.py](src/PySharp.Tests/Corpus/snippets/testutils.py) is available for
+  snippets to import (`assert_raises`, `assert_equal`, `assert_true`, …).
+
+There is also an `Xfail` table for snippets that **must still fail** (out-of-scope features): if one
+starts passing, the test turns red and reminds you to **promote** it to Supported — it happened with
+`syntax_type_hint.py` when we added the return annotation.
+
+**Practical consequence for scenarios.** A new scenario can bring its own tests in Python: an
+`assert`-based script (e.g. `tests/http_api_test.py`) invoked by a `[Theory]` harness, instead of (or
+in addition to) C# tests. It is the most natural way to test language-level behavior; C# tests stay
+useful when you need to build up state or compare against a value computed in .NET (like the SAS token
+in scenario 1).
+
+---
+
+## Progress indicators
+
+- Scenarios: **1, 5, 9 complete**; **2** started (phases 2.0/2.0+/2.0++/2.0+++ ✅); 3 and 4/6/7/8 to
+  do; native cross-cutting partial.
+- Stdlib modules: **~36 / ~200** of CPython (added `yaml`).
+- Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
+  `'return'`, `__code__.co_varnames` ✅; `inspect.signature` ❌); `async`/`match`/`exec`/`complex`
+  missing (Axis A).
+- Tests: **547 green** (+18 for the `yaml` module).
+
+_Update these numbers at every milestone._

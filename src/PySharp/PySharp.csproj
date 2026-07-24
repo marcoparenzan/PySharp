@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PipSharpLib\PipSharpLib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console.Cli" Version="0.49.1" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- Impacchetta l'host come .NET global tool: `pysharp` invocabile ovunque (in PATH). -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>pysharp</ToolCommandName>
+    <PackageId>PySharp</PackageId>
+    <Version>1.1.0</Version>
+    <Description>PySharp — interprete Python 3.x scritto in C#, come strumento da riga di comando.</Description>
+  </PropertyGroup>
+
+</Project>
