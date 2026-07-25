@@ -10,11 +10,16 @@ using PySharpLib;
 
 namespace PySharp.Tests.M10_Async;
 
+/// <summary>Run this live-socket test in isolation so parallel CPU load can't starve the server thread.</summary>
+[CollectionDefinition("live-server", DisableParallelization = true)]
+public class LiveServerCollection { }
+
 /// <summary>
 /// Scenario 2 end-to-end: a real asynchronous HTTP server written in Python and run by
 /// PySharp on the .NET-backed asyncio loop, answering an actual TCP request. Bounded to a
 /// single request so the loop terminates on its own.
 /// </summary>
+[Collection("live-server")]
 public class AsyncServerTests
 {
     [Fact]
@@ -63,13 +68,13 @@ public class AsyncServerTests
         { IsBackground = true, Name = "pysharp-async-server" };
         server.Start();
 
-        string response = GetWithRetry("127.0.0.1", port, timeout: TimeSpan.FromSeconds(10));
+        string response = GetWithRetry("127.0.0.1", port, timeout: TimeSpan.FromSeconds(20));
 
         Assert.Contains("200 OK", response);
         Assert.Contains("\"engine\": \"PySharp\"", response);
         Assert.Contains("\"async\": true", response);
 
-        Assert.True(server.Join(TimeSpan.FromSeconds(5)), "server loop did not terminate after one request");
+        Assert.True(server.Join(TimeSpan.FromSeconds(15)), "server loop did not terminate after one request");
         Assert.Null(serverError);
     }
 

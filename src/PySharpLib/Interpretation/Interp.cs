@@ -1200,6 +1200,16 @@ public sealed class Interp
                 }
                 throw PyErr.TypeError($"'{inst.Class.Name}' object is not callable");
 
+            case ClrMethod clrMethod:
+                return ClrBinder.InvokeMethod(clrMethod, args);
+
+            case ClrType clrType:
+                return ClrBinder.Construct(clrType.Type, args);
+
+            case ClrObject clrObj when clrObj.Instance is Delegate del:
+                return ClrBinder.InvokeMethod(
+                    new ClrMethod(del, del.GetType(), "Invoke"), args);
+
             default:
                 throw PyErr.TypeError($"'{PyOps.TypeName(callee)}' object is not callable");
         }
@@ -1892,6 +1902,10 @@ public sealed class Interp
             }
             case PyClass:
                 return obj; // Dict[str, int] ecc.: sottoscrizione di tipo → no-op
+            case ClrObject clr:
+                if (ClrBinder.TryGetIndex(clr, index, out var indexed))
+                    return indexed;
+                throw PyErr.TypeError($"'{clr.Type.Name}' object is not subscriptable");
             default:
                 throw PyErr.TypeError($"'{PyOps.TypeName(obj)}' object is not subscriptable");
         }
@@ -1923,6 +1937,10 @@ public sealed class Interp
                 break;
             case PyInstance inst:
                 CallMethod(inst, "__setitem__", new[] { index, value });
+                break;
+            case ClrObject clr:
+                if (!ClrBinder.TrySetIndex(clr, index, value))
+                    throw PyErr.TypeError($"'{clr.Type.Name}' object does not support item assignment");
                 break;
             default:
                 throw PyErr.TypeError($"'{PyOps.TypeName(obj)}' object does not support item assignment");
@@ -2218,6 +2236,16 @@ public sealed class Interp
                 value = PyNone.Instance;
                 return false;
 
+            case ClrObject clr:
+                if (ClrBinder.TryGetMember(clr.Instance, clr.Type, name, isStatic: false, out value))
+                    return true;
+                throw PyErr.AttributeError($"'{clr.Type.Name}' object has no attribute '{name}'");
+
+            case ClrType ct:
+                if (ClrBinder.TryGetMember(null, ct.Type, name, isStatic: true, out value))
+                    return true;
+                throw PyErr.AttributeError($"type '{ct.Type.Name}' has no attribute '{name}'");
+
             default:
                 return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
         }
@@ -2265,6 +2293,14 @@ public sealed class Interp
                 return;
             case PyFunction fn:
                 fn.Attributes[name] = value;
+                return;
+            case ClrObject clr:
+                if (!ClrBinder.TrySetMember(clr.Instance, clr.Type, name, value, isStatic: false))
+                    throw PyErr.AttributeError($"'{clr.Type.Name}' object has no settable attribute '{name}'");
+                return;
+            case ClrType ct:
+                if (!ClrBinder.TrySetMember(null, ct.Type, name, value, isStatic: true))
+                    throw PyErr.AttributeError($"type '{ct.Type.Name}' has no settable attribute '{name}'");
                 return;
             default:
                 throw PyErr.AttributeError(

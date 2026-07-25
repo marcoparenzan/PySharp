@@ -15,7 +15,7 @@ Key features:
 - a **`PyEngine`** embedding facade to host the interpreter inside a .NET application;
 - a **`pysharp` command-line tool** installable globally (a .NET global tool).
 
-Validated by a suite of **569 tests** (unit + RustPython conformance corpus).
+Validated by a suite of **587 tests** (unit + RustPython conformance corpus).
 
 > **Reference sample — Azure IoT Hub.** The project's historical proving ground is an Azure IoT Hub
 > device on **paho-mqtt** (downloaded from PyPI): D2C telemetry, C2D, device twin, SAS and X.509 auth,
@@ -258,7 +258,46 @@ Console.WriteLine((string)res);                    // "hello Marco"
 
 To populate the `sys.argv` seen by the script, use `engine.Interp.Argv`.
 
-### 5. Imports, site-packages and mini-pip
+### 5. Injecting .NET objects into the script (host interop)
+
+Expose any **.NET object** (or a `System.Type`) to the script with `engine.SetVariable(name, obj)`.
+Inside Python the value is used **idiomatically** — method calls, property/field access, indexing,
+iteration and construction — with automatic marshalling between Python and .NET types (Python `int`
+↔ `BigInteger`/`int`/`long`/…, `float` ↔ `double`, `str` ↔ `string`, `None` ↔ `null`, `list` ↔
+arrays/`List<T>`; any other .NET object is wrapped transparently).
+
+```csharp
+using PySharpLib;
+
+public sealed class Weather
+{
+    public string City { get; set; } = "Trento";
+    public double TempC(int day) => 20.0 + day;          // a method with an argument
+    public string[] Forecast => new[] { "sun", "rain" };  // a property to iterate
+}
+
+var engine = new PyEngine();
+engine.SetVariable("weather", new Weather());             // inject an instance
+engine.SetVariable("Math", typeof(System.Math));          // inject a type (statics + ctors)
+
+engine.Run("""
+    print(weather.City)              # -> Trento           (property read)
+    weather.City = "Bolzano"         #                      (property write)
+    print(weather.TempC(3))          # -> 23.0             (method call, int -> double)
+    for f in weather.Forecast:       #                      (iterate a .NET string[])
+        print(f)
+    print(Math.Sqrt(144))            # -> 12.0             (static method on an injected type)
+    """);
+```
+
+What works today: instance & static **methods** (with overload resolution by arity/type),
+**properties** and **fields** (read/write), **indexers** (`obj[key]`), **constructors**
+(`Type(args)` on an injected `Type`), **iteration** over any `IEnumerable`, and calling an injected
+**delegate** (`Func<>`/`Action<>`) as a function. Values you inject are also readable back from
+`module.Dict` after `Run`. Out of scope for now: `ref`/`out` parameters, generic-method type
+inference, events, and passing Python functions as .NET delegates.
+
+### 6. Imports, site-packages and mini-pip
 
 Add folders to `sys.path` via `engine.Importer.SearchPaths`; from there the script can import `.py`
 modules and extracted pure packages (e.g. `paho-mqtt`).

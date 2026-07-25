@@ -89,8 +89,28 @@ Development continues **by scenarios** — real runnable scripts that drive inte
   global tool (`pysharp` on PATH).
 - **`async`/`await` + `asyncio` (scenario 2a/2b)**: coroutines are now a language feature and there
   is a working `asyncio` event loop (see below).
+- **.NET (CLR) interop for embedding**: host apps can inject .NET objects/types into the script
+  scope and use them idiomatically from Python (see below).
 
-Test status at the latest checkpoint: **569 green**.
+Test status at the latest checkpoint: **587 green**.
+
+### .NET object injection (embedding interop)
+
+Hosting the interpreter, you can now expose host objects to the script with
+`engine.SetVariable(name, obj)` and use them idiomatically from Python:
+
+- instance & static **method calls** with overload resolution (by arity and marshalled arg types);
+- **property** and **field** read/write; **indexers** (`obj[key]`); **construction** of an injected
+  `Type` (`Point(3, 4)`); **iteration** over any `IEnumerable`; calling an injected delegate
+  (`Func<>`/`Action<>`) as a function;
+- automatic **marshalling** both ways (Python `int`↔`BigInteger`/`int`/`long`/…, `float`↔`double`,
+  `str`↔`string`, `None`↔`null`, `list`↔arrays/`List<T>`; other objects wrapped transparently).
+
+Implemented in [Clr.cs](src/PySharpLib/Runtime/Clr.cs) (`ClrObject`/`ClrType`/`ClrMethod` +
+`ClrMarshal`/`ClrBinder`), wired into the interpreter's attribute/call/index/iterate dispatch.
+See the README "Injecting .NET objects" section; covered by 18 tests in
+[M11_Interop](src/PySharp.Tests/M11_Interop/). Out of scope for now: `ref`/`out` params,
+generic-method inference, events, and passing Python callables as .NET delegates.
 
 ### Async/await and asyncio (scenario 2a/2b) — key FastAPI groundwork
 

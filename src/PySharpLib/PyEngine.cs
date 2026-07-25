@@ -21,6 +21,14 @@ public sealed class PyEngine
     public PyModule BuiltinsModule { get; }
     public Importer Importer { get; }
 
+    /// <summary>
+    /// Host-injected globals: names made available in the script's scope. Values are
+    /// marshalled to Python on <see cref="Run(string, string)"/> — .NET primitives become
+    /// their Python equivalents, any other object/Type becomes a usable CLR wrapper
+    /// (method calls, property/field access, indexing, iteration). See <see cref="SetVariable"/>.
+    /// </summary>
+    public Dictionary<string, object?> Globals { get; } = new();
+
     public PyEngine(TextWriter? stdout = null)
     {
         BuiltinsModule = BuiltinsFactory.Create();
@@ -30,10 +38,24 @@ public sealed class PyEngine
         Modules.StdlibModules.RegisterAll(Importer);
     }
 
-    /// <summary>Runs the source in a new __main__ module and returns it.</summary>
+    /// <summary>
+    /// Inject a .NET object (or <see cref="System.Type"/>) into the script scope under
+    /// <paramref name="name"/>. From Python the value is used idiomatically:
+    /// <c>obj.Method(args)</c>, <c>obj.Property</c>, <c>obj[i]</c>, iteration, etc.
+    /// Fluent: returns this engine.
+    /// </summary>
+    public PyEngine SetVariable(string name, object? value)
+    {
+        Globals[name] = value;
+        return this;
+    }
+
+    /// <summary>Runs the source in a new __main__ module (seeded with the injected globals) and returns it.</summary>
     public PyModule Run(string source, string fileName = "<string>")
     {
         var module = CreateModule("__main__");
+        foreach (var (name, value) in Globals)
+            module.Dict[name] = Runtime.ClrMarshal.ToPython(value);
         var ast = Parser.Parse(source, fileName);
         Interp.RunModule(ast, module);
         return module;

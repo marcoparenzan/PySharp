@@ -49,6 +49,9 @@ public static class PyOps
         PyTask => "Task",
         PyFuture => "Future",
         PyEventLoop => "AbstractEventLoop",
+        ClrObject clr => clr.Type.Name,
+        ClrType => "type",
+        ClrMethod => "builtin_function_or_method",
         PyEllipsis => "ellipsis",
         PyNotImplemented => "NotImplementedType",
         _ => o.GetType().Name,
@@ -384,6 +387,8 @@ public static class PyOps
             case PyClass cls when cls.Dict.TryGet("__members__", out var membersObj) && membersObj is PyDict members:
                 // iteration over an enum class → its members
                 return new PyIterator(members.Values.ToList().GetEnumerator());
+            case ClrObject clr when ClrBinder.TryEnumerate(clr) is { } items:
+                return new PyIterator(items.GetEnumerator());
             default:
                 throw PyErr.TypeError($"'{TypeName(o)}' object is not iterable");
         }
