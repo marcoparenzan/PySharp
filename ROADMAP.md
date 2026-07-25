@@ -176,6 +176,17 @@ General rule: **a native library is invoked from C#**, so it is exposed to Pytho
 dedicated **C# wrapper/shim** that presents an idiomatic Python API over the .NET/native lib. It is
 the same strategy as scenario 3 (`sqlite3` is a shim on a .NET driver).
 
+### Cross-cutting — .NET object injection (embedding interop) ✅
+
+The host can now inject **any .NET object or `Type`** into the script scope with
+`engine.SetVariable(name, obj)` and use it idiomatically from Python — method calls (with overload
+resolution), property/field read-write, indexers, construction, `IEnumerable` iteration, delegate
+calls — with automatic two-way marshalling. This is the general, reflection-based counterpart to the
+per-library C# shim: instead of writing a module you hand the object straight to the script. See
+[Clr.cs](src/PySharpLib/Runtime/Clr.cs), the README "Injecting .NET objects" section, and the
+[M11_Interop](src/PySharp.Tests/M11_Interop/) tests. Open: `ref`/`out`, generic-method inference,
+events, and passing Python callables **into** .NET as delegates (the reverse direction).
+
 ---
 
 ## Interpreter evolution log (per scenario)

@@ -132,6 +132,23 @@ v1.
 
 ---
 
+## 6b. Coroutines and asyncio (`Runtime/Async.cs`, `Modules/AsyncioModule.cs`)
+
+**Decision — reuse the generator suspension model for coroutines.** An `async def` produces a
+`PyCoroutine`; like a generator it runs its body on a dedicated thread and suspends at every `await`
+on a pending `PyFuture` through the same `resume`/`produced` semaphore handshake. Only one coroutine
+runs at any instant (the driver blocks while a step runs; the coroutine blocks while suspended), so
+Python objects are never touched concurrently — cooperative single-threading, like CPython. `await`
+of a coroutine **delegates** (à la `yield from`); exceptions propagate across `await`.
+
+The `asyncio` event loop (`PyEventLoop`) is a ready queue + a timer heap (`call_later`/`sleep`) + a
+semaphore for cross-thread wake-ups. Blocking I/O (`sock_accept`/`sock_recv`/`sock_sendall`) is
+offloaded to the thread pool and rejoined via `call_soon`, so the loop thread and coroutine threads
+never race. `PyTask` drives a coroutine, re-scheduling itself on the future it is awaiting. Trade-off:
+one thread per live coroutine (same as generators) — simple and correct, not the cheapest.
+
+---
+
 ## 7. Import system (`Importing/Importer.cs`)
 
 Resolution order: **C# builtin modules** → paths in `SearchPaths` (`sys.path`) → wheels extracted
@@ -228,12 +245,30 @@ Total: **547 green tests**.
 
 ---
 
+## 12b. .NET interop for embedding (`Runtime/Clr.cs`)
+
+**Decision — foreign .NET values are wrapped, not reflected in place.** A host injects objects with
+`PyEngine.SetVariable(name, obj)`; on `Run` they are marshalled into the `__main__` globals. Any value
+that is not already a Python-native type becomes a `ClrObject` (instance) or `ClrType` (a `System.Type`,
+for statics/construction); a method access yields a `ClrMethod` group. Explicit wrappers keep the
+interpreter from ever reflecting over its own runtime types by accident.
+
+The interpreter's dispatch points (`TryGetAttr`/`SetAttr`/`Call`/`GetItem`/`SetItem`, and
+`PyOps.GetIter`) recognise these wrappers and delegate to `ClrBinder`, which uses reflection for
+member access, **overload resolution** (by arity + marshalled argument types), construction, indexers
+and `IEnumerable` iteration. `ClrMarshal` converts both ways (Python `int`↔`BigInteger`/`int`/…,
+`float`↔`double`, `str`↔`string`, `None`↔`null`, `list`↔arrays/`List<T>`). Out of scope for v1:
+`ref`/`out` params, generic-method inference, events, and Python callables as .NET delegates.
+
+---
+
 ## 13. Known architectural limits (v1)
 
 - Tree-walking, not bytecode: simplicity/debuggability favored over performance.
 - Builtin types (`int`, `str`, …) do not expose dunder methods as attributes of the *type*
   (`int.__eq__` is unreachable), because there is no real type object behind each value.
-- No `async/await`, `match`, complex numbers, custom metaclasses (beyond what `enum` needs),
-  `exec()`/`eval()`.
+- No `match`, complex numbers, custom metaclasses (beyond what `enum` needs), `exec()`/`eval()`.
+  (`async`/`await` and an `asyncio` loop **are** now supported — see §6b.)
+- Coroutines and generators use one background thread each (§6, §6b): correct but not the cheapest.
 
 These limits are the natural starting point for future work (see `TODO.md`).

@@ -35,7 +35,9 @@ verifies that the related snippets *keep failing* until they are implemented.
 - [ ] **Exception groups `except*`** (PEP 654, 3.11). *Impact: builtin_exceptions.*
 - [ ] **`generator.send(value)`** with a non-None value, `throw`, `close` with full semantics.
       *Impact: syntax_generator.*
-- [ ] **`async`/`await`** and asynchronous comprehensions.
+- [x] ~~**`async`/`await`**~~ — done (coroutines + `asyncio`, see RELEASE_NOTES). Still open:
+      **async generators** (`yield` in `async def`), **async comprehensions**, and asyncio
+      synchronization primitives (`Lock`/`Event`/`Queue`/`Semaphore`).
 - [ ] **`match`/`case`** (structural pattern matching).
 - [ ] **Custom metaclasses** beyond what `enum` needs.
 - [ ] **Deep protocols**: `__index__`, `__trunc__`, `__instancecheck__`, the pickle protocol
@@ -99,3 +101,18 @@ Modules not yet present that future Python packages might need:
       file:line.
 - [ ] REPL: history, multiline, completion.
 - [ ] **AOT/self-contained** publication of the host for distribution without the SDK.
+
+---
+
+## Embedding / .NET interop
+
+Done: inject .NET objects/types with `PyEngine.SetVariable`, call methods (overload resolution),
+read/write properties & fields, indexers, construction, `IEnumerable` iteration, delegate calls,
+two-way marshalling (see [Clr.cs](src/PySharpLib/Runtime/Clr.cs), `M11_Interop`). Open:
+
+- [ ] **Python callables → .NET delegates**: pass a Python `def`/`lambda` where a `Func<>`/`Action<>`
+      is expected (the reverse callback direction — useful for host event handlers).
+- [ ] **`ref`/`out` parameters** and **generic-method** type inference in overload binding.
+- [ ] **Events**: `obj.SomeEvent += handler` from Python.
+- [ ] **Named/optional arguments and `params`** in `ClrBinder` overload resolution.
+- [ ] Marshal Python `dict` ↔ `IDictionary<,>`, and expose `IDisposable` via `with`.
