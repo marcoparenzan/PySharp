@@ -92,7 +92,7 @@ Development continues **by scenarios** — real runnable scripts that drive inte
 - **.NET (CLR) interop for embedding**: host apps can inject .NET objects/types into the script
   scope and use them idiomatically from Python (see below).
 
-Test status at the latest checkpoint: **587 green**.
+Test status at the latest checkpoint: **596 green**.
 
 ### .NET object injection (embedding interop)
 
@@ -111,6 +111,18 @@ Implemented in [Clr.cs](src/PySharpLib/Runtime/Clr.cs) (`ClrObject`/`ClrType`/`C
 See the README "Injecting .NET objects" section; covered by 18 tests in
 [M11_Interop](src/PySharp.Tests/M11_Interop/). Out of scope for now: `ref`/`out` params,
 generic-method inference, events, and passing Python callables as .NET delegates.
+
+### Tracebacks, variable inspection and a trace hook (debugging groundwork)
+
+Exceptions now carry **where** and **what state**. `PyRaise.Traceback` is the call stack captured as
+the exception unwinds — each `PyFrameInfo` gives function/file/line and `Locals()` (the variables in
+scope at that level). `PyErr.FormatTraceback` renders the CPython-shaped string, and the `pysharp`
+console host now prints the **full stack** instead of a single line. For live observation,
+`Interp.Trace` fires **Line/Call/Return/Exception** events (synchronous, zero cost when unset) — the
+foundation for a **VS Code debugger** (breakpoints/stepping, Variables and Call Stack panes). See the
+README sections 6–7, [Frames.cs](src/PySharpLib/Runtime/Frames.cs), and the 9 tests in
+[M12_Debug](src/PySharp.Tests/M12_Debug/). Cross-thread frames (generators/coroutines) are not yet
+stitched into one stack; the DAP adapter itself is still to be built (see TODO.md).
 
 ### Async/await and asyncio (scenario 2a/2b) — key FastAPI groundwork
 

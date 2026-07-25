@@ -464,7 +464,7 @@ public static class BuiltinsFactory
             }
             var frame = Interp.CurrentFrame
                         ?? throw PyErr.RuntimeError("super(): no current frame");
-            var definingClass = frame.Fn.DefiningClass
+            var definingClass = frame.Fn!.DefiningClass
                                 ?? throw PyErr.RuntimeError("super(): __class__ cell not found");
             if (frame.Fn.Params.Positional.Count == 0
                 || !frame.Env.TryGet(frame.Fn.Params.Positional[0].Name, out var self))
@@ -492,14 +492,14 @@ public static class BuiltinsFactory
             if (frame is null)
                 return module.Dict; // module level: approximated with the globals
             var d2 = new PyDict();
-            foreach (var kv in frame.Value.Env.Locals)
+            foreach (var kv in frame.Env.Locals)
                 d2[kv.Key] = kv.Value;
             return d2;
         });
         Add("globals", (interp, _, _) =>
         {
             var frame = Interp.CurrentFrame;
-            return frame?.Fn.Module.Dict ?? module.Dict;
+            return frame?.Fn!.Module.Dict ?? module.Dict;
         });
 
         Add("iter", (interp, args, _) =>

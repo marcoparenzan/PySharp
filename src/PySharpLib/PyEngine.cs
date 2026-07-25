@@ -54,6 +54,7 @@ public sealed class PyEngine
     public PyModule Run(string source, string fileName = "<string>")
     {
         var module = CreateModule("__main__");
+        module.FileName = fileName;
         foreach (var (name, value) in Globals)
             module.Dict[name] = Runtime.ClrMarshal.ToPython(value);
         var ast = Parser.Parse(source, fileName);

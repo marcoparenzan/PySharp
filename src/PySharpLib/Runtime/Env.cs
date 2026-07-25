@@ -122,6 +122,8 @@ public sealed class PyModule
     public PyDict Dict { get; } = new();
     /// <summary>The builtins module (null only for the builtins module itself).</summary>
     public PyModule? Builtins { get; set; }
+    /// <summary>Source file this module was loaded from (for tracebacks). Default "&lt;string&gt;".</summary>
+    public string FileName { get; set; } = "<string>";
 
     public PyModule(string name)
     {

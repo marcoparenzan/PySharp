@@ -43,12 +43,21 @@ public sealed class Interp
     /// <summary>Stack of exceptions being handled (for bare raise).</summary>
     private readonly Stack<PyInstance> _handling = new();
 
-    /// <summary>Frame stack for zero-arg super(). Per-thread (generators run on their own threads).</summary>
+    /// <summary>Call stack (module frame + function frames). Per-thread (generators/coroutines run on their own threads).</summary>
     [ThreadStatic]
-    private static Stack<(PyFunction Fn, Env Env)>? _frames;
+    private static Stack<Frame>? _frames;
 
-    public static (PyFunction Fn, Env Env)? CurrentFrame
-        => _frames is { Count: > 0 } ? _frames.Peek() : null;
+    /// <summary>The current function frame (skips the module frame); used by super()/locals()/globals().</summary>
+    public static Frame? CurrentFrame
+        => _frames?.FirstOrDefault(f => f.Fn is not null);
+
+    /// <summary>
+    /// Optional host hook invoked on every executed line, function call/return and unwinding
+    /// exception. Runs synchronously on the interpreter thread — a debugger may block inside it
+    /// to implement breakpoints/stepping (the intended basis for a VS Code Debug Adapter).
+    /// Leave null for zero overhead.
+    /// </summary>
+    public Action<TraceEvent>? Trace { get; set; }
 
     public PyModule BuiltinsModule { get; }
     public TextWriter Out { get; set; }
@@ -68,8 +77,35 @@ public sealed class Interp
     public void RunModule(Module ast, PyModule module)
     {
         var env = new Env(module) { IsGlobalScope = true };
-        foreach (var stmt in ast.Body)
-            Exec(stmt, env);
+        var frame = new Frame(null, env, "<module>", module.FileName, 1);
+        (_frames ??= new Stack<Frame>()).Push(frame);
+        Trace?.Invoke(new TraceEvent(TraceEventKind.Call, frame.Name, frame.File, frame.Line, env, null));
+        try
+        {
+            foreach (var stmt in ast.Body)
+                Exec(stmt, env);
+        }
+        catch (PyRaise ex)
+        {
+            RecordFrame(ex, frame);
+            throw;
+        }
+        finally
+        {
+            _frames.Pop();
+        }
+    }
+
+    /// <summary>Append a frame to an unwinding exception's traceback (control-flow exceptions excepted).</summary>
+    private void RecordFrame(PyRaise ex, Frame frame)
+    {
+        // StopIteration/StopAsyncIteration are used as control flow — don't pay for their tracebacks.
+        if (PyErr.Matches(ex.Value, PyErr.StopIterationClass)
+            || PyErr.Matches(ex.Value, PyErr.StopAsyncIterationClass))
+            return;
+        (ex.Traceback ??= new List<PyFrameInfo>()).Add(frame.Snapshot());
+        if (Trace is not null)
+            Trace(new TraceEvent(TraceEventKind.Exception, frame.Name, frame.File, frame.Line, frame.Env, ex.Value));
     }
 
     public void ExecStmts(List<Stmt> stmts, Env env)
@@ -80,6 +116,14 @@ public sealed class Interp
 
     public void Exec(Stmt stmt, Env env)
     {
+        if (stmt.Line > 0 && _frames is { Count: > 0 })
+        {
+            var top = _frames.Peek();
+            top.Line = stmt.Line;
+            if (Trace is not null)
+                Trace(new TraceEvent(TraceEventKind.Line, top.Name, top.File, stmt.Line, env, null));
+        }
+
         switch (stmt)
         {
             case BlockStmt b:
@@ -1227,10 +1271,13 @@ public sealed class Interp
         return ExecFunctionBody(fn, env);
     }
 
-    /// <summary>Runs the body of a def function (also used by the generator thread).</summary>
+    /// <summary>Runs the body of a def function (also used by the generator/coroutine threads).</summary>
     public object ExecFunctionBody(PyFunction fn, Env env)
     {
-        (_frames ??= new Stack<(PyFunction, Env)>()).Push((fn, env));
+        var frame = new Frame(fn, env, fn.Name, fn.Module.FileName, fn.Body is { Count: > 0 } ? fn.Body[0].Line : 0);
+        (_frames ??= new Stack<Frame>()).Push(frame);
+        if (Trace is not null)
+            Trace(new TraceEvent(TraceEventKind.Call, frame.Name, frame.File, frame.Line, env, null));
         try
         {
             ExecStmts(fn.Body!, env);
@@ -1240,8 +1287,15 @@ public sealed class Interp
         {
             return r.Value;
         }
+        catch (PyRaise ex)
+        {
+            RecordFrame(ex, frame);
+            throw;
+        }
         finally
         {
+            if (Trace is not null)
+                Trace(new TraceEvent(TraceEventKind.Return, frame.Name, frame.File, frame.Line, env, null));
             _frames.Pop();
         }
     }

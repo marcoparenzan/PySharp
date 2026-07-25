@@ -15,7 +15,7 @@ Key features:
 - a **`PyEngine`** embedding facade to host the interpreter inside a .NET application;
 - a **`pysharp` command-line tool** installable globally (a .NET global tool).
 
-Validated by a suite of **587 tests** (unit + RustPython conformance corpus).
+Validated by a suite of **596 tests** (unit + RustPython conformance corpus).
 
 > **Reference sample — Azure IoT Hub.** The project's historical proving ground is an Azure IoT Hub
 > device on **paho-mqtt** (downloaded from PyPI): D2C telemetry, C2D, device twin, SAS and X.509 auth,
@@ -315,10 +315,12 @@ engine.Importer.SearchPaths.Insert(0, "scripts");  // your own modules folder
 engine.Run("import paho.mqtt.client as mqtt");
 ```
 
-### 6. Error handling
+### 6. Error handling, tracebacks and variable inspection
 
 Python exceptions surface as **`PyRaise`** (namespace `PySharpLib.Runtime`); syntax errors as
-**`PySyntaxError`** (namespace `PySharpLib`).
+**`PySyntaxError`** (namespace `PySharpLib`). A `PyRaise` carries a **traceback**: the call stack
+captured as the exception unwound, so you know **where** the error happened and can **inspect the
+variables** in scope at every level — essential when the interpreter is embedded in your app.
 
 ```csharp
 using PySharpLib;
@@ -326,22 +328,73 @@ using PySharpLib.Runtime;
 
 try
 {
-    engine.Run("raise ValueError('boom')");
+    engine.Run("""
+        def level_two(x):
+            return x / 0            # error here
+        def level_one(n):
+            return level_two(n)
+        level_one(10)
+        """, "script.py");
 }
 catch (PyRaise ex)
 {
-    // ex.Value is the Python exception instance
-    Console.Error.WriteLine($"{ex.Value.Class.Name}: {PyErr.FormatForClr(ex.Value)}");
+    // 1. A ready-made, CPython-shaped traceback string:
+    Console.Error.WriteLine(PyErr.FormatTraceback(ex));
+    //    Traceback (most recent call last):
+    //      File "script.py", line 5, in <module>
+    //      File "script.py", line 4, in level_one
+    //      File "script.py", line 2, in level_two
+    //    ZeroDivisionError: division by zero
+
+    // 2. Or walk the frames yourself (innermost first) and inspect state:
+    var innermost = ex.Traceback![0];
+    Console.WriteLine($"{innermost.Function} @ {innermost.File}:{innermost.Line}");
+    foreach (var kv in innermost.Locals().Entries)          // variables at the error site
+        Console.WriteLine($"    {kv.Key} = {kv.Value}");
 }
 catch (PySyntaxError ex)
 {
-    Console.Error.WriteLine($"SyntaxError: {ex.Message}");
+    Console.Error.WriteLine($"SyntaxError: {ex.Message} (line {ex.Line})");
 }
 ```
 
-> Threading note: generators use a dedicated thread with a semaphore handshake (see
-> [ARCHITECTURE.md](ARCHITECTURE.md) §6); a single `PyEngine` instance is not meant to be shared
-> across concurrent threads — use one engine per unit of work.
+Each `PyFrameInfo` exposes `Function`, `File`, `Line`, `IsModule`, `Locals()` (a `PyDict`; the module
+globals for the top frame) and `Scope` (the live `Env`). `ex.Value` is the Python exception instance.
+
+### 7. Observing execution live (the trace hook)
+
+Set **`engine.Interp.Trace`** to watch execution as it happens — every line, function call/return and
+unwinding exception. The callback runs **synchronously on the interpreter thread**, so a debugger can
+block inside it to implement breakpoints and stepping. Left `null`, it costs nothing.
+
+```csharp
+using PySharpLib.Runtime;
+
+engine.Interp.Trace = e =>
+{
+    switch (e.Kind)
+    {
+        case TraceEventKind.Line:
+            Console.WriteLine($"→ {e.File}:{e.Line} ({e.Function})");
+            // e.Scope.TryGet("x", out var x) → read a live variable here
+            break;
+        case TraceEventKind.Call:      Console.WriteLine($"call {e.Function}"); break;
+        case TraceEventKind.Return:    Console.WriteLine($"ret  {e.Function}"); break;
+        case TraceEventKind.Exception: Console.WriteLine($"exc  {e.Exception!.Class.Name}"); break;
+    }
+};
+engine.Run("...");
+```
+
+This hook is the intended foundation for a **VS Code debugger** (Debug Adapter Protocol): a Line event
+is a natural breakpoint check / step point, `e.Scope` backs the *Variables* pane, and `ex.Traceback`
+backs the *Call Stack* pane. The adapter itself is not shipped yet — see [TODO.md](TODO.md).
+
+> Threading note: generators, coroutines and each running task use a dedicated thread with a semaphore
+> handshake (see [ARCHITECTURE.md](ARCHITECTURE.md) §6/§6b). The frame stack and trace events are
+> per-thread, so a traceback that crosses into a generator/coroutine shows the frames of that thread;
+> a single `PyEngine` instance is not meant to be shared across concurrent host threads — use one
+> engine per unit of work.
 
 ---
 

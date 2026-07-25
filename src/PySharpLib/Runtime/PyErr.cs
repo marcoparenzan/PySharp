@@ -191,4 +191,22 @@ public static class PyErr
 
     /// <summary>True if the instance is of class cls (or a subclass).</summary>
     public static bool Matches(PyInstance exc, PyClass cls) => exc.Class.IsSubclassOf(cls);
+
+    /// <summary>
+    /// A CPython-style traceback string for an unwound exception:
+    /// <c>Traceback (most recent call last): ... ClassName: message</c>. The traceback carried by
+    /// <see cref="PyRaise"/> is innermost-first, so it is reversed here for display.
+    /// </summary>
+    public static string FormatTraceback(PyRaise ex)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (ex.Traceback is { Count: > 0 } frames)
+        {
+            sb.AppendLine("Traceback (most recent call last):");
+            for (int i = frames.Count - 1; i >= 0; i--)
+                sb.AppendLine(frames[i].ToString());
+        }
+        sb.Append(FormatForClr(ex.Value));
+        return sb.ToString();
+    }
 }

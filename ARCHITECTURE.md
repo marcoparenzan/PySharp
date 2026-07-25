@@ -262,6 +262,24 @@ and `IEnumerable` iteration. `ClrMarshal` converts both ways (Python `int`↔`Bi
 
 ---
 
+## 12c. Tracebacks and the trace hook (`Runtime/Frames.cs`)
+
+**Decision — a real call stack with per-frame lines, captured lazily on unwind.** The interpreter
+keeps a per-thread stack of `Frame`s (a `<module>` frame plus one per function call); `Exec` updates
+the top frame's current line at each statement. When a `PyRaise` unwinds, each frame it passes through
+records a `PyFrameInfo` (function, file, line, and the live `Env` for variable inspection) into
+`ex.Traceback` — **innermost first**. `StopIteration`/`StopAsyncIteration` are skipped so iteration
+stays cheap. `PyErr.FormatTraceback` renders the CPython-shaped string; the console host prints it.
+
+For live observation, `Interp.Trace` (an `Action<TraceEvent>`) is invoked on each line, call, return
+and unwinding exception. It runs synchronously on the interpreter thread — a debugger can block inside
+it for breakpoints/stepping — and is null by default (zero overhead). This is the intended foundation
+for a VS Code Debug Adapter: Line → step/breakpoint, `Scope` → Variables pane, `Traceback` → Call
+Stack pane. Cross-thread note: generators/coroutines run on their own threads, so their frames form a
+separate per-thread stack (a traceback does not stitch across the thread boundary in v1).
+
+---
+
 ## 13. Known architectural limits (v1)
 
 - Tree-walking, not bytecode: simplicity/debuggability favored over performance.

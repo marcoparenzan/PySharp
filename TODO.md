@@ -97,8 +97,14 @@ Modules not yet present that future Python packages might need:
 
 ## Tooling / DX
 
-- [ ] Improve the host **tracebacks** (currently a single type/class line): a Python stack with
-      file:line.
+- [x] ~~Improve the host **tracebacks**~~ — done: `PyRaise.Traceback` (file/line/function + per-frame
+      locals), `PyErr.FormatTraceback`, and the console host prints the full CPython-shaped stack.
+- [x] ~~Execution **trace hook**~~ — done: `Interp.Trace` (Line/Call/Return/Exception events) for
+      host observation; the basis for a debugger.
+- [ ] **VS Code debugger (Debug Adapter Protocol)** built on `Interp.Trace` + `PyRaise.Traceback`:
+      breakpoints/stepping via the Line event (block inside the hook), Variables pane from
+      `TraceEvent.Scope`, Call Stack from the traceback. Needs a small DAP server process and a
+      `launch.json` type. Cross-thread frames (generators/coroutines) to be stitched for a unified stack.
 - [ ] REPL: history, multiline, completion.
 - [ ] **AOT/self-contained** publication of the host for distribution without the SDK.
 

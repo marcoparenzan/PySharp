@@ -62,8 +62,14 @@ internal static class Host
         }
         catch (PyRaise ex)
         {
-            AnsiConsole.MarkupLine("[red]Traceback (most recent call last):[/]");
-            AnsiConsole.MarkupLineInterpolated($"[red]{ex.Value.Class.Name}: {PyErr.FormatForClr(ex.Value)}[/]");
+            if (ex.Traceback is { Count: > 0 } frames)
+            {
+                AnsiConsole.MarkupLine("[red]Traceback (most recent call last):[/]");
+                for (int i = frames.Count - 1; i >= 0; i--)
+                    AnsiConsole.MarkupLineInterpolated(
+                        $"[red]  File \"{frames[i].File}\", line {frames[i].Line}, in {frames[i].Function}[/]");
+            }
+            AnsiConsole.MarkupLineInterpolated($"[red]{PyErr.FormatForClr(ex.Value)}[/]");
             return 1;
         }
         catch (PySyntaxError ex)
