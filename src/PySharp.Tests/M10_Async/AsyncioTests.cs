@@ -49,13 +49,14 @@ public class AsyncioTests
 
     [Fact]
     public void Gather_completes_in_delay_order()
+        // Delays are spaced ~100ms apart so scheduling jitter cannot reorder them under load.
         => Assert.Equal("['fast', 'mid', 'slow']", Run(
             "order = []\n" +
             "async def w(name, d):\n" +
             "    await asyncio.sleep(d)\n" +
             "    order.append(name)\n" +
             "async def main():\n" +
-            "    await asyncio.gather(w('slow', 0.03), w('fast', 0.01), w('mid', 0.02))\n" +
+            "    await asyncio.gather(w('slow', 0.30), w('fast', 0.05), w('mid', 0.17))\n" +
             "    return order\n" +
             "print(asyncio.run(main()))"));
 
