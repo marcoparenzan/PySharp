@@ -17,7 +17,7 @@ public static class SysModule
         var m = new PyModule("sys");
         var d = m.Dict;
 
-        d["version"] = "3.12.0 (PySharp)";
+        d["version"] = $"{PyEngine.PythonCompatibility} (PySharp)";
         d["version_info"] = MakeVersionInfo();
         d["platform"] = OperatingSystem.IsWindows() ? "win32"
             : OperatingSystem.IsMacOS() ? "darwin" : "linux";

@@ -17,6 +17,9 @@ namespace PySharpLib;
 /// </summary>
 public sealed class PyEngine
 {
+    /// <summary>The CPython language level PySharp targets (it implements a subset of this version).</summary>
+    public const string PythonCompatibility = "3.12.0";
+
     public Interp Interp { get; }
     public PyModule BuiltinsModule { get; }
     public Importer Importer { get; }

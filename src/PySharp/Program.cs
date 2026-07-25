@@ -146,7 +146,15 @@ internal sealed class ReplCommand : Command
         var engine = Host.CreateEngine();
         var module = engine.CreateModule("__main__");
         module.FileName = "<stdin>";
-        AnsiConsole.MarkupLine("[grey]PySharp REPL — multi-line supported (blank line ends a block); Ctrl+Z / exit to quit[/]");
+
+        var v = typeof(Host).Assembly.GetName().Version;
+        string version = v is null ? "?" : $"{v.Major}.{v.Minor}.{v.Build}";
+        string platform = OperatingSystem.IsWindows() ? "win32"
+            : OperatingSystem.IsMacOS() ? "darwin" : "linux";
+        AnsiConsole.MarkupLineInterpolated(
+            $"[grey]PySharp {version} — Python {PyEngine.PythonCompatibility} compatible — on {platform}[/]");
+        AnsiConsole.MarkupLine(
+            "[grey]Multi-line input supported (blank line ends a block). Type exit / quit or Ctrl+Z to leave.[/]");
 
         var buffer = new List<string>();
         while (true)
