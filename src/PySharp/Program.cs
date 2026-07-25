@@ -145,40 +145,72 @@ internal sealed class ReplCommand : Command
     {
         var engine = Host.CreateEngine();
         var module = engine.CreateModule("__main__");
-        AnsiConsole.MarkupLine("[grey]PySharp REPL — Ctrl+Z / exit to quit[/]");
+        module.FileName = "<stdin>";
+        AnsiConsole.MarkupLine("[grey]PySharp REPL — multi-line supported (blank line ends a block); Ctrl+Z / exit to quit[/]");
+
+        var buffer = new List<string>();
         while (true)
         {
-            AnsiConsole.Markup("[green]>>> [/]");
+            AnsiConsole.Markup(buffer.Count == 0 ? "[green]>>> [/]" : "[green]... [/]");
             string? line = Console.ReadLine();
-            if (line is null || line.Trim() == "exit")
-                return 0;
-            if (line.Trim().Length == 0)
+            if (line is null)             // Ctrl+Z / EOF
+            {
+                if (buffer.Count == 0)
+                    return 0;
+                buffer.Clear();            // abandon the pending block
+                AnsiConsole.WriteLine();
                 continue;
+            }
+            if (buffer.Count == 0)
+            {
+                var trimmed = line.Trim();
+                if (trimmed is "exit" or "quit")
+                    return 0;
+                if (trimmed.Length == 0)
+                    continue;
+            }
+
+            buffer.Add(line);
+            string source = string.Join("\n", buffer);
+
+            // Keep reading while inside an open string/bracket or on a backslash continuation,
+            // and while a compound block has not been terminated by a blank line.
+            if (InteractiveInput.IsIncomplete(source))
+                continue;
+            if (InteractiveInput.StartsBlock(buffer[0]) && line.Trim().Length != 0)
+                continue;
+
+            buffer.Clear();
+            ExecuteInput(engine, module, source);
+        }
+    }
+
+    private static void ExecuteInput(PyEngine engine, PyModule module, string source)
+    {
+        try
+        {
+            // A single expression prints its value; anything else runs as statements.
             try
             {
-                // expression -> print its value; statement -> execute it
-                try
-                {
-                    var expr = Parser.ParseExpression(line);
-                    var env = new Env(module) { IsGlobalScope = true };
-                    var value = engine.Interp.Eval(expr, env);
-                    if (value is not PyNone)
-                        AnsiConsole.WriteLine(PyOps.Repr(engine.Interp, value));
-                }
-                catch (PySyntaxError)
-                {
-                    var ast = Parser.Parse(line);
-                    engine.Interp.RunModule(ast, module);
-                }
+                var expr = Parser.ParseExpression(source);
+                var env = new Env(module) { IsGlobalScope = true };
+                var value = engine.Interp.Eval(expr, env);
+                if (value is not PyNone)
+                    AnsiConsole.WriteLine(PyOps.Repr(engine.Interp, value));
             }
-            catch (PyRaise ex)
+            catch (PySyntaxError)
             {
-                AnsiConsole.MarkupLineInterpolated($"[red]{ex.Value.Class.Name}: {PyErr.FormatForClr(ex.Value)}[/]");
+                var ast = Parser.Parse(source, module.FileName);
+                engine.Interp.RunModule(ast, module);
             }
-            catch (PySyntaxError ex)
-            {
-                AnsiConsole.MarkupLineInterpolated($"[red]SyntaxError: {ex.Message}[/]");
-            }
+        }
+        catch (PyRaise ex)
+        {
+            AnsiConsole.MarkupLineInterpolated($"[red]{PyErr.FormatTraceback(ex)}[/]");
+        }
+        catch (PySyntaxError ex)
+        {
+            AnsiConsole.MarkupLineInterpolated($"[red]SyntaxError: {ex.Message}[/]");
         }
     }
 }

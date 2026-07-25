@@ -19,7 +19,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pysharp</ToolCommandName>
     <PackageId>PySharp</PackageId>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Description>PySharp — interprete Python 3.x scritto in C#, come strumento da riga di comando.</Description>
   </PropertyGroup>
 

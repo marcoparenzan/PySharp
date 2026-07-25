@@ -11,7 +11,7 @@
 
     <!-- NuGet package metadata: the mini-pip (pure-wheel installer from PyPI). -->
     <PackageId>PySharp.Pip</PackageId>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PipSharp — a minimal pip for PySharp: resolves and extracts pure (py3-none-any) wheels from PyPI.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

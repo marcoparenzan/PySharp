@@ -91,8 +91,19 @@ Development continues **by scenarios** — real runnable scripts that drive inte
   is a working `asyncio` event loop (see below).
 - **.NET (CLR) interop for embedding**: host apps can inject .NET objects/types into the script
   scope and use them idiomatically from Python (see below).
+- **Multi-line REPL**: the `pysharp repl` now accepts blocks, triple-quoted strings and bracketed
+  expressions across lines (CPython-style continuation).
 
-Test status at the latest checkpoint: **596 green**.
+Test status at the latest checkpoint: **628 green**.
+
+### Multi-line REPL input
+
+The interactive REPL now reads multi-line input like CPython's: it keeps prompting with `...` while
+the input is incomplete (open triple-quoted string, unbalanced `()`/`[]`/`{}`, or a trailing `\`),
+and a compound block (`def`/`class`/`if`/`for`/`while`/`try`/`with`/`async`/decorator) is terminated
+by a blank line. The completeness logic is the public, testable helper
+[InteractiveInput](src/PySharpLib/InteractiveInput.cs) (`IsIncomplete`/`StartsBlock`; 32 tests in
+[M13_Repl](src/PySharp.Tests/M13_Repl/)). The REPL also prints a full traceback on errors now.
 
 ### .NET object injection (embedding interop)
 

@@ -15,7 +15,7 @@ Key features:
 - a **`PyEngine`** embedding facade to host the interpreter inside a .NET application;
 - a **`pysharp` command-line tool** installable globally (a .NET global tool).
 
-Validated by a suite of **596 tests** (unit + RustPython conformance corpus).
+Validated by a suite of **628 tests** (unit + RustPython conformance corpus).
 
 > **Reference sample — Azure IoT Hub.** The project's historical proving ground is an Azure IoT Hub
 > device on **paho-mqtt** (downloaded from PyPI): D2C telemetry, C2D, device twin, SAS and X.509 auth,
@@ -177,9 +177,35 @@ shortcut for convenience). Alternatively, with the **Code Runner** extension, in
 |---|---|
 | `run <file.py> [args…]` | run a script; `sys.argv` is populated with the arguments |
 | `install <pkg[==ver]>` | install a pure wheel from PyPI into `./site-packages` |
-| `repl` | interactive REPL (expression → value, statement → execution) |
+| `repl` | interactive REPL (expression → value, statement → execution); **multi-line input** supported |
 | `-v`, `--version` | print the version |
 | `-h`, `--help` | print command help |
+
+### REPL: multi-line input
+
+The REPL accepts multi-line input like CPython's. It keeps reading (showing a `...` continuation
+prompt) while the input is *incomplete* — an open triple-quoted string, unbalanced `()`/`[]`/`{}`, or
+a trailing `\` continuation — and a **compound block** (`def`/`class`/`if`/`for`/`while`/`try`/`with`/
+`async`/decorators) is finished with a **blank line**:
+
+```text
+>>> text = """first
+... second"""
+>>> print(text)
+first
+second
+>>> def double(n):
+...     return n * 2
+...
+>>> double(21)
+42
+>>> (1 +
+...  2)
+3
+```
+
+`exit`/`quit` (or Ctrl+Z) leaves the REPL; an empty line at the main prompt does nothing; Ctrl+Z while
+composing a block abandons it.
 
 ---
 
