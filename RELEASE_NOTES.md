@@ -87,8 +87,34 @@ Development continues **by scenarios** — real runnable scripts that drive inte
   PyYAML subset).
 - **CLI + global tool**: the console host now uses Spectre.Console.Cli and is packaged as a .NET
   global tool (`pysharp` on PATH).
+- **`async`/`await` + `asyncio` (scenario 2a/2b)**: coroutines are now a language feature and there
+  is a working `asyncio` event loop (see below).
 
-Test status at the latest checkpoint: **547 green**.
+Test status at the latest checkpoint: **569 green**.
+
+### Async/await and asyncio (scenario 2a/2b) — key FastAPI groundwork
+
+The heaviest prerequisite of the FastAPI scenario — native asynchrony — is in place:
+
+- **Language core.** `async def`, `await`, `async for` and `async with` now parse and execute. A
+  coroutine runs its body on a dedicated thread and suspends at every `await` on a pending Future
+  through a semaphore handshake — the same technique as generators — so only one coroutine runs at a
+  time: cooperative single-threading, exactly like CPython (no data races on Python objects).
+  `await` of a coroutine delegates like `yield from`, exceptions propagate across `await`, and
+  `async with`/`async for` drive `__aenter__`/`__aexit__`/`__aiter__`/`__anext__`
+  (`StopAsyncIteration` added).
+- **`asyncio` module.** A .NET-backed event loop (ready queue + timer heap + cross-thread wake-ups)
+  with `Future`/`Task`, `run`, `sleep`, `gather` (incl. `return_exceptions`), `create_task`,
+  `ensure_future`, `wait_for`, `get_running_loop`/`get_event_loop`, and **asynchronous socket I/O**
+  (`loop.sock_accept`/`sock_recv`/`sock_sendall`) offloaded to the thread pool and rejoined via
+  `call_soon`.
+- **Proof.** [samples/async_api.py](samples/async_api.py): a fully asynchronous "FastAPI-shaped" HTTP
+  server where each connection is its own Task and a slow handler does **not** block the others.
+  Verified end-to-end (`curl` on all routes + a real TCP request from an xUnit test) and covered by
+  22 new tests in [M10_Async](src/PySharp.Tests/M10_Async/).
+- **Still out of scope:** async generators (`yield` inside `async def`), async synchronization
+  primitives (`asyncio.Lock`/`Event`/`Queue`/`Semaphore`), and the remaining FastAPI stack
+  (`re`/`datetime`/`inspect`, an ASGI server, pydantic — `pydantic-core` is compiled in Rust).
 
 ---
 

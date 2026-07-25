@@ -37,7 +37,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | # | Scenario | Script | Status | Features/modules it drives |
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
-| 2 | **FastAPI API** (no SQL) | [http_api_min.py](samples/http_api_min.py) · [http_api.py](samples/http_api.py) | 🟡 **In progress** (2.0 + hardening ✅) | `async`/`await` (core), `re`, `datetime`, `inspect`, real `typing`, `contextlib`, `abc`, ASGI, pydantic |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0 + hardening ✅, 2a `async`/`await` ✅, 2b `asyncio` ✅) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, `re`, `datetime`, `inspect`, real `typing`, `contextlib`, `abc`, ASGI, pydantic |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -115,11 +115,22 @@ as the test bench.
   `handler.__annotations__` (422 on invalid values, defaults injected). Verified with `curl` on all
   endpoints + error cases. **Interpreter evolution required and delivered in this round** (see log
   below): populating `__annotations__` and `__name__` on builtins.
-- **2a — `async`/`await` in the language.** Today the parser **rejects** them (`SyntaxError:
-  async/await is not supported by PySharp v1`). Needed: parsing of `async def`/`await`/`async for`/
-  `async with` and a coroutine execution model in the interpreter.
-- **2b — `asyncio` module.** A .NET-backed event loop (`Task`/`SynchronizationContext`), `sleep`,
-  `gather`, tasks, async synchronization primitives.
+- **2a — `async`/`await` in the language.** ✅ **Done.** The parser accepts `async def`/`await`/
+  `async for`/`async with`, and the interpreter runs coroutines with a real suspension model:
+  each coroutine executes its body on a dedicated thread and suspends at every `await` on a
+  pending Future through a semaphore handshake (the same technique as generators), so only one
+  coroutine runs at a time — cooperative single-threading, like CPython. `await` of a coroutine
+  delegates (à la `yield from`); exceptions propagate across `await`; `async with`/`async for`
+  drive `__aenter__`/`__aexit__`/`__aiter__`/`__anext__`. See [PyCoroutine](src/PySharpLib/Runtime/Async.cs).
+- **2b — `asyncio` module.** ✅ **Done.** A .NET-backed **event loop** ([Async.cs](src/PySharpLib/Runtime/Async.cs),
+  [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs)) with a ready queue, timer heap
+  (`call_later`/`sleep`) and cross-thread wake-ups for offloaded I/O. Implements `run`, `sleep`,
+  `gather` (with `return_exceptions`), `create_task`, `ensure_future`, `wait_for`, `get_running_loop`,
+  `Future`/`Task`, and **asynchronous socket I/O** on the loop (`sock_accept`/`sock_recv`/`sock_sendall`,
+  backed by .NET async sockets). Blocking I/O is offloaded to the thread pool and rejoined via
+  `call_soon`, keeping Python objects single-threaded. Proven by [async_api.py](samples/async_api.py):
+  a fully asynchronous HTTP server where a slow handler does not block the others.
+  Still open: async synchronization primitives (`Lock`/`Event`/`Queue`), `asyncio.Semaphore`.
 - **2c — cross-cutting stdlib.** `re` (regex — pervasive in routing/validation), `datetime`, `inspect`
   (FastAPI reads signatures at runtime), **real** `typing` (not the current stub: needs
   `get_type_hints`, `Annotated`, …), `contextlib`, `abc`, `importlib`, `email`/`http` for the HTTP
@@ -179,6 +190,8 @@ and *which scenario drove it*.
 | 2.0+ — FastAPI-shaped API | **`__annotations__` populated** with the type callables (lazy, best-effort evaluation of parameter annotations); **`__name__`/`__qualname__`/`__module__` on builtin functions** (e.g. `int.__name__`) | [Interp.cs](src/PySharpLib/Interpretation/Interp.cs) `TryGetAttr`; test [IntrospectionTests.cs](src/PySharp.Tests/M4_Functions/IntrospectionTests.cs) |
 | 2.0++ — full signature | **`fn.__code__`** with `co_varnames`/`co_argcount`/`co_kwonlyargcount`/`co_posonlyargcount`/`co_name`: exposes the **parameter names** (including unannotated ones) → full-signature injection, not just annotated parameters | [Callables.cs](src/PySharpLib/Runtime/Callables.cs) `PyCode`; `TryGetAttr`; tests as above |
 | 2.0+++ — return annotation | **`__annotations__['return']`**: the handler's `-> T` is now captured (propagated from `FuncDef.Returns` to `PyFunction`). It promoted the corpus snippet `syntax_type_hint.py` from Xfail to Supported | [Callables.cs](src/PySharpLib/Runtime/Callables.cs) `PyFunction.Returns`; `MakeFunction`; `TryGetAttr` |
+| 2a — async/await | **coroutines in the language core**: `async def`/`await`/`async for`/`async with`, `AwaitExpr` in the AST, a thread-backed `PyCoroutine` with a suspension handshake, coroutine delegation, exception propagation across `await`, `StopAsyncIteration` | [Parser.cs](src/PySharpLib/Parsing/Parser.cs), [Ast.cs](src/PySharpLib/Parsing/Ast.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs), [Interp.cs](src/PySharpLib/Interpretation/Interp.cs); tests [M10_Async](src/PySharp.Tests/M10_Async/) |
+| 2b — asyncio | new stdlib module **`asyncio`**: .NET-backed event loop, `Future`/`Task`, `run`/`sleep`/`gather`/`create_task`/`wait_for`, **async socket I/O** (`sock_accept`/`sock_recv`/`sock_sendall`) | [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs); tests [AsyncioTests.cs](src/PySharp.Tests/M10_Async/AsyncioTests.cs), [AsyncServerTests.cs](src/PySharp.Tests/M10_Async/AsyncServerTests.cs) |
 | 5 — MQTT subscribe | *none* — paho's subscribe side already ran | — |
 | 9 — JSON + YAML | new stdlib module **`yaml`** (safe_load/dump, PyYAML subset) | [YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs); test [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs) |
 
@@ -200,17 +213,17 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 | Supported | Missing (out of scope for v1) |
 |---|---|
-| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), import system, function introspection (`__annotations__`, `__code__`) | `async`/`await`, `match`, `exec()`/`eval()`, complex numbers (`1j`), exception groups (`except*`), `generator.send(v)` with a value, dunders as attributes of builtin *types*, custom metaclasses |
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`) | `match`, `exec()`/`eval()`, complex numbers (`1j`), exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, custom metaclasses |
 
 ### Axis B — Stdlib
 
-Implemented **~36 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
-`errno`, `io`, `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`,
+Implemented **~37 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+`errno`, `io`, `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio`, `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`, `enum`,
 `functools`, `math`, `logging`, `ctypes`; stubs for `typing`, `dataclasses`, `__future__`.
 
 **High-priority missing** (surfaced by the scenario probes): `re`, `datetime`, `importlib`,
-`itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`, `asyncio`, `decimal`, `sqlite3`.
+`itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`, `decimal`, `sqlite3`.
 
 ### Axis C — Native extensions (C/Rust)
 

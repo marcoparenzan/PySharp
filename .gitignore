@@ -430,3 +430,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Local config with device secrets (SharedAccessKey) — never commit
+config.json

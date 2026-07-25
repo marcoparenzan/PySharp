@@ -8,14 +8,14 @@ Key features:
 
 - native Python object model on top of C# types (`int` = `BigInteger`, `str`, `list`/`dict`/`set`,
   classes with C3 MRO, generators, exceptions, …) — see [ARCHITECTURE.md](ARCHITECTURE.md);
-- **.NET-backed stdlib** (21 modules: `socket`, `ssl`, `threading`, `struct`, `json`, `yaml`,
+- **.NET-backed stdlib** (22 modules: `socket`, `ssl`, `threading`, `asyncio`, `struct`, `json`, `yaml`,
   `collections`, `functools`, `math`, `hashlib`/`hmac`/`base64`, `urllib.parse`, …);
 - a **mini-pip** that downloads and extracts pure wheels (`py3-none-any`) from PyPI;
 - a **`ctypes`** module to call native DLLs through .NET's `NativeLibrary`;
 - a **`PyEngine`** embedding facade to host the interpreter inside a .NET application;
 - a **`pysharp` command-line tool** installable globally (a .NET global tool).
 
-Validated by a suite of **547 tests** (unit + RustPython conformance corpus).
+Validated by a suite of **569 tests** (unit + RustPython conformance corpus).
 
 > **Reference sample — Azure IoT Hub.** The project's historical proving ground is an Azure IoT Hub
 > device on **paho-mqtt** (downloaded from PyPI): D2C telemetry, C2D, device twin, SAS and X.509 auth,
@@ -312,12 +312,14 @@ catch (PySyntaxError ex)
 list/tuple/dict/set + comprehensions, f-strings (including `{expr=}`), functions (defaults, `*args`,
 `**kwargs`, keyword-only, decorators, closures, `nonlocal`/`global`), classes (multiple inheritance
 with C3 MRO, `super()`, dunders, properties, static/classmethod), exceptions
-(`try/except/else/finally`, `raise from`), `with`, generators (`yield`, `yield from`), an import
-system with packages, `enum`, `NamedTuple`, function introspection (`__annotations__`, `__code__`).
+(`try/except/else/finally`, `raise from`), `with`, generators (`yield`, `yield from`),
+**`async`/`await` with `async for`/`async with` (coroutines)**, an import system with packages,
+`enum`, `NamedTuple`, function introspection (`__annotations__`, `__code__`).
 
 **Out of scope for v1** (documented in [TODO.md](TODO.md) and in the `Xfail` dict of CorpusTests):
 dunder methods exposed as attributes on builtin *types* (`int.__eq__`), complex numbers (`1j`),
-`async/await`, `match`, `exec()`/`eval()`, exception groups (`except*`), `generator.send(value)`.
+`match`, `exec()`/`eval()`, exception groups (`except*`), `generator.send(value)`, async generators
+(`yield` inside `async def`).
 
 ---
 
@@ -332,10 +334,12 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 - **Language**: decorators, type hints (evaluated on access via `__annotations__`), classes,
   generators, exceptions, comprehensions, f-strings.
 - **Present stdlib modules**: `json`, `yaml`, `collections`, `functools`, `enum`, `math`, `struct`,
-  `socket`, `ssl`, `threading`, `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`, `sys`, `time`, `io`,
-  `string`; stubs for `typing` and `dataclasses`.
-- **Done scenarios**: Azure IoT Hub device (MQTT), a sync FastAPI-shaped HTTP API, an MQTT subscribe
-  round-trip, and YAML+JSON (de)serialization — see [ROADMAP.md](ROADMAP.md) and [samples/](samples/).
+  `socket`, `ssl`, `threading`, `asyncio`, `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`, `sys`,
+  `time`, `io`, `string`; stubs for `typing` and `dataclasses`.
+- **Done scenarios**: Azure IoT Hub device (MQTT), a sync FastAPI-shaped HTTP API, an **async
+  FastAPI-shaped HTTP API on a real asyncio event loop** ([async_api.py](samples/async_api.py)), an
+  MQTT subscribe round-trip, and YAML+JSON (de)serialization — see [ROADMAP.md](ROADMAP.md) and
+  [samples/](samples/).
 - **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt).
 
 ### Does not work (yet)
@@ -343,7 +347,7 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 | Scenario | Verified blocker | Feasibility |
 |---|---|---|
 | **SQLite / Postgres** | the `sqlite3` module is missing (in CPython it is a C extension, not on PyPI) | **Feasible**: add a C# `sqlite3` DB-API module backed by `Microsoft.Data.Sqlite` (Postgres via `Npgsql`), following the other modules in `Modules/` |
-| **FastAPI** | `async`/`await` rejected by the parser; `re`, `datetime`, `abc`, `contextlib` missing; `pydantic-core` is compiled in Rust (the mini-pip only installs pure wheels); starlette/uvicorn need an asyncio event loop + ASGI | **Not feasible in v1**: needs native async, a non-compiled pydantic and an ASGI stack. Only a hand-rolled synchronous web micro-framework is conceivable |
+| **FastAPI** | `async`/`await` ✅ and an `asyncio` event loop ✅ now exist (see [async_api.py](samples/async_api.py)); still missing: `re`, `datetime`, `abc`, `contextlib`, `inspect`; `pydantic-core` is compiled in Rust (the mini-pip only installs pure wheels); starlette/uvicorn assume an ASGI stack | **Partly unblocked**: async is done and a hand-rolled async web framework runs; the real FastAPI package still needs a non-compiled pydantic + ASGI. See [ROADMAP.md](ROADMAP.md) scenario 2 |
 
 Modules missing today and required by many real scenarios: `re` (regex), `datetime`, `decimal`,
 `abc`, `contextlib`, `importlib`, `itertools`, `operator`, `types`, `asyncio`, `sqlite3`. Adding one

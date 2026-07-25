@@ -45,6 +45,7 @@ public static class PyErr
     public static readonly PyClass NotImplementedErrorClass = Derive("NotImplementedError", RuntimeErrorClass);
     public static readonly PyClass RecursionErrorClass = Derive("RecursionError", RuntimeErrorClass);
     public static readonly PyClass StopIterationClass = Derive("StopIteration", Exception);
+    public static readonly PyClass StopAsyncIterationClass = Derive("StopAsyncIteration", Exception);
     public static readonly PyClass SyntaxErrorClass = Derive("SyntaxError", Exception);
     public static readonly PyClass IndentationErrorClass = Derive("IndentationError", SyntaxErrorClass);
     public static readonly PyClass SystemErrorClass = Derive("SystemError", Exception);
@@ -129,6 +130,7 @@ public static class PyErr
         yield return NotImplementedErrorClass;
         yield return RecursionErrorClass;
         yield return StopIterationClass;
+        yield return StopAsyncIterationClass;
         yield return SyntaxErrorClass;
         yield return IndentationErrorClass;
         yield return SystemErrorClass;

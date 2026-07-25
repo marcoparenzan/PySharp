@@ -52,5 +52,6 @@ public static class StdlibModules
         importer.RegisterBuiltin("ctypes", _ => CtypesModule.Create());
         importer.RegisterBuiltin("math", _ => MathModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
+        importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());
     }
 }

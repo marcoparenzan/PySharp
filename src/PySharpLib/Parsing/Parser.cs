@@ -71,8 +71,7 @@ public sealed class Parser
                 case "with": return ParseWith();
                 case "def": return ParseFuncDef(new List<Expr>());
                 case "class": return ParseClassDef(new List<Expr>());
-                case "async":
-                    throw Error("async/await is not supported by PySharp v1");
+                case "async": return ParseAsyncStatement(new List<Expr>());
             }
         }
         if (t.Is(TokenKind.Op, "@"))
@@ -423,7 +422,33 @@ public sealed class Parser
             return ParseFuncDef(decorators);
         if (Cur.Is(TokenKind.Keyword, "class"))
             return ParseClassDef(decorators);
+        if (Cur.Is(TokenKind.Keyword, "async"))
+            return ParseAsyncStatement(decorators);
         throw Error("expected 'def' or 'class' after decorator");
+    }
+
+    /// <summary>'async' (def | for | with). The 'async' token has already been peeked.</summary>
+    private Stmt ParseAsyncStatement(List<Expr> decorators)
+    {
+        Expect(TokenKind.Keyword, "async");
+        if (Cur.Is(TokenKind.Keyword, "def"))
+        {
+            var fn = (FuncDef)ParseFuncDef(decorators);
+            return fn with { IsAsync = true };
+        }
+        if (decorators.Count > 0)
+            throw Error("decorators may only precede 'async def'");
+        if (Cur.Is(TokenKind.Keyword, "for"))
+        {
+            var f = (ForStmt)ParseFor();
+            return f with { IsAsync = true };
+        }
+        if (Cur.Is(TokenKind.Keyword, "with"))
+        {
+            var w = (WithStmt)ParseWith();
+            return w with { IsAsync = true };
+        }
+        throw Error("expected 'def', 'for' or 'with' after 'async'");
     }
 
     private Stmt ParseFuncDef(List<Expr> decorators)
@@ -797,7 +822,18 @@ public sealed class Parser
 
     private Expr ParsePower()
     {
-        var e = ParseAtomExpr();
+        // power: await_expr ['**' factor];  await_expr: ['await'] atom_expr
+        Expr e;
+        if (Cur.Is(TokenKind.Keyword, "await"))
+        {
+            var t = Cur;
+            Next();
+            e = new AwaitExpr(ParseAtomExpr()) { Line = t.Line, Col = t.Column };
+        }
+        else
+        {
+            e = ParseAtomExpr();
+        }
         if (Cur.Is(TokenKind.Op, "**"))
         {
             Next();

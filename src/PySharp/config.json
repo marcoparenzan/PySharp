@@ -1,4 +1,0 @@
-{
-  "auth": "sas",
-  "connection_string": "HostName=<hub>.azure-devices.net;DeviceId=<device>;SharedAccessKey=<base64key>",
-}

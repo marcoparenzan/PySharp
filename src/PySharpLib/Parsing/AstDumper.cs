@@ -29,9 +29,9 @@ public static class AstDumper
             ? $"(while {Dump(w.Cond)} [{Join(w.Body)}])"
             : $"(while {Dump(w.Cond)} [{Join(w.Body)}] [{Join(w.OrElse)}])",
         ForStmt f => f.OrElse.Count == 0
-            ? $"(for {Dump(f.Target)} {Dump(f.Iter)} [{Join(f.Body)}])"
-            : $"(for {Dump(f.Target)} {Dump(f.Iter)} [{Join(f.Body)}] [{Join(f.OrElse)}])",
-        FuncDef f => $"(def{(f.IsGenerator ? "*" : "")} {f.Name} {DumpParams(f.Params)} [{Join(f.Body)}]{DumpDecorators(f.Decorators)})",
+            ? $"({(f.IsAsync ? "async-for" : "for")} {Dump(f.Target)} {Dump(f.Iter)} [{Join(f.Body)}])"
+            : $"({(f.IsAsync ? "async-for" : "for")} {Dump(f.Target)} {Dump(f.Iter)} [{Join(f.Body)}] [{Join(f.OrElse)}])",
+        FuncDef f => $"({(f.IsAsync ? "async-def" : "def")}{(f.IsGenerator ? "*" : "")} {f.Name} {DumpParams(f.Params)} [{Join(f.Body)}]{DumpDecorators(f.Decorators)})",
         ClassDef c => $"(class {c.Name} ({string.Join(" ", c.Bases.Select(DumpArg))}) [{Join(c.Body)}]{DumpDecorators(c.Decorators)})",
         ReturnStmt r => r.Value is null ? "(return)" : $"(return {Dump(r.Value)})",
         PassStmt => "(pass)",
@@ -50,7 +50,7 @@ public static class AstDumper
             .Append(t.OrElse.Count > 0 ? $" (else [{Join(t.OrElse)}])" : "")
             .Append(t.Finally.Count > 0 ? $" (finally [{Join(t.Finally)}])" : "")
             .Append(')').ToString(),
-        WithStmt w => $"(with {string.Join(" ", w.Items.Select(i => i.Target is null ? Dump(i.Ctx) : $"({Dump(i.Ctx)} as {Dump(i.Target)})"))} [{Join(w.Body)}])",
+        WithStmt w => $"({(w.IsAsync ? "async-with" : "with")} {string.Join(" ", w.Items.Select(i => i.Target is null ? Dump(i.Ctx) : $"({Dump(i.Ctx)} as {Dump(i.Target)})"))} [{Join(w.Body)}])",
         ImportStmt i => $"(import {string.Join(" ", i.Names.Select(DumpAlias))})",
         FromImportStmt f => f.Star
             ? $"(from {new string('.', f.Level)}{f.Module} import *)"
@@ -89,6 +89,7 @@ public static class AstDumper
         LambdaExpr l => $"(lambda {DumpParams(l.Params)} {Dump(l.Body)})",
         WalrusExpr w => $"(:= {w.Name} {Dump(w.Value)})",
         YieldExpr y => y.IsFrom ? $"(yield-from {Dump(y.Value!)})" : y.Value is null ? "(yield)" : $"(yield {Dump(y.Value)})",
+        AwaitExpr aw => $"(await {Dump(aw.Value)})",
         FStringExpr f => $"(fstr{string.Concat(f.Parts.Select(DumpFPart))})",
         ComprehensionExpr c => DumpComp(c),
         _ => $"(?{e.GetType().Name})",

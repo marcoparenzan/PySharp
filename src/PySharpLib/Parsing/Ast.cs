@@ -56,6 +56,8 @@ public sealed record IfExpExpr(Expr Cond, Expr Then, Expr Else) : Expr;
 public sealed record LambdaExpr(Parameters Params, Expr Body) : Expr;
 public sealed record WalrusExpr(string Name, Expr Value) : Expr;
 public sealed record YieldExpr(Expr? Value, bool IsFrom) : Expr;
+/// <summary><c>await expr</c> — only valid inside an <c>async def</c>.</summary>
+public sealed record AwaitExpr(Expr Value) : Expr;
 
 /// <summary>Part of an f-string: literal or formatted value.</summary>
 public abstract record FStringPart;
@@ -96,11 +98,19 @@ public sealed record AnnAssignStmt(Expr Target, Expr Annotation, Expr? Value) : 
 
 public sealed record IfStmt(Expr Cond, List<Stmt> Body, List<Stmt> OrElse) : Stmt;
 public sealed record WhileStmt(Expr Cond, List<Stmt> Body, List<Stmt> OrElse) : Stmt;
-public sealed record ForStmt(Expr Target, Expr Iter, List<Stmt> Body, List<Stmt> OrElse) : Stmt;
+public sealed record ForStmt(Expr Target, Expr Iter, List<Stmt> Body, List<Stmt> OrElse) : Stmt
+{
+    /// <summary><c>async for</c>: iterate an asynchronous iterator (__aiter__/__anext__).</summary>
+    public bool IsAsync { get; init; }
+}
 
 public sealed record FuncDef(
     string Name, Parameters Params, List<Stmt> Body,
-    List<Expr> Decorators, Expr? Returns, bool IsGenerator) : Stmt;
+    List<Expr> Decorators, Expr? Returns, bool IsGenerator) : Stmt
+{
+    /// <summary><c>async def</c>: calling it produces a coroutine object.</summary>
+    public bool IsAsync { get; init; }
+}
 
 public sealed record ClassDef(
     string Name, List<CallArg> Bases, List<Stmt> Body, List<Expr> Decorators) : Stmt;
@@ -117,7 +127,11 @@ public sealed record TryStmt(
     List<Stmt> OrElse, List<Stmt> Finally) : Stmt;
 
 public sealed record WithItem(Expr Ctx, Expr? Target);
-public sealed record WithStmt(List<WithItem> Items, List<Stmt> Body) : Stmt;
+public sealed record WithStmt(List<WithItem> Items, List<Stmt> Body) : Stmt
+{
+    /// <summary><c>async with</c>: enter/exit via __aenter__/__aexit__ (awaited).</summary>
+    public bool IsAsync { get; init; }
+}
 
 public sealed record ImportAlias(string DottedName, string? AsName);
 public sealed record ImportStmt(List<ImportAlias> Names) : Stmt;

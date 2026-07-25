@@ -8,6 +8,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the mini-pip (pure-wheel installer from PyPI). -->
+    <PackageId>PySharp.Pip</PackageId>
+    <Version>1.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PipSharp — a minimal pip for PySharp: resolves and extracts pure (py3-none-any) wheels from PyPI.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;pip;pypi;wheel;pysharp</PackageTags>
   </PropertyGroup>
 
 </Project>

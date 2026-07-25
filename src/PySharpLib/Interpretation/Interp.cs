@@ -148,6 +148,10 @@ public sealed class Interp
                 break;
             }
 
+            case ForStmt f when f.IsAsync:
+                ExecAsyncFor(f, env);
+                break;
+
             case ForStmt f:
             {
                 var iterable = Eval(f.Iter, env);
@@ -175,7 +179,7 @@ public sealed class Interp
 
             case FuncDef d:
             {
-                var fn = MakeFunction(d.Name, d.Params, d.Body, null, d.IsGenerator, env, d.Returns);
+                var fn = MakeFunction(d.Name, d.Params, d.Body, null, d.IsGenerator, env, d.Returns, d.IsAsync);
                 object result = fn;
                 for (int i = d.Decorators.Count - 1; i >= 0; i--)
                     result = Call(Eval(d.Decorators[i], env), new[] { result });
@@ -203,6 +207,10 @@ public sealed class Interp
 
             case TryStmt t:
                 ExecTry(t, env);
+                break;
+
+            case WithStmt w when w.IsAsync:
+                ExecAsyncWith(w, 0, env);
                 break;
 
             case WithStmt w:
@@ -616,6 +624,94 @@ public sealed class Interp
         ExecWithItem(w, 0, env);
     }
 
+    /// <summary><c>await expr</c> from within a C#-driven statement (async for/with).</summary>
+    private object Await(object awaitable)
+    {
+        var coro = PyCoroutine.Current
+                   ?? throw PyErr.SyntaxLike("'async for'/'async with' outside async function");
+        return coro.RunAwait(this, awaitable);
+    }
+
+    private void ExecAsyncFor(ForStmt f, Env env)
+    {
+        var iterable = Eval(f.Iter, env);
+        var iterator = TryCallMethod(iterable, "__aiter__", Array.Empty<object>(), out var ait)
+            ? ait
+            : iterable;
+        bool broke = false;
+        while (true)
+        {
+            object item;
+            try
+            {
+                item = Await(CallMethod(iterator, "__anext__", Array.Empty<object>()));
+            }
+            catch (PyRaise ex) when (PyErr.Matches(ex.Value, PyErr.StopAsyncIterationClass))
+            {
+                break;
+            }
+            AssignTo(f.Target, item, env);
+            try
+            {
+                ExecStmts(f.Body, env);
+            }
+            catch (BreakSignal)
+            {
+                broke = true;
+                break;
+            }
+            catch (ContinueSignal)
+            {
+            }
+        }
+        if (!broke)
+            ExecStmts(f.OrElse, env);
+    }
+
+    private void ExecAsyncWith(WithStmt w, int index, Env env)
+    {
+        if (index >= w.Items.Count)
+        {
+            ExecStmts(w.Body, env);
+            return;
+        }
+
+        var item = w.Items[index];
+        var ctx = Eval(item.Ctx, env);
+        var entered = Await(CallMethod(ctx, "__aenter__", Array.Empty<object>()));
+        if (item.Target is not null)
+            AssignTo(item.Target, entered, env);
+
+        PyRaise? pending = null;
+        try
+        {
+            ExecAsyncWith(w, index + 1, env);
+        }
+        catch (PyRaise ex)
+        {
+            pending = ex;
+        }
+        catch
+        {
+            Await(CallMethod(ctx, "__aexit__",
+                new object[] { PyNone.Instance, PyNone.Instance, PyNone.Instance }));
+            throw;
+        }
+
+        if (pending is null)
+        {
+            Await(CallMethod(ctx, "__aexit__",
+                new object[] { PyNone.Instance, PyNone.Instance, PyNone.Instance }));
+        }
+        else
+        {
+            var exitResult = Await(CallMethod(ctx, "__aexit__",
+                new object[] { pending.Value.Class, pending.Value, PyNone.Instance }));
+            if (!PyOps.Truthy(this, exitResult))
+                throw pending;
+        }
+    }
+
     private void ExecWithItem(WithStmt w, int index, Env env)
     {
         if (index >= w.Items.Count)
@@ -873,6 +969,13 @@ public sealed class Interp
                 return gen.Yield(val);
             }
 
+            case AwaitExpr aw:
+            {
+                var coro = PyCoroutine.Current
+                           ?? throw PyErr.SyntaxLike("'await' outside async function");
+                return coro.RunAwait(this, Eval(aw.Value, env));
+            }
+
             case FStringExpr f:
             {
                 var sb = new StringBuilder();
@@ -1105,6 +1208,8 @@ public sealed class Interp
     public object CallFunction(PyFunction fn, object[] args, Dictionary<string, object>? kwargs = null)
     {
         var env = BindParameters(fn, args, kwargs);
+        if (fn.IsAsync)
+            return new PyCoroutine(fn, env);
         if (fn.IsGenerator)
             return new PyGenerator(fn, env);
         if (fn.LambdaBody is not null)
@@ -1240,7 +1345,7 @@ public sealed class Interp
     }
 
     public PyFunction MakeFunction(string name, Parameters parameters, List<Stmt>? body,
-        Expr? lambdaBody, bool isGenerator, Env env, Expr? returns = null)
+        Expr? lambdaBody, bool isGenerator, Env env, Expr? returns = null, bool isAsync = false)
     {
         var defaults = new Dictionary<string, object>();
         foreach (var param in parameters.Positional.Concat(parameters.KwOnly))
@@ -1250,7 +1355,7 @@ public sealed class Interp
         }
         // The class scope is not part of the closure chain (Python semantics).
         return new PyFunction(name, parameters, body, lambdaBody, env.EffectiveClosure, env.Module,
-            isGenerator, defaults) { Returns = returns };
+            isGenerator, defaults) { Returns = returns, IsAsync = isAsync };
     }
 
     // ================================================================ metodi helper

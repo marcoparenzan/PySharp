@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the interpreter as a standalone, embeddable library. -->
+    <PackageId>PySharp.Interpreter</PackageId>
+    <Version>1.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PySharp — a Python 3.x interpreter written from scratch in C# (.NET 10), embeddable as a library via the PyEngine facade. No CPython dependency.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;interpreter;scripting;embedding;dotnet</PackageTags>
   </PropertyGroup>
 
 </Project>

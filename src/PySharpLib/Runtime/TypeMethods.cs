@@ -49,6 +49,10 @@ public static class TypeMethods
             PyGenerator => GeneratorMethods.Table,
             PyIterator => IteratorMethods.Table,
             PyRange => RangeMethods.Table,
+            // Task derives from Future and shares its method surface.
+            PyFuture => Modules.AsyncioModule.FutureTable,
+            PyCoroutine => Modules.AsyncioModule.CoroutineTable,
+            PyEventLoop => Modules.AsyncioModule.EventLoopTable,
             _ => null,
         };
         if (table is not null && table.TryGetValue(name, out var fn))

@@ -35,6 +35,8 @@ public sealed class PyFunction
     public Env Closure { get; }
     public PyModule Module { get; }
     public bool IsGenerator { get; }
+    /// <summary>Defined with <c>async def</c>: calling it returns a coroutine.</summary>
+    public bool IsAsync { get; init; }
     /// <summary>Defaults evaluated at definition time, in order (positional then kw-only).</summary>
     public Dictionary<string, object> Defaults { get; }
     /// <summary>Attributes assigned to the function (e.g. by functools.wraps).</summary>
