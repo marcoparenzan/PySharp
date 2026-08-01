@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Numerics;
 using PySharpLib.Interpretation;
+using PySharpLib.Modules;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Builtins;
@@ -625,9 +626,16 @@ public static class BuiltinsFactory
         }
     }
 
+    // enum.IntEnum members are real Python ints (IntEnum derives from int), so
+    // isinstance(x, int) must be true for them too — found via aiomqtt/paho-mqtt's
+    // ConnackCode(enum.IntEnum), whose ReasonCode.__eq__ relies on exactly this
+    // (see AIOMQTT_PLAN.md Phase 5).
+    private static bool IsIntEnumMember(object obj) =>
+        obj is PyInstance inst && inst.Class.IsSubclassOf(EnumModule.IntEnumClass);
+
     private static bool TypeMatchesBuiltinName(object obj, string name) => name switch
     {
-        "int" => obj is BigInteger or bool,
+        "int" => obj is BigInteger or bool || IsIntEnumMember(obj),
         "float" => obj is double,
         "bool" => obj is bool,
         "str" => obj is string,

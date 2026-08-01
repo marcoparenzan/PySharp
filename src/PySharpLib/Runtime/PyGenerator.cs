@@ -22,6 +22,7 @@ public sealed class PyGenerator
     private object _yielded = PyNone.Instance;
     private bool _finished;
     private Exception? _error;
+    private PyRaise? _pendingThrow;
 
     [ThreadStatic]
     private static PyGenerator? _current;
@@ -37,25 +38,54 @@ public sealed class PyGenerator
         _env = env;
     }
 
-    /// <summary>Called by the generator thread when it evaluates 'yield v'. Returns the sent value (None).</summary>
+    /// <summary>Called by the generator thread when it evaluates 'yield v'. Returns the sent value
+    /// (None), or raises if the caller resumed us via <see cref="ThrowInto"/>.</summary>
     public object Yield(object value)
     {
         _yielded = value;
         _produced.Release();
         _resume.Wait();
+        if (_pendingThrow is { } exc)
+        {
+            _pendingThrow = null;
+            throw exc;
+        }
         return PyNone.Instance;
     }
 
-    public bool MoveNext(Interp interp, out object value)
+    public bool MoveNext(Interp interp, out object value) => Resume(interp, null, out value);
+
+    /// <summary>
+    /// Resumes the generator by raising <paramref name="excValue"/> at the suspended 'yield'
+    /// (like CPython's gen.throw). Used by contextlib.contextmanager's __exit__ to propagate a
+    /// `with`-body exception into the generator's try/finally. Returns true (with the re-yielded
+    /// value) if the generator catches it and yields again; false if it lets it end iteration via
+    /// StopIteration; otherwise the exception propagates to the caller.
+    /// </summary>
+    public bool ThrowInto(Interp interp, PyInstance excValue, out object value) =>
+        Resume(interp, new PyRaise(excValue), out value);
+
+    private bool Resume(Interp interp, PyRaise? throwValue, out object value)
     {
         if (_finished)
         {
             value = PyNone.Instance;
+            if (throwValue is not null)
+                throw throwValue;
             return false;
         }
 
-        if (_thread is null)
+        bool starting = _thread is null;
+        if (starting)
         {
+            if (throwValue is not null)
+            {
+                // Throwing into a generator that never started runs no code (CPython semantics).
+                _finished = true;
+                value = PyNone.Instance;
+                throw throwValue;
+            }
+
             _thread = new Thread(() =>
             {
                 _current = this;
@@ -85,6 +115,7 @@ public sealed class PyGenerator
             _thread.Start();
         }
 
+        _pendingThrow = throwValue;
         _resume.Release();
         _produced.Wait();
 

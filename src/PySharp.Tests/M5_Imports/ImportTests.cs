@@ -165,6 +165,28 @@ public class ImportTests : IDisposable
     }
 
     [Fact]
+    public void Version_info_compares_against_a_tuple()
+    {
+        string output = Run("""
+            import sys
+            print(sys.version_info >= (3, 11))
+            print(sys.version_info >= (99, 0))
+            print(sys.version_info < (3, 0))
+            """);
+        Assert.Equal("True\nFalse\nFalse\n", output);
+    }
+
+    [Fact]
+    public void Types_module_exposes_TracebackType()
+    {
+        string output = Run("""
+            from types import TracebackType
+            print(TracebackType.__name__)
+            """);
+        Assert.Equal("TracebackType\n", output);
+    }
+
+    [Fact]
     public void Sys_modules_reflects_imports()
     {
         WriteModule("tracked.py", "X = 1\n");

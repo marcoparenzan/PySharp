@@ -54,6 +54,12 @@ public static class SysModule
         cls.Dict["__len__"] = new PyBuiltinFunction("version_info.__len__", (_, _, _) => new BigInteger(5));
         cls.Dict["__iter__"] = new PyBuiltinFunction("version_info.__iter__", (_, _, _) =>
             new PyIterator(((IEnumerable<object>)values).GetEnumerator()));
+        // Comparable against a plain tuple, e.g. `sys.version_info >= (3, 11)`.
+        cls.Dict["__lt__"] = new PyBuiltinFunction("version_info.__lt__", (interp, a, _) => interp.Compare(new PyTuple(values), a[1]) < 0);
+        cls.Dict["__le__"] = new PyBuiltinFunction("version_info.__le__", (interp, a, _) => interp.Compare(new PyTuple(values), a[1]) <= 0);
+        cls.Dict["__gt__"] = new PyBuiltinFunction("version_info.__gt__", (interp, a, _) => interp.Compare(new PyTuple(values), a[1]) > 0);
+        cls.Dict["__ge__"] = new PyBuiltinFunction("version_info.__ge__", (interp, a, _) => interp.Compare(new PyTuple(values), a[1]) >= 0);
+        cls.Dict["__eq__"] = new PyBuiltinFunction("version_info.__eq__", (interp, a, _) => interp.Compare(new PyTuple(values), a[1]) == 0);
         var inst = new PyInstance(cls);
         inst.Dict["major"] = values[0];
         inst.Dict["minor"] = values[1];

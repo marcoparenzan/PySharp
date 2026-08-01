@@ -67,6 +67,10 @@ public static class SslModule
         d["SSLWantReadError"] = SslWantReadClass;
         d["SSLWantWriteError"] = SslWantWriteClass;
         d["SSLCertVerificationError"] = CertVerificationErrorClass;
+        // CPython: CertificateError is a deprecated alias for SSLCertVerificationError. paho-mqtt's
+        // TLS path (`except ssl.CertificateError:`) references it unconditionally when matching
+        // exception handlers, so it must exist even if that branch is never actually taken.
+        d["CertificateError"] = CertVerificationErrorClass;
 
         var contextClass = BuildContextClass();
         d["SSLContext"] = contextClass;

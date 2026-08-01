@@ -9,6 +9,7 @@ namespace PySharp.Tests.M10_Async;
 /// Scenario 2 (2a/2b): coroutines + the .NET-backed asyncio event loop.
 /// Deterministic tests — no sockets — covering run/await/sleep/gather/tasks.
 /// </summary>
+[Collection("asyncio-run")]
 public class AsyncioTests
 {
     private static string Run(string body) => Py.Run("import asyncio\n" + body).TrimEnd('\n');

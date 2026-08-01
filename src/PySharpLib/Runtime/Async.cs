@@ -4,6 +4,7 @@
 // root for full license information.
 
 using System.Diagnostics;
+using System.Net.Sockets;
 using PySharpLib.Interpretation;
 
 namespace PySharpLib.Runtime;
@@ -554,6 +555,164 @@ public sealed class PyEventLoop
         if (IsRunning)
             throw PyErr.RuntimeError("Cannot close a running event loop");
         _closed = true;
+        _ioStop = true;
+    }
+
+    // --------------------------------------------------------------- add_reader / add_writer
+    //
+    // A background poller thread watches the registered fds with Socket.Select (the same
+    // primitive Modules.SelectModule uses for select.select) and CallSoon's the ready callback
+    // back onto this loop. fd -> Socket resolution goes through SocketModule's handle registry,
+    // since add_reader/add_writer only ever receive the bare int fd (the asyncio API shape).
+
+    private readonly Dictionary<long, Action> _readers = new();
+    private readonly Dictionary<long, Action> _writers = new();
+    // fds with a callback already CallSoon'd but not yet run on the loop thread: the poller
+    // thread must not re-select on them meanwhile, or a still-unread socket (level-triggered,
+    // and not yet drained because the first callback hasn't run yet) gets scheduled twice.
+    private readonly HashSet<long> _inFlightReaders = new();
+    private readonly HashSet<long> _inFlightWriters = new();
+    private readonly object _ioLock = new();
+    private Thread? _ioThread;
+    private volatile bool _ioStop;
+
+    public void AddReader(long fd, Action callback)
+    {
+        lock (_ioLock)
+            _readers[fd] = callback;
+        EnsureIoThread();
+    }
+
+    public bool RemoveReader(long fd)
+    {
+        lock (_ioLock)
+        {
+            _inFlightReaders.Remove(fd);
+            return _readers.Remove(fd);
+        }
+    }
+
+    public void AddWriter(long fd, Action callback)
+    {
+        lock (_ioLock)
+            _writers[fd] = callback;
+        EnsureIoThread();
+    }
+
+    public bool RemoveWriter(long fd)
+    {
+        lock (_ioLock)
+        {
+            _inFlightWriters.Remove(fd);
+            return _writers.Remove(fd);
+        }
+    }
+
+    private void EnsureIoThread()
+    {
+        if (_ioThread is not null)
+            return;
+        lock (_ioLock)
+        {
+            if (_ioThread is not null)
+                return;
+            _ioThread = new Thread(IoPollLoop) { IsBackground = true, Name = "pyeventloop-io" };
+            _ioThread.Start();
+        }
+    }
+
+    private void IoPollLoop()
+    {
+        while (!_ioStop)
+        {
+            var readList = new List<Socket>();
+            var writeList = new List<Socket>();
+            var fdOfRead = new Dictionary<Socket, long>();
+            var fdOfWrite = new Dictionary<Socket, long>();
+            lock (_ioLock)
+            {
+                foreach (var fd in _readers.Keys)
+                    if (!_inFlightReaders.Contains(fd)
+                        && Modules.SocketModule.TryResolveHandle(fd, out var s) && s is not null)
+                    {
+                        readList.Add(s);
+                        fdOfRead[s] = fd;
+                    }
+                foreach (var fd in _writers.Keys)
+                    if (!_inFlightWriters.Contains(fd)
+                        && Modules.SocketModule.TryResolveHandle(fd, out var s) && s is not null)
+                    {
+                        writeList.Add(s);
+                        fdOfWrite[s] = fd;
+                    }
+            }
+
+            if (readList.Count == 0 && writeList.Count == 0)
+            {
+                Thread.Sleep(20);
+                continue;
+            }
+
+            try
+            {
+                Socket.Select(readList, writeList, null, 50_000); // 50ms
+            }
+            catch (SocketException)
+            {
+                Thread.Sleep(10);
+                continue;
+            }
+            catch (ObjectDisposedException)
+            {
+                Thread.Sleep(10);
+                continue;
+            }
+
+            foreach (var s in readList)
+            {
+                if (!fdOfRead.TryGetValue(s, out var fd))
+                    continue;
+                Action? cb;
+                lock (_ioLock)
+                {
+                    _readers.TryGetValue(fd, out cb);
+                    if (cb is not null)
+                        _inFlightReaders.Add(fd);
+                }
+                if (cb is not null)
+                {
+                    var capturedFd = fd;
+                    var capturedCb = cb;
+                    CallSoon(() =>
+                    {
+                        try { capturedCb(); }
+                        finally { lock (_ioLock) _inFlightReaders.Remove(capturedFd); }
+                    });
+                }
+            }
+            foreach (var s in writeList)
+            {
+                if (!fdOfWrite.TryGetValue(s, out var fd))
+                    continue;
+                Action? cb;
+                lock (_ioLock)
+                {
+                    _writers.TryGetValue(fd, out cb);
+                    if (cb is not null)
+                        _inFlightWriters.Add(fd);
+                }
+                if (cb is not null)
+                {
+                    var capturedFd = fd;
+                    var capturedCb = cb;
+                    CallSoon(() =>
+                    {
+                        try { capturedCb(); }
+                        finally { lock (_ioLock) _inFlightWriters.Remove(capturedFd); }
+                    });
+                }
+            }
+        }
     }
 }
 

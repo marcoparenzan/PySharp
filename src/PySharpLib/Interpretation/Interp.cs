@@ -2331,7 +2331,8 @@ public sealed class Interp
                     Call(new PyBoundMethod(inst, prop.Setter), new[] { value });
                     return;
                 }
-                if (inst.Class.TryLookup("__setattr__", out var setattr) && setattr is PyFunction)
+                if (inst.Class.TryLookup("__setattr__", out var setattr)
+                    && setattr is PyFunction or PyBuiltinFunction)
                 {
                     Call(new PyBoundMethod(inst, setattr), new object[] { name, value });
                     return;

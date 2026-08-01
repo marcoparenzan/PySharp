@@ -30,6 +30,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("uuid", _ => MiscModules.CreateUuid());
         importer.RegisterBuiltin("warnings", _ => MiscModules.CreateWarnings());
         importer.RegisterBuiltin("typing", _ => MiscModules.CreateTyping());
+        importer.RegisterBuiltin("types", _ => MiscModules.CreateTypes());
         importer.RegisterBuiltin("dataclasses", _ => MiscModules.CreateDataclasses());
         importer.RegisterBuiltin("copy", _ => MiscModules.CreateCopy());
         importer.RegisterBuiltin("functools", _ => FunctoolsModule.Create());
@@ -53,5 +54,6 @@ public static class StdlibModules
         importer.RegisterBuiltin("math", _ => MathModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());
+        importer.RegisterBuiltin("contextlib", _ => ContextlibModule.Create());
     }
 }

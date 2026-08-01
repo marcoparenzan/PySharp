@@ -17,10 +17,10 @@
 #       async for message in client.messages:
 #           ...
 #
-# STATUS — target script, not yet runnable end-to-end. aiomqtt needs asyncio.Queue/
-# Lock/Event/Semaphore, asyncio.wait, contextlib, and a real event-loop reader/writer
-# reactor that PySharp does not implement yet. See AIOMQTT_PLAN.md at the repo root
-# for the phased plan to close the gap (remove this note once it lands).
+# STATUS — the core flow (connect, subscribe, concurrent publish + `async for message in
+# client.messages`, clean disconnect) runs end-to-end against a real broker
+# (test.mosquitto.org). Not yet verified against a real Azure IoT Hub specifically (no
+# credentials available in this environment) — see AIOMQTT_PLAN.md Phase 6 at the repo root.
 #
 # Prerequisite:  pysharp install aiomqtt
 # Config in config.json (see config.iothub_device_mqtt.json — shared with the sync sample).

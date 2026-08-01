@@ -10,16 +10,23 @@ using PySharpLib;
 
 namespace PySharp.Tests.M10_Async;
 
-/// <summary>Run this live-socket test in isolation so parallel CPU load can't starve the server thread.</summary>
-[CollectionDefinition("live-server", DisableParallelization = true)]
-public class LiveServerCollection { }
+/// <summary>
+/// Every test that drives a real asyncio event loop (<c>asyncio.run()</c>/<c>PyEventLoop.RunForever</c>)
+/// must live in this collection: <see cref="PySharpLib.Runtime.PyEventLoop.Running"/> is a single
+/// process-wide static (a coroutine's own background thread needs to see it too, so it can't be
+/// <c>[ThreadStatic]</c>), so two `asyncio.run()` calls from different test classes running in
+/// parallel — xUnit's default across collections — can stomp on each other's "current loop" and
+/// deadlock. Also keeps live-socket tests from being starved by parallel CPU load.
+/// </summary>
+[CollectionDefinition("asyncio-run", DisableParallelization = true)]
+public class AsyncioRunCollection { }
 
 /// <summary>
 /// Scenario 2 end-to-end: a real asynchronous HTTP server written in Python and run by
 /// PySharp on the .NET-backed asyncio loop, answering an actual TCP request. Bounded to a
 /// single request so the loop terminates on its own.
 /// </summary>
-[Collection("live-server")]
+[Collection("asyncio-run")]
 public class AsyncServerTests
 {
     [Fact]

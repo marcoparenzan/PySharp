@@ -4,6 +4,7 @@
 // root for full license information.
 
 using System.Numerics;
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -133,7 +134,7 @@ public static class MiscModules
             "Coroutine", "AsyncIterator", "AsyncIterable", "Generator", "AbstractSet",
             "MutableSequence", "MutableSet", "Hashable", "Sized", "Container", "Collection",
             "Reversible", "SupportsInt", "SupportsFloat", "SupportsAbs", "SupportsRound",
-            "ByteString", "AnyStr", "NoReturn", "Text",
+            "ByteString", "AnyStr", "NoReturn", "Text", "Concatenate", "Self", "TypeAlias",
         })
         {
             d[name] = new PyClass(name, new List<PyClass>());
@@ -144,7 +145,18 @@ public static class MiscModules
         d["cast"] = new PyBuiltinFunction("cast", (_, a, _) => a[1]);
         d["overload"] = new PyBuiltinFunction("overload", (_, a, _) => a[0]);
         d["TypeVar"] = new PyBuiltinFunction("TypeVar", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
+        d["ParamSpec"] = new PyBuiltinFunction("ParamSpec", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
         d["NewType"] = new PyBuiltinFunction("NewType", (_, a, _) => a[1]);
+        return m;
+    }
+
+    /// <summary>Minimal types module: just the names real-world scripts have needed so far.</summary>
+    public static PyModule CreateTypes()
+    {
+        var m = new PyModule("types");
+        var d = m.Dict;
+        foreach (var name in new[] { "TracebackType", "FunctionType", "ModuleType", "GeneratorType" })
+            d[name] = new PyClass(name, new List<PyClass>());
         return m;
     }
 
@@ -161,18 +173,109 @@ public static class MiscModules
             return PyNone.Instance;
         });
 
-        d["dataclass"] = new PyBuiltinFunction("dataclass", (interp, a, _) =>
+        d["dataclass"] = new PyBuiltinFunction("dataclass", (interp, a, kwargs) =>
         {
             // usable both as @dataclass and @dataclass(...)
             if (a.Length == 1 && a[0] is PyClass cls)
-                return cls; // v1: the class must define __init__ itself or use the class defaults
-            return new PyBuiltinFunction("dataclass_deco", (_, b, _) => b[0]);
+                return ApplyDataclass(interp, cls, null);
+            var deferredKwargs = kwargs;
+            return new PyBuiltinFunction("dataclass_deco",
+                (interp2, b, _) => ApplyDataclass(interp2, (PyClass)b[0], deferredKwargs));
         });
 
         d["asdict"] = new PyBuiltinFunction("asdict", (_, a, _) =>
             a[0] is PyInstance inst ? inst.Dict.Copy() : throw PyErr.TypeError("asdict() should be called on dataclass instances"));
 
         return m;
+    }
+
+    /// <summary>
+    /// Generates __init__/__repr__/__eq__ (and, if frozen, a __setattr__ guard) from the class's
+    /// annotated fields — walking the MRO base-to-derived so a subclass that adds no fields of its
+    /// own (like aiomqtt's `Topic(Wildcard)`) still inherits its base's fields. Does not override
+    /// a method the class already defines itself. Calls __post_init__ if present, matching CPython.
+    /// </summary>
+    private static PyClass ApplyDataclass(Interp interp, PyClass cls, Dictionary<string, object>? kwargs)
+    {
+        var fields = new List<string>();
+        var defaults = new Dictionary<string, object>();
+        for (int i = cls.Mro.Count - 1; i >= 0; i--)
+        {
+            if (!cls.Mro[i].Dict.TryGet("__annotations__", out var lvlAnnObj) || lvlAnnObj is not PyDict lvlAnn)
+                continue;
+            foreach (var key in lvlAnn.Keys.OfType<string>())
+            {
+                if (!fields.Contains(key))
+                    fields.Add(key);
+                if (cls.Mro[i].Dict.TryGet(key, out var def))
+                    defaults[key] = def;
+            }
+        }
+        if (fields.Count == 0)
+            return cls; // nothing to generate (e.g. a dataclass with only methods)
+
+        if (!cls.Dict.TryGet("__init__", out _))
+        {
+            cls.Dict["__init__"] = new PyBuiltinFunction($"{cls.Name}.__init__", (interp2, a, callKwargs) =>
+            {
+                var inst = (PyInstance)a[0];
+                for (int i = 0; i < fields.Count; i++)
+                {
+                    if (i + 1 < a.Length)
+                        inst.Dict[fields[i]] = a[i + 1];
+                    else if (callKwargs is not null && callKwargs.TryGetValue(fields[i], out var kv))
+                        inst.Dict[fields[i]] = kv;
+                    else if (defaults.TryGetValue(fields[i], out var def))
+                        inst.Dict[fields[i]] = def;
+                    else
+                        throw PyErr.TypeError(
+                            $"{cls.Name}.__init__() missing required positional argument: '{fields[i]}'");
+                }
+                if (cls.TryLookup("__post_init__", out var postInit))
+                    interp2.Call(postInit, new object[] { inst });
+                return PyNone.Instance;
+            });
+        }
+
+        if (!cls.Dict.TryGet("__repr__", out _))
+        {
+            cls.Dict["__repr__"] = new PyBuiltinFunction($"{cls.Name}.__repr__", (interp2, a, _) =>
+            {
+                var inst = (PyInstance)a[0];
+                string body = string.Join(", ", fields.Select(f =>
+                    $"{f}={PyOps.Repr(interp2, inst.Dict.TryGet(f, out var v) ? v : PyNone.Instance)}"));
+                return $"{cls.Name}({body})";
+            });
+        }
+
+        if (!cls.Dict.TryGet("__eq__", out _))
+        {
+            cls.Dict["__eq__"] = new PyBuiltinFunction($"{cls.Name}.__eq__", (interp2, a, _) =>
+            {
+                if (a[1] is not PyInstance other || other.Class != cls)
+                    return PyNotImplemented.Instance;
+                var self = (PyInstance)a[0];
+                return fields.All(f => interp2.RichEquals(
+                    self.Dict.TryGet(f, out var v1) ? v1 : PyNone.Instance,
+                    other.Dict.TryGet(f, out var v2) ? v2 : PyNone.Instance));
+            });
+        }
+
+        bool frozen = kwargs is not null && kwargs.TryGetValue("frozen", out var fz) && PyOps.Truthy(interp, fz);
+        if (frozen && !cls.Dict.TryGet("__setattr__", out _))
+        {
+            cls.Dict["__setattr__"] = new PyBuiltinFunction($"{cls.Name}.__setattr__", (_, a, _) =>
+            {
+                var inst = (PyInstance)a[0];
+                string name = (string)a[1];
+                if (inst.Dict.TryGet(name, out _))
+                    throw PyErr.TypeError($"cannot assign to field '{name}' (frozen dataclass)");
+                inst.Dict[name] = a[2];
+                return PyNone.Instance;
+            });
+        }
+
+        return cls;
     }
 
     public static PyModule CreateCopy()

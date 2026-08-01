@@ -119,8 +119,9 @@ public class CollectionsAndEnumTests
             print(int(Rc.NO_CONN) + 1)
             print(Rc(4).name)
             print(str(Rc.SUCCESS))
+            print(isinstance(Rc.SUCCESS, int))
             """);
-        Assert.Equal("True True False\nNO_CONN 4\n5\nNO_CONN\nRc.SUCCESS\n", output);
+        Assert.Equal("True True False\nNO_CONN 4\n5\nNO_CONN\nRc.SUCCESS\nTrue\n", output);
     }
 
     [Fact]

@@ -145,6 +145,25 @@ public static class SocketModule
         return (SockWrap)w;
     }
 
+    // fd (raw OS handle, what fileno() returns) -> Socket, so the event loop's add_reader/
+    // add_writer (which only ever get the bare int fd, per the asyncio API) can resolve it back.
+    // Populated lazily by fileno() itself, since every caller of add_reader/add_writer always
+    // calls fileno() to get the fd in the first place.
+    private static readonly Dictionary<long, Socket> HandleRegistry = new();
+    private static readonly object HandleRegistryLock = new();
+
+    public static void RegisterHandle(Socket sock)
+    {
+        lock (HandleRegistryLock)
+            HandleRegistry[(long)sock.Handle] = sock;
+    }
+
+    public static bool TryResolveHandle(long handle, out Socket? sock)
+    {
+        lock (HandleRegistryLock)
+            return HandleRegistry.TryGetValue(handle, out sock);
+    }
+
     /// <summary>Converte SocketException in eccezione Python appropriata.</summary>
     public static PyRaise Translate(SocketException ex) => ex.SocketErrorCode switch
     {
@@ -369,7 +388,12 @@ public static class SocketModule
         Add("gettimeout", (_, a, _) =>
             Wrap(a[0]).Timeout is double t ? t : PyNone.Instance);
 
-        Add("fileno", (_, a, _) => new BigInteger((long)Wrap(a[0]).Socket.Handle));
+        Add("fileno", (_, a, _) =>
+        {
+            var sock = Wrap(a[0]).Socket;
+            RegisterHandle(sock);
+            return new BigInteger((long)sock.Handle);
+        });
 
         Add("shutdown", (_, a, _) =>
         {

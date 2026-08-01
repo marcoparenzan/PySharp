@@ -452,12 +452,14 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 - **Language**: decorators, type hints (evaluated on access via `__annotations__`), classes,
   generators, exceptions, comprehensions, f-strings.
 - **Present stdlib modules**: `json`, `yaml`, `collections`, `functools`, `enum`, `math`, `struct`,
-  `socket`, `ssl`, `threading`, `asyncio`, `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`, `sys`,
-  `time`, `io`, `string`; stubs for `typing` and `dataclasses`.
-- **Done scenarios**: Azure IoT Hub device (MQTT), a sync FastAPI-shaped HTTP API, an **async
-  FastAPI-shaped HTTP API on a real asyncio event loop** ([async_api.py](samples/async_api.py)), an
-  MQTT subscribe round-trip, and YAML+JSON (de)serialization — see [ROADMAP.md](ROADMAP.md) and
-  [samples/](samples/).
+  `socket`, `ssl`, `threading`, `asyncio` (incl. `Lock`/`Event`/`Semaphore`/`Queue`, `wait`,
+  `add_reader`/`add_writer`, `run_in_executor`), `contextlib`, `dataclasses` (real field-driven
+  `__init__`/`__repr__`/`__eq__`, `frozen=True`), `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`,
+  `sys`, `time`, `io`, `string`, `types`; stub for `typing`.
+- **Done scenarios**: Azure IoT Hub device (MQTT, sync **and async**), a sync FastAPI-shaped HTTP API,
+  an **async FastAPI-shaped HTTP API on a real asyncio event loop**
+  ([async_api.py](samples/async_api.py)), an MQTT subscribe round-trip, and YAML+JSON
+  (de)serialization — see [ROADMAP.md](ROADMAP.md) and [samples/](samples/).
 - **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt).
 
 ### Does not work (yet)
@@ -468,9 +470,8 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 | **FastAPI** | `async`/`await` ✅ and an `asyncio` event loop ✅ now exist (see [async_api.py](samples/async_api.py)); still missing: `re`, `datetime`, `abc`, `contextlib`, `inspect`; `pydantic-core` is compiled in Rust (the mini-pip only installs pure wheels); starlette/uvicorn assume an ASGI stack | **Partly unblocked**: async is done and a hand-rolled async web framework runs; the real FastAPI package still needs a non-compiled pydantic + ASGI. See [ROADMAP.md](ROADMAP.md) scenario 2 |
 
 Modules missing today and required by many real scenarios: `re` (regex), `datetime`, `decimal`,
-`abc`, `contextlib`, `importlib`, `itertools`, `operator`, `types`, `asyncio`, `sqlite3`. Adding one
-means writing a module in [src/PySharpLib/Modules/](src/PySharpLib/Modules/) and registering it in
-`StdlibModules.RegisterAll`.
+`abc`, `importlib`, `itertools`, `operator`, `sqlite3`. Adding one means writing a module in
+[src/PySharpLib/Modules/](src/PySharpLib/Modules/) and registering it in `StdlibModules.RegisterAll`.
 
 ### Running original PyPI packages
 

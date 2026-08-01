@@ -37,7 +37,8 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | # | Scenario | Script | Status | Features/modules it drives |
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0 + hardening ✅, 2a `async`/`await` ✅, 2b `asyncio` ✅) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, `re`, `datetime`, `inspect`, real `typing`, `contextlib`, `abc`, ASGI, pydantic |
+| 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (core proven live; Azure-specific part unverified for lack of credentials) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0 + hardening ✅, 2a `async`/`await` ✅, 2b `asyncio` ✅) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, `re`, `datetime`, `inspect`, real `typing`, ~~`contextlib`~~ ✅, `abc`, ASGI, pydantic |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -88,6 +89,39 @@ and desired). Covered offline by the M9 tests ([IoTHubSampleTests.cs](src/PyShar
 connection-string parsing, SAS token compared against the C#-computed HMAC, MQTT client construction
 with credentials. Example config in
 [samples/config.iothub_device_mqtt.json](samples/config.iothub_device_mqtt.json).
+
+### Scenario 1b — Azure IoT Hub device, async (aiomqtt) ✅
+
+Async counterpart of scenario 1: [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py)
+is the same device (SAS auth, D2C, C2D, device twin) rewritten against **aiomqtt** (2.5.1, from PyPI,
+unmodified) instead of paho-mqtt callbacks + a manual network loop —
+`async with aiomqtt.Client(...) as client: await client.subscribe(...); async for message in
+client.messages: ...`. Rationale for the two styles (paho-mqtt for blocking scripts/workers, aiomqtt
+when the app is already async): https://scadaprotocols.com/python-mqtt/. Full phased build log,
+including every bug found along the way, in `AIOMQTT_PLAN.md` at the repo root.
+
+**Why it was a severe test, on top of scenario 1's.** aiomqtt only depends on paho-mqtt (already
+vendored) and drives a real chunk of `asyncio` PySharp didn't have: `Queue`/`Lock`/`Event`/`Semaphore`,
+`wait`/`FIRST_COMPLETED`, and a full event-loop reactor (`add_reader`/`add_writer`/
+`call_soon_threadsafe`/`run_in_executor`) — plus a `contextlib` module that didn't exist at all. Built
+in the same "run the real script → fix the next error → test → repeat" loop as every other scenario;
+see the "Interpreter evolution log" below.
+
+**Bugs found in already-shipped code, not just gaps.** Running the *real* package against a *real*
+broker surfaced defects that offline unit tests hadn't: `isinstance(x, int)` was `False` for
+`enum.IntEnum` members, which silently made paho's own CONNACK-success check always take the failure
+branch (**every** aiomqtt connection, successful or not, raised `MqttConnectError`); `create_task()`
+rejected a bare `Future` (only accepted a real coroutine), breaking `client.messages` iteration; a
+poller-thread/loop-thread race could fire an `add_reader` callback twice before the first run drained
+the socket. All three are now fixed and regression-tested.
+
+**Status.** The core flow — connect, subscribe, concurrent publish, `async for message in
+client.messages`, clean disconnect — runs end-to-end against the real public broker
+(`test.mosquitto.org`, plain and, separately, over TLS against a properly-trusted host to confirm
+`ssl` itself is correct). Not yet verified against a real Azure IoT Hub specifically (no credentials
+available in this environment) — unlike scenario 1, this last step is left for the author to confirm,
+the same trust boundary scenario 1's own "tested end-to-end against a real Azure hub" already relied
+on. Offline tests: [AiomqttSmokeTests.cs](src/PySharp.Tests/M15_Aiomqtt/AiomqttSmokeTests.cs).
 
 ### Scenario 2 — FastAPI API (no SQL) 🔴 — **key scenario**
 
@@ -205,6 +239,7 @@ and *which scenario drove it*.
 | 2b — asyncio | new stdlib module **`asyncio`**: .NET-backed event loop, `Future`/`Task`, `run`/`sleep`/`gather`/`create_task`/`wait_for`, **async socket I/O** (`sock_accept`/`sock_recv`/`sock_sendall`) | [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs); tests [AsyncioTests.cs](src/PySharp.Tests/M10_Async/AsyncioTests.cs), [AsyncServerTests.cs](src/PySharp.Tests/M10_Async/AsyncServerTests.cs) |
 | 5 — MQTT subscribe | *none* — paho's subscribe side already ran | — |
 | 9 — JSON + YAML | new stdlib module **`yaml`** (safe_load/dump, PyYAML subset) | [YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs); test [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs) |
+| 1b — aiomqtt | new stdlib module **`contextlib`** (`contextmanager`/`suppress`, needed `PyGenerator.ThrowInto` — inject an exception at a suspended `yield`, like `gen.throw()`); **`asyncio.Queue`/`Lock`/`Event`/`Semaphore`/`BoundedSemaphore`**, **`asyncio.wait`/`FIRST_COMPLETED`**; event-loop **`add_reader`/`add_writer`/`call_soon_threadsafe`/`run_in_executor`** (a `Socket.Select`-based poller thread + a `SocketModule` fd→`Socket` registry); real **`dataclasses`** field-driven `__init__`/`__repr__`/`__eq__`/frozen generation (walks the MRO so a no-new-fields subclass still inherits its base's fields); `types` module (`TracebackType`); `sys.version_info` rich comparison against a tuple; `typing.Concatenate`/`Self`/`TypeAlias`/`ParamSpec`; `isinstance(x, int)` now recognizes `IntEnum` members; `Interp.SetAttr`'s `__setattr__` dispatch now accepts a builtin (not just user-defined) hook; `ssl.CertificateError` (alias of `SSLCertVerificationError`); `create_task`/`loop.create_task` relaxed to accept a bare `Future` | [ContextlibModule.cs](src/PySharpLib/Modules/ContextlibModule.cs), [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs), [MiscModules.cs](src/PySharpLib/Modules/MiscModules.cs), [SocketModule.cs](src/PySharpLib/Modules/SocketModule.cs), [SslModule.cs](src/PySharpLib/Modules/SslModule.cs), [SysModule.cs](src/PySharpLib/Modules/SysModule.cs), [Builtins.cs](src/PySharpLib/Builtins/Builtins.cs), [Interp.cs](src/PySharpLib/Interpretation/Interp.cs), [PyGenerator.cs](src/PySharpLib/Runtime/PyGenerator.cs); full log in `AIOMQTT_PLAN.md` |
 
 With `co_varnames` (names) + `__annotations__` (types, including `'return'`) the **signature is
 complete**: the framework injects every parameter, treating unannotated ones as `str` (like FastAPI).
@@ -296,7 +331,7 @@ in scenario 1).
 
 ## Progress indicators
 
-- Scenarios: **1, 5, 9 complete**; **2** started (phases 2.0/2.0+/2.0++/2.0+++ ✅); 3 and 4/6/7/8 to
+- Scenarios: **1, 1b, 5, 9 complete**; **2** started (phases 2.0/2.0+/2.0++/2.0+++ ✅); 3 and 4/6/7/8 to
   do; native cross-cutting partial.
 - Stdlib modules: **~36 / ~200** of CPython (added `yaml`).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
