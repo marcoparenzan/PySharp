@@ -258,7 +258,7 @@ kind of phased, checkbox-driven plan.
   test — Phase 6 wires this into `samples/iothub_device_aiomqtt.py` and decides the test story for a
   live-network run.)
 
-## Phase 6 — wire it to the real `aiomqtt` scenario ✅ (core proven; Azure-specific part still open)
+## Phase 6 — wire it to the real `aiomqtt` scenario ✅
 
 - [x] 6.1 Offline tests (no network) in `M15_Aiomqtt/AiomqttSmokeTests.cs`, mirroring
   [IoTHubSampleTests.cs](src/PySharp.Tests/M9_IoTHub/IoTHubSampleTests.cs) (5 tests total): import
@@ -290,12 +290,38 @@ kind of phased, checkbox-driven plan.
     dedicated check.
 - [x] 6.3 Full real async round trip confirmed end-to-end (5.7): connect, subscribe, concurrent
   publish + `async for message in client.messages`, clean disconnect, all against the real public
-  broker. **Not** run against a real Azure IoT Hub (no credentials available in this environment) —
-  unlike scenario 1, this step is left for the author to verify manually with their own hub, the same
-  trust boundary scenario 1's own "tested end-to-end against a real Azure hub" already relied on.
-  TLS itself is proven correct (see 6.2), and the sample reuses scenario 1's exact SAS/username/topic
-  scheme, so nothing scenario-specific to Azure remains unverified in principle — only unverified in
-  practice, for lack of a hub to point at.
+  broker. TLS handshake/cert validation itself was proven correct in isolation (6.2).
+- [x] 6.4 **Verified end-to-end against the author's real Azure IoT Hub** (SAS auth,
+  `samples/config.json`, `pysharp run iothub_device_aiomqtt.py samples/config.json`) — and found one
+  more real bug on the way, invisible until this exact run: the sample **hung forever** right after
+  printing `[main] connecting to ...`, never reaching `[mqtt] connected`. The sync (`paho-mqtt`)
+  sample against the *same* hub worked instantly, which ruled out network/auth/TLS-cert issues and
+  pointed at something specific to the async reactor.
+  - **Root cause**: `SslModule.cs`'s `fileno()` returned the underlying raw socket's handle, but —
+    unlike `SocketModule.cs`'s own `fileno()` — never called `SocketModule.RegisterHandle()` on it.
+    `add_reader`/`add_writer` only ever receive that bare int fd (the asyncio API shape) and resolve
+    it back to a real `Socket` through `SocketModule`'s handle registry (`PyEventLoop.IoPollLoop`,
+    `Runtime/Async.cs`). For a TLS-wrapped socket the fd never got registered, so the poller's
+    `TryResolveHandle` always failed, the fd was silently dropped from every `Socket.Select` call, and
+    the reader callback that would deliver CONNACK (and everything after it) never fired — a permanent
+    hang. This path is TLS-only, which is exactly why 5.7's plaintext `test.mosquitto.org:1883` round
+    trip never exercised it and 6.2's TLS check (a bare `wrap_socket` connect probe, no reactor
+    involved) didn't either — it took a real `async with aiomqtt.Client(..., tls_context=...)` run to
+    surface it.
+  - **Fix**: one line in `SslModule.cs`'s `fileno()` — call `SocketModule.RegisterHandle(sock)` before
+    returning the handle, mirroring what the plain `socket` module already does.
+  - **Debugging note for future sessions**: found via temporary `Console.Error` instrumentation in
+    `AddReader`/`IoPollLoop` (stderr, so it doesn't pollute the captured Python stdout) — one line
+    logging every `AddReader` call, one logging every fd `Socket.Select` actually fired on. The
+    `AddReader fd=...` line appeared exactly once and the fired-reader line never did, which is what
+    pointed straight at "never resolves" rather than "resolves but Select never sees it ready"
+    (a real alternative hypothesis at the time: `SslWrap`'s own decrypted-data buffer being invisible
+    to a raw-socket-level `Socket.Select`, which paho's own `pending()`-draining loop in
+    `_on_socket_open`'s callback already guards against — worth remembering if a *different* TLS hang
+    ever shows up post-registration). All diagnostics were removed before committing the real fix.
+  - Re-ran after the fix: full success — connect, twin GET (received the live desired/reported
+    document), reported-properties PATCH (204), three D2C telemetry sends, 30s listen window, clean
+    disconnect. `dotnet test` stayed green (670/670) throughout.
 
 ## Phase 7 — docs
 
@@ -319,11 +345,15 @@ kind of phased, checkbox-driven plan.
 
 ## Progress indicator
 
-**All 7 phases done.** Core scenario proven end-to-end against a real public MQTT broker; only the
-Azure-IoT-Hub-specific final check (6.3) is left for the author, for lack of credentials in this
-environment. Every gap/bug recorded above was found by actually running real code (the real `aiomqtt`
-package, real generated test traffic, a real broker), not guessed — including several that weren't in
-the original Phase-0 catalog (the catalog explicitly wasn't assumed exhaustive past Phase 1; see the
+**All 7 phases done, including the real Azure IoT Hub run (6.4).** Core scenario proven end-to-end
+against a real public MQTT broker, then against the author's own Azure IoT Hub — which surfaced one
+more real bug (`SslModule.fileno()` not registering its handle, hanging every TLS-backed `add_reader`/
+`add_writer`; see 6.4) invisible to every prior check, since neither the plaintext broker round trip
+nor the TLS-connect-only check exercised a full TLS run through the reactor. Every gap/bug recorded
+above was found by actually running real code (the real `aiomqtt` package, real generated test
+traffic, a real broker, a real Azure hub), not guessed — including several that weren't in the
+original Phase-0 catalog (the catalog explicitly wasn't assumed exhaustive past Phase 1; see the
 execution rules). Full test count added across all phases: contextlib (6), Lock/Event/Semaphore (7),
 Queue (9, incl. the create_task/Future regression), wait (4), reactor (4), IntEnum isinstance (+1 to
 an existing test), dataclasses (5), aiomqtt smoke (5) — suite went from 635 to 670, all green.
+Only 7.2 (RELEASE_NOTES/version bump) remains, deliberately deferred pending the author's input.

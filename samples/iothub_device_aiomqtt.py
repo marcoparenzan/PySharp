@@ -17,10 +17,9 @@
 #       async for message in client.messages:
 #           ...
 #
-# STATUS — the core flow (connect, subscribe, concurrent publish + `async for message in
-# client.messages`, clean disconnect) runs end-to-end against a real broker
-# (test.mosquitto.org). Not yet verified against a real Azure IoT Hub specifically (no
-# credentials available in this environment) — see AIOMQTT_PLAN.md Phase 6 at the repo root.
+# STATUS — verified end-to-end against a real Azure IoT Hub (SAS auth, D2C telemetry, C2D,
+# device twin GET/reported/desired), and earlier against test.mosquitto.org. See
+# AIOMQTT_PLAN.md Phase 6 at the repo root for the full history.
 #
 # Prerequisite:  pysharp install aiomqtt
 # Config in config.json (see config.iothub_device_mqtt.json — shared with the sync sample).

@@ -339,7 +339,18 @@ public static class SslModule
         Add("getpeercert", (_, _, _) => new PyDict());
         Add("version", (_, a, _) => Wrap(a[0]).Stream.SslProtocol.ToString());
         Add("selected_alpn_protocol", (_, _, _) => PyNone.Instance);
-        Add("fileno", (_, a, _) => new BigInteger((long)Wrap(a[0]).Underlying.Socket.Handle));
+        Add("fileno", (_, a, _) =>
+        {
+            var sock = Wrap(a[0]).Underlying.Socket;
+            // add_reader/add_writer only ever get this bare int fd back (the asyncio API
+            // shape), so it must resolve to the raw Socket the same way the plain `socket`
+            // module's fileno() already does — otherwise the event loop's poller can never
+            // find it and a TLS connection's reader/writer never fires (see AIOMQTT_PLAN.md
+            // Phase 6: this is what made the real Azure IoT Hub run hang forever, while the
+            // plaintext test.mosquitto.org run worked, since only TLS goes through here).
+            SocketModule.RegisterHandle(sock);
+            return new BigInteger((long)sock.Handle);
+        });
 
         Add("__enter__", (_, a, _) => a[0]);
         Add("__exit__", (interp, a, _) =>

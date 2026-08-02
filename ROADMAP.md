@@ -115,13 +115,17 @@ rejected a bare `Future` (only accepted a real coroutine), breaking `client.mess
 poller-thread/loop-thread race could fire an `add_reader` callback twice before the first run drained
 the socket. All three are now fixed and regression-tested.
 
-**Status.** The core flow — connect, subscribe, concurrent publish, `async for message in
-client.messages`, clean disconnect — runs end-to-end against the real public broker
-(`test.mosquitto.org`, plain and, separately, over TLS against a properly-trusted host to confirm
-`ssl` itself is correct). Not yet verified against a real Azure IoT Hub specifically (no credentials
-available in this environment) — unlike scenario 1, this last step is left for the author to confirm,
-the same trust boundary scenario 1's own "tested end-to-end against a real Azure hub" already relied
-on. Offline tests: [AiomqttSmokeTests.cs](src/PySharp.Tests/M15_Aiomqtt/AiomqttSmokeTests.cs).
+**Status.** Complete and **tested end-to-end against a real Azure IoT Hub** (D2C, C2D, twin GET,
+reported and desired — same trust boundary scenario 1 already relied on), after first proving the
+core flow — connect, subscribe, concurrent publish, `async for message in client.messages`, clean
+disconnect — against the real public broker (`test.mosquitto.org`, plain and, separately, over TLS
+against a properly-trusted host to confirm `ssl` itself is correct). The real Azure run surfaced one
+more TLS-reactor-only bug invisible to both of those: `SslModule.fileno()` never registered the
+socket's handle with `SocketModule`'s fd registry (unlike the plain `socket` module's `fileno()`), so
+`add_reader`/`add_writer` could never resolve a TLS socket's fd — the connection hung forever right
+after opening, since the CONNACK reader callback could never fire. Fixed with one line (see
+`AIOMQTT_PLAN.md` Phase 6.4); confirmed working end-to-end afterward. Offline tests:
+[AiomqttSmokeTests.cs](src/PySharp.Tests/M15_Aiomqtt/AiomqttSmokeTests.cs).
 
 ### Scenario 2 — FastAPI API (no SQL) 🔴 — **key scenario**
 
