@@ -262,3 +262,186 @@ public class SocketTests
         Assert.Equal("True hello from server\n", output);
     }
 }
+
+/// <summary>inspect.signature/Parameter (see FASTAPI_PLAN.md — the FastAPI-shaped need ROADMAP.md
+/// flags, added once pydantic v1's own dependency chain actually called for it).</summary>
+public class InspectTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Signature_lists_positional_parameters_with_defaults_and_annotations()
+        => Assert.Equal("['a', 'b']\nTrue\n5\n<built-in function int>", Run("""
+            import inspect
+
+            def f(a: int, b=5):
+                pass
+
+            sig = inspect.signature(f)
+            print(list(sig.parameters.keys()))
+            print(sig.parameters['a'].default is inspect.Parameter.empty)
+            print(sig.parameters['b'].default)
+            print(sig.parameters['a'].annotation)
+            """));
+
+    [Fact]
+    public void Signature_reports_var_positional_and_var_keyword_kinds()
+        => Assert.Equal("True\nTrue", Run("""
+            import inspect
+
+            def f(*args, **kwargs):
+                pass
+
+            sig = inspect.signature(f)
+            print(sig.parameters['args'].kind is inspect.Parameter.VAR_POSITIONAL)
+            print(sig.parameters['kwargs'].kind is inspect.Parameter.VAR_KEYWORD)
+            """));
+
+    [Fact]
+    public void Signature_of_a_bound_method_drops_self()
+        => Assert.Equal("['x']", Run("""
+            import inspect
+
+            class C:
+                def m(self, x):
+                    pass
+
+            print(list(inspect.signature(C().m).parameters.keys()))
+            """));
+
+    [Fact]
+    public void Cleandoc_dedents_and_trims()
+        => Assert.Equal("Hello.\n\n    Indented block.", Run("""
+            import inspect
+            print(inspect.cleandoc('''
+                Hello.
+
+                    Indented block.
+            '''))
+            """));
+}
+
+/// <summary>itertools (chain/islice/zip_longest) and the collections.Counter/ChainMap additions —
+/// see FASTAPI_PLAN.md, both found via pydantic v1's real dependency chain.</summary>
+public class ItertoolsAndCollectionsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Chain_concatenates_iterables_lazily()
+        => Assert.Equal("[1, 2, 3, 4]", Run("""
+            import itertools
+            print(list(itertools.chain([1, 2], (3, 4))))
+            """));
+
+    [Fact]
+    public void Islice_supports_stop_and_start_stop_step()
+        => Assert.Equal("[0, 1, 2]\n[1, 3]", Run("""
+            import itertools
+            print(list(itertools.islice(range(10), 3)))
+            print(list(itertools.islice(range(10), 1, 5, 2)))
+            """));
+
+    [Fact]
+    public void Zip_longest_pads_with_fillvalue()
+        => Assert.Equal("[(1, 'a'), (2, 'b'), (3, 0)]", Run("""
+            import itertools
+            print(list(itertools.zip_longest([1, 2, 3], ['a', 'b'], fillvalue=0)))
+            """));
+
+    [Fact]
+    public void Counter_counts_occurrences()
+        => Assert.Equal("2\n1\n0", Run("""
+            from collections import Counter
+            c = Counter(['a', 'b', 'a'])
+            print(c['a'])
+            print(c['b'])
+            print(c.get('z', 0))
+            """));
+
+    [Fact]
+    public void ChainMap_first_map_wins()
+        => Assert.Equal("1\n2", Run("""
+            from collections import ChainMap
+            m = ChainMap({'a': 1}, {'a': 99, 'b': 2})
+            print(m['a'])
+            print(m['b'])
+            """));
+}
+
+/// <summary>decimal.Decimal, backed by System.Decimal (128-bit, not arbitrary-precision — a
+/// deliberate, author-approved scope tradeoff; see FASTAPI_PLAN.md Phase 1.9). Arithmetic/
+/// comparison dunders ride the interpreter's existing generic instance-dunder dispatch.</summary>
+public class DecimalTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Arithmetic_between_two_decimals()
+        => Assert.Equal("4.24\n2.04\n2.8545454545454545454545454545", Run("""
+            from decimal import Decimal
+            a = Decimal("3.14")
+            b = Decimal("1.10")
+            print(a + b)
+            print(a - b)
+            print(a / b)
+            """));
+
+    [Fact]
+    public void Mixes_with_int_on_either_side()
+        => Assert.Equal("4.14\n4.14\n6.28", Run("""
+            from decimal import Decimal
+            a = Decimal("3.14")
+            print(a + 1)
+            print(1 + a)
+            print(a * 2)
+            """));
+
+    [Fact]
+    public void Comparisons_and_equality()
+        => Assert.Equal("True\nTrue\nFalse", Run("""
+            from decimal import Decimal
+            a = Decimal("3.14")
+            b = Decimal("1.10")
+            print(a > b)
+            print(a == Decimal("3.14"))
+            print(a == b)
+            """));
+
+    [Fact]
+    public void Str_and_repr()
+        => Assert.Equal("3.14\nDecimal('3.14')", Run("""
+            from decimal import Decimal
+            a = Decimal("3.14")
+            print(str(a))
+            print(repr(a))
+            """));
+
+    [Fact]
+    public void Bool_conversion_is_nonzero_check()
+        => Assert.Equal("False\nTrue", Run("""
+            from decimal import Decimal
+            print(bool(Decimal("0")))
+            print(bool(Decimal("1")))
+            """));
+
+    [Fact]
+    public void Division_by_zero_raises_DivisionByZero()
+        => Assert.Equal("caught", Run("""
+            from decimal import Decimal, DivisionByZero
+            try:
+                Decimal("1") / Decimal("0")
+            except DivisionByZero:
+                print("caught")
+            """));
+
+    [Fact]
+    public void Invalid_string_raises_InvalidOperation()
+        => Assert.Equal("caught", Run("""
+            from decimal import Decimal, InvalidOperation
+            try:
+                Decimal("not a number")
+            except InvalidOperation:
+                print("caught")
+            """));
+}

@@ -64,6 +64,32 @@ public static class FunctoolsModule
         });
         d["partial"] = partialClass;
 
+        // partialmethod: same shape as partial, but a descriptor — accessed through an instance it
+        // binds that instance as the first argument (like an unbound method), then applies the
+        // fixed args/kwargs on top.
+        var partialMethodClass = new PyClass("partialmethod", new List<PyClass>());
+        partialMethodClass.Dict["__init__"] = partialClass.Dict["__init__"];
+        partialMethodClass.Dict["__get__"] = new PyBuiltinFunction("partialmethod.__get__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            object? obj = a.Length > 1 ? a[1] : null;
+            var fixedArgs = ((PyTuple)inst.Dict["args"]).Items;
+            var kw = ((PyDict)inst.Dict["keywords"]).Copy();
+            return new PyBuiltinFunction("partialmethod.<locals>.bound", (interp2, callArgs, callKwargs) =>
+            {
+                var allArgs = (obj is null ? Array.Empty<object>() : new[] { obj })
+                    .Concat(fixedArgs).Concat(callArgs).ToArray();
+                var kwDict = new Dictionary<string, object>();
+                foreach (var e in kw.Entries)
+                    kwDict[(string)e.Key] = e.Value;
+                if (callKwargs is not null)
+                    foreach (var e in callKwargs)
+                        kwDict[e.Key] = e.Value;
+                return interp2.Call(inst.Dict["func"], allArgs, kwDict.Count > 0 ? kwDict : null);
+            });
+        });
+        d["partialmethod"] = partialMethodClass;
+
         d["wraps"] = new PyBuiltinFunction("wraps", (interp, a, _) =>
         {
             var wrapped = a[0];

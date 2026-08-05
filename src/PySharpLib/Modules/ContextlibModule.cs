@@ -19,11 +19,16 @@ public static class ContextlibModule
 
     public static readonly PyClass GeneratorContextManagerClass = BuildGeneratorContextManagerClass();
     public static readonly PyClass SuppressClass = BuildSuppressClass();
+    public static readonly PyClass AbstractContextManagerClass = BuildAbstractContextManagerClass("AbstractContextManager", "__enter__", "__exit__");
+    public static readonly PyClass AbstractAsyncContextManagerClass = BuildAbstractContextManagerClass("AbstractAsyncContextManager", "__aenter__", "__aexit__");
 
     public static PyModule Create()
     {
         var m = new PyModule("contextlib");
         var d = m.Dict;
+
+        d["AbstractContextManager"] = AbstractContextManagerClass;
+        d["AbstractAsyncContextManager"] = AbstractAsyncContextManagerClass;
 
         d["contextmanager"] = new PyBuiltinFunction("contextmanager", (interp, a, _) =>
         {
@@ -122,5 +127,33 @@ public static class ContextlibModule
         });
 
         return cls;
+    }
+
+    /// <summary>
+    /// contextlib.AbstractContextManager / AbstractAsyncContextManager: a base to subclass and
+    /// override, not something used directly — default __enter__/__exit__ (or __aenter__/__aexit__)
+    /// match CPython's (enter returns self, exit is a no-op that doesn't suppress). The async pair
+    /// return an already-resolved Future so `await mgr.__aenter__()` works without a real event loop
+    /// registering a callback.
+    /// </summary>
+    private static PyClass BuildAbstractContextManagerClass(string className, string enterName, string exitName)
+    {
+        var cls = new PyClass(className, new List<PyClass>());
+        bool isAsync = enterName == "__aenter__";
+
+        object Wrap(object value) => isAsync
+            ? MakeResolvedFuture(value)
+            : value;
+
+        cls.Dict[enterName] = new PyBuiltinFunction($"{className}.{enterName}", (_, a, _) => Wrap(a[0]));
+        cls.Dict[exitName] = new PyBuiltinFunction($"{className}.{exitName}", (_, _, _) => Wrap(false));
+        return cls;
+    }
+
+    private static PyFuture MakeResolvedFuture(object result)
+    {
+        var fut = new PyFuture { Loop = PyEventLoop.Running };
+        fut.SetResult(result);
+        return fut;
     }
 }

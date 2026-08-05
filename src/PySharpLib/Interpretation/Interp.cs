@@ -313,14 +313,19 @@ public sealed class Interp
                         else
                         {
                             // from pkg import submodule
+                            string submoduleAbsolute =
+                                (fi.Module.Length > 0 ? fi.Module + "." : "") + alias.DottedName;
                             try
                             {
-                                value = Import(
-                                    (fi.Module.Length > 0 ? fi.Module + "." : "") + alias.DottedName,
-                                    fi.Level, env.Module);
+                                value = Import(submoduleAbsolute, fi.Level, env.Module);
                             }
-                            catch (PyRaise)
+                            catch (PyRaise ex) when (IsMissingExactly(ex, submoduleAbsolute))
                             {
+                                // Only when *this* submodule itself doesn't exist do we report the
+                                // friendlier "cannot import name" — matching CPython. Any other
+                                // failure (the submodule exists but *it* failed to import, e.g. one
+                                // of its own dependencies is missing) must propagate unchanged, or
+                                // the real cause is lost behind a misleading message.
                                 throw PyErr.ImportError(
                                     $"cannot import name '{alias.DottedName}' from '{resolved.Name}'");
                             }
@@ -377,14 +382,14 @@ public sealed class Interp
             list.Items.AddRange(PyOps.Iterate(this, operand));
             return;
         }
-        if (current is PySet set && operand is PySet other)
+        if (current is PySet set && SetItems(operand) is { } otherItems)
         {
             switch (a.Op)
             {
-                case "|": set.Items.UnionWith(other.Items); return;
-                case "&": set.Items.IntersectWith(other.Items); return;
-                case "-": set.Items.ExceptWith(other.Items); return;
-                case "^": set.Items.SymmetricExceptWith(other.Items); return;
+                case "|": set.Items.UnionWith(otherItems); return;
+                case "&": set.Items.IntersectWith(otherItems); return;
+                case "-": set.Items.ExceptWith(otherItems); return;
+                case "^": set.Items.SymmetricExceptWith(otherItems); return;
             }
         }
         if (current is PyDict dict && a.Op == "|" && operand is PyDict otherDict)
@@ -416,6 +421,11 @@ public sealed class Interp
             if (b.Name is not null || b.IsStar || b.IsDoubleStar)
                 continue; // metaclass=... and the like: ignored in v1
             var baseVal = Eval(b.Value, env);
+            // Generic[T], Protocol[T], SomeGeneric[T]: a subscripted generic used as a base class
+            // resolves to its origin, the same way CPython's __mro_entries__ substitutes the real
+            // class for the alias — the alias itself was never meant to end up in the MRO.
+            if (Modules.GenericAliasModule.IsAlias(baseVal))
+                baseVal = ((PyInstance)baseVal).Dict["__origin__"];
             switch (baseVal)
             {
                 case PyClass pc:
@@ -662,6 +672,16 @@ public sealed class Interp
         PyTuple tuple => tuple.Items.Any(x => TypeMatchesException(x, exc)),
         _ => throw PyErr.TypeError("catching classes that do not inherit from BaseException is not allowed"),
     };
+
+    /// <summary>True if <paramref name="ex"/> is exactly "No module named '&lt;absolute&gt;'" —
+    /// i.e. the submodule a `from pkg import name` fallback tried simply doesn't exist, as opposed
+    /// to existing but failing to import for some other reason (a missing dependency of its own,
+    /// a syntax/feature gap, etc.), which must propagate unchanged.</summary>
+    private static bool IsMissingExactly(PyRaise ex, string absolute)
+        => PyErr.Matches(ex.Value, PyErr.ModuleNotFoundErrorClass)
+           && ex.Value.Dict.TryGet("args", out var argsObj)
+           && argsObj is PyTuple { Items: [string msg] }
+           && msg == $"No module named '{absolute}'";
 
     private void ExecWith(WithStmt w, Env env)
     {
@@ -1678,8 +1698,8 @@ public sealed class Interp
                 break;
 
             case "|":
-                if (a is PySet su1 && b is PySet su2)
-                    return new PySet(su1.Items.Union(su2.Items));
+                if (SetItems(a) is { } su1 && SetItems(b) is { } su2)
+                    return MakeSetLike(a, su1.Union(su2));
                 if (a is PyDict d1 && b is PyDict d2)
                 {
                     var merged = d1.Copy();
@@ -1688,19 +1708,19 @@ public sealed class Interp
                 }
                 break;
             case "&":
-                if (a is PySet si1 && b is PySet si2)
-                    return new PySet(si1.Items.Intersect(si2.Items));
+                if (SetItems(a) is { } si1 && SetItems(b) is { } si2)
+                    return MakeSetLike(a, si1.Intersect(si2));
                 break;
             case "-":
-                if (a is PySet sd1 && b is PySet sd2)
-                    return new PySet(sd1.Items.Except(sd2.Items));
+                if (SetItems(a) is { } sd1 && SetItems(b) is { } sd2)
+                    return MakeSetLike(a, sd1.Except(sd2));
                 break;
             case "^":
-                if (a is PySet sx1 && b is PySet sx2)
+                if (SetItems(a) is { } sx1 && SetItems(b) is { } sx2)
                 {
-                    var result = new PySet(sx1.Items);
-                    result.Items.SymmetricExceptWith(sx2.Items);
-                    return result;
+                    var symDiff = new HashSet<object>(sx1, PyEqualityComparer.Instance);
+                    symDiff.SymmetricExceptWith(sx2);
+                    return MakeSetLike(a, symDiff);
                 }
                 break;
         }
@@ -1719,6 +1739,11 @@ public sealed class Interp
         throw PyErr.TypeError(
             $"unsupported operand type(s) for {op}: '{PyOps.TypeName(a)}' and '{PyOps.TypeName(b)}'");
     }
+
+    /// <summary>Result type follows the left operand's type, matching CPython (frozenset | set ->
+    /// frozenset, set | frozenset -> set).</summary>
+    private static object MakeSetLike(object template, IEnumerable<object> items)
+        => template is PyFrozenSet ? new PyFrozenSet(items) : new PySet(items);
 
     private static IEnumerable<byte> BytesOf(object o) => o switch
     {
@@ -1954,8 +1979,10 @@ public sealed class Interp
                     return r;
                 throw PyErr.TypeError($"'{inst.Class.Name}' object is not subscriptable");
             }
-            case PyClass:
-                return obj; // Dict[str, int] ecc.: sottoscrizione di tipo → no-op
+            case PyClass pc:
+                // List[int], Dict[str, int], SomeGeneric[T], ecc.: builds a real generic alias
+                // (__origin__/__args__) instead of a no-op, so typing.get_origin/get_args work.
+                return Modules.GenericAliasModule.Subscript(pc, index);
             case ClrObject clr:
                 if (ClrBinder.TryGetIndex(clr, index, out var indexed))
                     return indexed;
@@ -2104,6 +2131,12 @@ public sealed class Interp
                         return true;
                     case "__dict__":
                         value = cls.Dict;
+                        return true;
+                    case "__doc__":
+                        // No docstring-capture at class-definition time yet (nothing has needed the
+                        // real text so far) — None matches CPython for an undocumented class and is
+                        // what real code checking `SomeClass.__doc__ or default` expects to see.
+                        value = PyNone.Instance;
                         return true;
                 }
                 value = PyNone.Instance;
@@ -2266,6 +2299,39 @@ public sealed class Interp
                             => Call(new PyBoundMethod(sup.Self, p.Getter), Array.Empty<object>()),
                         _ => superAttr,
                     };
+                    return true;
+                }
+                // No class in the MRO overrides these — fall back to object's default behavior,
+                // the same way CPython's super() does when nothing shadows __setattr__/__delattr__.
+                // Common pattern this unblocks: `def __setattr__(self, ...): ...; super().__setattr__(...)`.
+                if (name == "__setattr__")
+                {
+                    var target = sup.Self;
+                    value = new PyBuiltinFunction("object.__setattr__", (_, a, _) =>
+                    {
+                        if (target is not PyInstance inst)
+                            throw PyErr.AttributeError($"'{PyOps.TypeName(target)}' object has no attribute '{a[0]}'");
+                        inst.Dict[(string)a[0]] = a[1];
+                        return PyNone.Instance;
+                    });
+                    return true;
+                }
+                if (name == "__delattr__")
+                {
+                    var target = sup.Self;
+                    value = new PyBuiltinFunction("object.__delattr__", (_, a, _) =>
+                    {
+                        if (target is not PyInstance inst || !inst.Dict.Remove((string)a[0]))
+                            throw PyErr.AttributeError($"'{PyOps.TypeName(target)}' object has no attribute '{a[0]}'");
+                        return PyNone.Instance;
+                    });
+                    return true;
+                }
+                if (name is "__init__" or "__new__")
+                {
+                    // object's default: a no-op. Common pattern this unblocks: a class whose base
+                    // is (effectively) object still calls `super().__init__(...)` defensively.
+                    value = new PyBuiltinFunction($"object.{name}", (_, _, _) => PyNone.Instance);
                     return true;
                 }
                 value = PyNone.Instance;

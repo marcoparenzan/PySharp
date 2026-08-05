@@ -152,6 +152,26 @@ public class ImportTests : IDisposable
     }
 
     [Fact]
+    public void From_package_import_submodule_that_does_not_exist_raises_ImportError()
+    {
+        WriteModule("pkg/__init__.py", "");
+        var ex = Assert.Throws<PyRaise>(() => Run("from pkg import no_such_submodule"));
+        Assert.Equal("ImportError", ex.Value.Class.Name);
+    }
+
+    [Fact]
+    public void From_package_import_submodule_that_fails_for_another_reason_propagates_real_error()
+    {
+        // Regression for a real bug found via pydantic v1 (FASTAPI_PLAN.md): `pkg/broken.py`
+        // exists, so this is not a "submodule doesn't exist" case — it exists but fails to import
+        // for its own reason. The real cause must propagate, not a misleading generic ImportError.
+        WriteModule("pkg2/__init__.py", "");
+        WriteModule("pkg2/broken.py", "import does_not_exist_either\n");
+        var ex = Assert.Throws<PyRaise>(() => Run("from pkg2 import broken"));
+        Assert.Equal("ModuleNotFoundError", ex.Value.Class.Name);
+    }
+
+    [Fact]
     public void Builtin_sys_and_time_modules()
     {
         string output = Run("""

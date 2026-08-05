@@ -26,6 +26,7 @@ public static class TypeMethods
                 "set" => SetMethods.Table,
                 "bytes" => BytesMethods.Table,
                 "bytearray" => ByteArrayMethods.Table,
+                "type" => TypeConstructorMethods.Table,
                 _ => null,
             };
             if (typeTable is not null && typeTable.TryGetValue(name, out var unbound))
@@ -1147,6 +1148,28 @@ public static class ByteArrayMethods
     }
 
     private static PyByteArray BA(object[] args) => (PyByteArray)args[0];
+}
+
+/// <summary>type.__new__: the dynamic-class-creation path (`type.__new__(metaclass, name, bases,
+/// namespace)`), used by metaprogramming-heavy library code (e.g. pydantic/typing_extensions'
+/// TypedDict machinery) instead of the plain `type(name, bases, namespace)` 3-arg call. The
+/// metaclass argument is accepted but not used as an actual metaclass (PySharp already ignores
+/// custom metaclasses everywhere else — see ExecClassDef).</summary>
+public static class TypeConstructorMethods
+{
+    public static readonly Dictionary<string, PyBuiltinFunction> Table = new()
+    {
+        ["__new__"] = new PyBuiltinFunction("type.__new__", (_, a, _) =>
+        {
+            string name = (string)a[1];
+            var bases = a[2] is PyTuple bt ? bt.Items.OfType<PyClass>().ToList() : new List<PyClass>();
+            var cls = new PyClass(name, bases);
+            if (a.Length > 3 && a[3] is PyDict ns)
+                foreach (var e in ns.Entries)
+                    cls.Dict[e.Key] = e.Value;
+            return cls;
+        }),
+    };
 }
 
 public static class GeneratorMethods

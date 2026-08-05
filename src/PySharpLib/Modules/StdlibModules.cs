@@ -29,11 +29,13 @@ public static class StdlibModules
         importer.RegisterBuiltin("string", _ => MiscModules.CreateString());
         importer.RegisterBuiltin("uuid", _ => MiscModules.CreateUuid());
         importer.RegisterBuiltin("warnings", _ => MiscModules.CreateWarnings());
-        importer.RegisterBuiltin("typing", _ => MiscModules.CreateTyping());
+        importer.RegisterBuiltin("keyword", _ => MiscModules.CreateKeyword());
+        importer.RegisterBuiltin("typing", interp => MiscModules.CreateTyping(interp));
         importer.RegisterBuiltin("types", _ => MiscModules.CreateTypes());
         importer.RegisterBuiltin("dataclasses", _ => MiscModules.CreateDataclasses());
         importer.RegisterBuiltin("copy", _ => MiscModules.CreateCopy());
         importer.RegisterBuiltin("functools", _ => FunctoolsModule.Create());
+        importer.RegisterBuiltin("operator", _ => OperatorModule.Create());
         importer.RegisterBuiltin("struct", _ => StructModule.Create());
         importer.RegisterBuiltin("hashlib", _ => CryptoModules.CreateHashlib());
         importer.RegisterBuiltin("hmac", _ => CryptoModules.CreateHmac());
@@ -43,7 +45,9 @@ public static class StdlibModules
         importer.RegisterBuiltin("urllib.request", _ => UrllibModule.CreateRequest());
         importer.RegisterBuiltin("json", _ => JsonModule.Create());
         importer.RegisterBuiltin("yaml", _ => YamlModule.Create());
+        importer.RegisterBuiltin("itertools", _ => ItertoolsModule.Create());
         importer.RegisterBuiltin("collections", _ => CollectionsModule.Create());
+        importer.RegisterBuiltin("collections.abc", _ => CollectionsModule.CreateAbc());
         importer.RegisterBuiltin("threading", _ => ThreadingModule.Create());
         importer.RegisterBuiltin("socket", _ => SocketModule.Create());
         importer.RegisterBuiltin("ssl", _ => SslModule.Create());
@@ -52,8 +56,13 @@ public static class StdlibModules
         importer.RegisterBuiltin("logging", _ => LoggingModule.Create());
         importer.RegisterBuiltin("ctypes", _ => CtypesModule.Create());
         importer.RegisterBuiltin("math", _ => MathModule.Create());
+        importer.RegisterBuiltin("decimal", _ => DecimalModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());
         importer.RegisterBuiltin("contextlib", _ => ContextlibModule.Create());
+        importer.RegisterBuiltin("abc", _ => AbcModule.Create());
+        importer.RegisterBuiltin("inspect", _ => InspectModule.Create());
+        // `import builtins` gets the same module every name implicitly falls back to.
+        importer.RegisterBuiltin("builtins", _ => importer.BuiltinsModule);
     }
 }

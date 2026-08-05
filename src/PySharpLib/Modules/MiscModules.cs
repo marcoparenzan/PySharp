@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using System.Linq;
 using System.Numerics;
 using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
@@ -119,8 +120,30 @@ public static class MiscModules
         return m;
     }
 
+    private static readonly string[] PythonKeywords =
+    {
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+        "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
+        "try", "while", "with", "yield",
+    };
+    private static readonly string[] PythonSoftKeywords = { "_", "case", "match", "type" };
+
+    public static PyModule CreateKeyword()
+    {
+        var m = new PyModule("keyword");
+        var d = m.Dict;
+        d["kwlist"] = new PyList(PythonKeywords.Cast<object>());
+        d["softkwlist"] = new PyList(PythonSoftKeywords.Cast<object>());
+        d["iskeyword"] = new PyBuiltinFunction("iskeyword", (interp, a, _) =>
+            PythonKeywords.Contains(PyOps.Str(interp, a[0])));
+        d["issoftkeyword"] = new PyBuiltinFunction("issoftkeyword", (interp, a, _) =>
+            PythonSoftKeywords.Contains(PyOps.Str(interp, a[0])));
+        return m;
+    }
+
     /// <summary>typing stub: generic names that accept subscription and calling.</summary>
-    public static PyModule CreateTyping()
+    public static PyModule CreateTyping(Interp interp)
     {
         var m = new PyModule("typing");
         var d = m.Dict;
@@ -134,21 +157,121 @@ public static class MiscModules
             "Coroutine", "AsyncIterator", "AsyncIterable", "Generator", "AbstractSet",
             "MutableSequence", "MutableSet", "Hashable", "Sized", "Container", "Collection",
             "Reversible", "SupportsInt", "SupportsFloat", "SupportsAbs", "SupportsRound",
+            "SupportsComplex", "SupportsBytes", "SupportsIndex",
             "ByteString", "AnyStr", "NoReturn", "Text", "Concatenate", "Self", "TypeAlias",
+            "Unpack", "Annotated",
+            "ForwardRef", "_Final", "_BaseGenericAlias",
+            "_SpecialGenericAlias", "_AnnotatedAlias", "_UnionGenericAlias",
+            "_ConcatenateGenericAlias", "_ProtocolMeta", "_TypedDictMeta",
+            "ContextManager", "AsyncContextManager",
         })
         {
             d[name] = new PyClass(name, new List<PyClass>());
         }
+        // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a
+        // bare placeholder, so isinstance(List[int], typing._GenericAlias) is correct too.
+        d["_GenericAlias"] = GenericAliasModule.GenericAliasClass;
+        // Real CPython's ForwardRef declares __slots__ (typing_extensions checks for the presence
+        // of '__forward_is_class__' in it at import time, e.g. `typing.ForwardRef.__slots__`) —
+        // give our stub the same shape so that check doesn't crash.
+        ((PyClass)d["ForwardRef"]).Dict["__slots__"] = new PyTuple(new object[]
+        {
+            "__forward_arg__", "__forward_code__", "__forward_evaluated__", "__forward_value__",
+            "__forward_is_argument__", "__forward_is_class__", "__forward_module__",
+        });
         // TYPE_CHECKING is False at runtime
         d["TYPE_CHECKING"] = false;
         // cast(t, v) → v ; overload → decorator identità
         d["cast"] = new PyBuiltinFunction("cast", (_, a, _) => a[1]);
         d["overload"] = new PyBuiltinFunction("overload", (_, a, _) => a[0]);
+        d["final"] = new PyBuiltinFunction("final", (_, a, _) => a[0]);
+        d["runtime_checkable"] = new PyBuiltinFunction("runtime_checkable", (_, a, _) => a[0]);
+        d["no_type_check"] = new PyBuiltinFunction("no_type_check", (_, a, _) => a[0]);
+        // Type-checker-only marker (no runtime effect): a decorator *factory* — the call itself
+        // (with whatever eq_default/order_default/etc. kwargs) returns an identity decorator.
+        d["dataclass_transform"] = new PyBuiltinFunction("dataclass_transform", (_, _, _) =>
+            new PyBuiltinFunction("dataclass_transform.<locals>.decorator", (_, a2, _) => a2[0]));
         d["TypeVar"] = new PyBuiltinFunction("TypeVar", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
         d["ParamSpec"] = new PyBuiltinFunction("ParamSpec", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
+        d["TypeVarTuple"] = new PyBuiltinFunction("TypeVarTuple", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
         d["NewType"] = new PyBuiltinFunction("NewType", (_, a, _) => a[1]);
+        // Real CPython caches generic-alias construction with this; a passthrough is correct,
+        // just uncached (no scenario here depends on the caching itself, only on the name existing
+        // and behaving as a decorator).
+        d["_tp_cache"] = new PyBuiltinFunction("_tp_cache", (_, a, _) => a[0]);
+        // Real CPython validates `arg` looks like a type hint and raises TypeError if not; no
+        // scenario here has needed that validation, so this is a passthrough. It has to be a real
+        // *Python* function (not a PyBuiltinFunction) because typing_extensions inspects its actual
+        // signature as a version probe: `"module" in inspect.signature(_type_check).parameters` —
+        // parsed and run into this module the same way a real .py file would define it.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "def _type_check(arg, msg, is_argument=True, module=None, *, allow_special_forms=False):\n"
+                + "    return arg\n"),
+            m);
+        // Real behavior, ported from CPython (not a stub): _SpecialForm wraps a `getitem` function
+        // (the body of a `@_SpecialForm def X(self, parameters): ...`-decorated special form like
+        // Literal/ClassVar/Final) and delegates subscription to it. A real Python class, like
+        // _type_check above, since typing_extensions subclasses it for real (_ExtensionsSpecialForm)
+        // and instantiates it via the decorator pattern, which needs real __init__/__getitem__.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "class _SpecialForm:\n"
+                + "    def __init__(self, getitem):\n"
+                + "        self._getitem = getitem\n"
+                + "        self._name = getitem.__name__\n"
+                + "    def __repr__(self):\n"
+                + "        return 'typing.' + self._name\n"
+                + "    def __call__(self, *args, **kwds):\n"
+                + "        raise TypeError('Cannot instantiate ' + repr(self))\n"
+                + "    def __getitem__(self, parameters):\n"
+                + "        return self._getitem(self, parameters)\n"
+                + "    def __mro_entries__(self, bases):\n"
+                + "        raise TypeError('Cannot subclass ' + repr(self))\n"),
+            m);
+        d["EXCLUDED_ATTRIBUTES"] = new PySet(new object[]
+        {
+            "__abstractmethods__", "__annotations__", "__dict__", "__doc__", "__init__",
+            "__module__", "__new__", "__slots__", "__subclasshook__", "__weakref__",
+            "__class_getitem__",
+        });
+        // Real CPython constant: names collections.namedtuple (which typing.NamedTuple reuses)
+        // refuses as field names, since they'd collide with the tuple's own machinery.
+        d["_prohibited"] = new PySet(new object[]
+        {
+            "__new__", "__init__", "__slots__", "__getnewargs__",
+            "_fields", "_field_defaults", "_field_types", "_make", "_replace", "_asdict", "_source",
+        });
+        d["_overload_dummy"] = new PyBuiltinFunction("_overload_dummy", (_, _, _) =>
+            throw PyErr.NotImplementedError(
+                "You should not call an overloaded function. A series of @overload-decorated " +
+                "functions outside a stub module should always be followed by an implementation."));
+
+        // Real generic-alias tracking (List[int] etc. -> an object with __origin__/__args__, not a
+        // no-op) — see GenericAliasModule. Map the container aliases to their real runtime
+        // counterpart so `get_origin(List[int]) is list`, matching CPython; unmapped names (Union,
+        // arbitrary user generics via Generic[T]) default to origin = the class itself, also correct.
+        var b = interp.BuiltinsModule.Dict;
+        GenericAliasModule.MapOrigin((PyClass)d["List"], b["list"]);
+        GenericAliasModule.MapOrigin((PyClass)d["Dict"], b["dict"]);
+        GenericAliasModule.MapOrigin((PyClass)d["Tuple"], b["tuple"]);
+        GenericAliasModule.MapOrigin((PyClass)d["Set"], b["set"]);
+        GenericAliasModule.MapOrigin((PyClass)d["FrozenSet"], b["frozenset"]);
+        GenericAliasModule.MapOrigin((PyClass)d["Type"], b["type"]);
+        // Optional[X] is really Union[X, NoneType]: same origin as Union, and NoneType appended
+        // to the args CPython would report.
+        GenericAliasModule.MapOrigin((PyClass)d["Optional"], d["Union"]);
+        GenericAliasModule.MapArgsTransform((PyClass)d["Optional"],
+            args => args.Append((object)NoneTypeClass).ToArray());
+
+        d["get_origin"] = new PyBuiltinFunction("get_origin", (_, a, _) => GenericAliasModule.GetOrigin(a[0]));
+        d["get_args"] = new PyBuiltinFunction("get_args", (_, a, _) => GenericAliasModule.GetArgs(a[0]));
+
         return m;
     }
+
+    /// <summary>type(None) — a singleton so callers can compare by identity, matching CPython.</summary>
+    public static readonly PyClass NoneTypeClass = new("NoneType", new List<PyClass>());
 
     /// <summary>Minimal types module: just the names real-world scripts have needed so far.</summary>
     public static PyModule CreateTypes()
@@ -157,6 +280,7 @@ public static class MiscModules
         var d = m.Dict;
         foreach (var name in new[] { "TracebackType", "FunctionType", "ModuleType", "GeneratorType" })
             d[name] = new PyClass(name, new List<PyClass>());
+        d["NoneType"] = NoneTypeClass;
         return m;
     }
 

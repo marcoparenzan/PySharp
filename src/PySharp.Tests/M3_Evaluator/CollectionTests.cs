@@ -101,4 +101,23 @@ public class CollectionTests
     [InlineData("len(range(10))", "10")]
     public void Ranges(string expr, string expected)
         => Assert.Equal(expected, Py.Eval(expr));
+
+    // Regression for a real gap found via pydantic v1 (FASTAPI_PLAN.md): `frozenset(x) | {...}`
+    // (and &, -, ^) only worked set-with-set / frozenset-with-frozenset; the mixed combination threw
+    // "unsupported operand type(s)". Result type follows the left operand, matching CPython.
+    [Theory]
+    [InlineData("frozenset([1, 2]) | {2, 3}", "frozenset({1, 2, 3})")]
+    [InlineData("{1, 2} | frozenset([2, 3])", "{1, 2, 3}")]
+    [InlineData("frozenset([1, 2, 3]) & {2, 3, 4}", "frozenset({2, 3})")]
+    [InlineData("{1, 2, 3} & frozenset([2, 3, 4])", "{2, 3}")]
+    [InlineData("frozenset([1, 2, 3]) - {2}", "frozenset({1, 3})")]
+    [InlineData("{1, 2, 3} - frozenset([2])", "{1, 3}")]
+    [InlineData("frozenset([1, 2]) ^ {2, 3}", "frozenset({1, 3})")]
+    [InlineData("{1, 2} ^ frozenset([2, 3])", "{1, 3}")]
+    public void Set_and_frozenset_operators_mix_freely(string expr, string expected)
+        => Assert.Equal(expected, Py.Eval(expr));
+
+    [Fact]
+    public void Set_augmented_assignment_accepts_a_frozenset_operand()
+        => Assert.Equal("{1, 2, 3}\n", Py.Run("s = {1, 2}\ns |= frozenset([2, 3])\nprint(s)"));
 }

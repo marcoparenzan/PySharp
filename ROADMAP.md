@@ -37,7 +37,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | # | Scenario | Script | Status | Features/modules it drives |
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
-| 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (core proven live; Azure-specific part unverified for lack of credentials) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
+| 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
 | 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0 + hardening ✅, 2a `async`/`await` ✅, 2b `asyncio` ✅) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, `re`, `datetime`, `inspect`, real `typing`, ~~`contextlib`~~ ✅, `abc`, ASGI, pydantic |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
@@ -168,11 +168,14 @@ as the test bench.
   backed by .NET async sockets). Blocking I/O is offloaded to the thread pool and rejoined via
   `call_soon`, keeping Python objects single-threaded. Proven by [async_api.py](samples/async_api.py):
   a fully asynchronous HTTP server where a slow handler does not block the others.
-  Still open: async synchronization primitives (`Lock`/`Event`/`Queue`), `asyncio.Semaphore`.
+  ~~Still open: async synchronization primitives (`Lock`/`Event`/`Queue`), `asyncio.Semaphore`~~ ✅
+  — delivered by scenario 1b's aiomqtt work (`AIOMQTT_PLAN.md` phases 2–3), which also added the
+  event-loop reactor (`add_reader`/`add_writer`/`call_soon_threadsafe`/`run_in_executor`) this
+  scenario will need for a real ASGI server.
 - **2c — cross-cutting stdlib.** `re` (regex — pervasive in routing/validation), `datetime`, `inspect`
   (FastAPI reads signatures at runtime), **real** `typing` (not the current stub: needs
-  `get_type_hints`, `Annotated`, …), `contextlib`, `abc`, `importlib`, `email`/`http` for the HTTP
-  details.
+  `get_type_hints`, `Annotated`, …), ~~`contextlib`~~ ✅ (scenario 1b), `abc`, `importlib`, `email`/`http`
+  for the HTTP details.
 - **2d — data validation (pydantic).** `pydantic` v2 depends on `pydantic-core` **compiled in Rust** →
   a wall. Options to decide: (i) pydantic **v1**, which is pure Python; (ii) a C# shim reimplementing
   the core; (iii) a minimal ad-hoc validation model for the scenario.

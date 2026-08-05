@@ -36,6 +36,41 @@ public static class CollectionsModule
             return dict;
         });
         d["defaultdict"] = BuildDefaultDictClass();
+        // Counter(iterable_or_mapping): a real dict of counts. Simplification (probe-driven, see
+        // FASTAPI_PLAN.md): missing keys raise KeyError like a plain dict rather than returning 0,
+        // and there's no .most_common() yet — add both if/when a real run needs them.
+        d["Counter"] = new PyBuiltinFunction("Counter", (interp, a, kwargs) =>
+        {
+            var counts = new PyDict();
+            void Bump(object key)
+            {
+                var current = counts.TryGet(key, out var v) ? PyOps.AsBigInt(v, "count") : BigInteger.Zero;
+                counts[key] = current + 1;
+            }
+            if (a.Length > 0)
+            {
+                if (a[0] is PyDict src)
+                    foreach (var e in src.Entries)
+                        counts[e.Key] = e.Value;
+                else
+                    foreach (var item in PyOps.Iterate(interp, a[0]))
+                        Bump(item);
+            }
+            if (kwargs is not null)
+                foreach (var kv in kwargs)
+                    counts[kv.Key] = kv.Value;
+            return counts;
+        });
+        // ChainMap(*maps): real multi-map lookup, first map wins on key collisions. Simplification:
+        // returns a merged snapshot rather than a live view over independently-mutable maps.
+        d["ChainMap"] = new PyBuiltinFunction("ChainMap", (_, a, _) =>
+        {
+            var merged = new PyDict();
+            for (int i = a.Length - 1; i >= 0; i--)
+                if (a[i] is PyDict src)
+                    merged.Update(src);
+            return merged;
+        });
         d["namedtuple"] = new PyBuiltinFunction("namedtuple", (interp, a, _) => BuildNamedTuple(interp, a));
         return m;
     }
@@ -219,5 +254,29 @@ public static class CollectionsModule
             return new PyIterator(fields.Select(f => inst.Dict[f]).GetEnumerator());
         });
         return cls;
+    }
+
+    /// <summary>
+    /// collections.abc: plain placeholder classes, like the equivalent names already stubbed in
+    /// `typing` (see MiscModules.CreateTyping) — just need to exist and be importable/subclassable.
+    /// No isinstance/subclass-hook duck-typing (e.g. isinstance({}, Mapping) is not True here) unless
+    /// a real scenario needs it.
+    /// </summary>
+    public static PyModule CreateAbc()
+    {
+        var m = new PyModule("collections.abc");
+        var d = m.Dict;
+        foreach (var name in new[]
+        {
+            "Callable", "Hashable", "Iterable", "Iterator", "Reversible", "Generator",
+            "Sized", "Container", "Collection", "Set", "MutableSet",
+            "Mapping", "MutableMapping", "MappingView", "KeysView", "ItemsView", "ValuesView",
+            "Sequence", "MutableSequence", "ByteString", "Awaitable", "Coroutine",
+            "AsyncIterable", "AsyncIterator", "AsyncGenerator", "Buffer",
+        })
+        {
+            d[name] = new PyClass(name, new List<PyClass>());
+        }
+        return m;
     }
 }
