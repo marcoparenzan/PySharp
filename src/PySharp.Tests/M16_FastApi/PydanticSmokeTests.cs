@@ -29,24 +29,52 @@ public class PydanticSmokeTests : IClassFixture<PydanticInstallFixture>
     public PydanticSmokeTests(PydanticInstallFixture fixture) => _fixture = fixture;
 
     [Fact]
-    public void Import_fails_on_missing_pathlib_module()
+    public void Import_pydantic_succeeds()
     {
-        // Progress so far (see FASTAPI_PLAN.md Phase 1 — long blow-by-blow list there): dozens of
-        // real gaps closed in one long probe-driven session, including real generic-alias tracking
-        // (typing.get_origin/get_args now work for real: List[int]/Dict[str,int]/Optional[int]/etc.
-        // build an object with __origin__/__args__ instead of subscripting being a no-op), itertools,
-        // collections.Counter/ChainMap, functools.partialmethod, and a real decimal.Decimal (backed
-        // by System.Decimal — 128-bit, not arbitrary-precision, an explicit author-approved scope
-        // tradeoff). Import now reaches all the way past typing_extensions.py and deep into
-        // pydantic's own modules. Current frontier: `pathlib` — a whole separate module matching
-        // ROADMAP.md's own scenario 8 ("File system API"), out of scope for this scenario's probe
-        // loop; stopped here deliberately rather than starting a different scenario mid-probe.
+        // Phase 1 (see FASTAPI_PLAN.md) is done: `import pydantic` runs clean, no exception. Real,
+        // not stubbed, cross-cutting stdlib gaps closed to get here (across several long
+        // probe-driven sessions, every one with its own regression test, suite green throughout):
+        // `pathlib.Path`, `complex`, `weakref`, `datetime`, `ipaddress` (incl. the real
+        // `_BaseAddress`/`_BaseNetwork` base classes pydantic's IPvAny* types subclass), `re` (a
+        // full System.Text.RegularExpressions-backed engine), `colorsys`, `pickle`, plus the
+        // `typing`/`types` metaprogramming surface pydantic's own class machinery leans on
+        // (`typing.Match`/`Pattern`, `types.new_class`/`resolve_bases`/`prepare_class`, the 3-arg
+        // `type(name, bases, ns)` dynamic-class-creation form, `dataclasses.is_dataclass`). Two
+        // real, generically important interpreter bugs were found and fixed along the way (not
+        // pydantic-specific): a `from pkg import name` error-masking bug, and globals()/locals() at
+        // true module top level silently leaking writes into the shared builtins module instead of
+        // the actual currently-executing one. The `__mro_entries__` protocol was generalized (from
+        // a generic-alias-only special case to the real CPython mechanism), letting `TypedDict` as
+        // a base class work correctly.
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
         engine.Importer.SearchPaths.Add(_fixture.SitePackages);
 
-        var ex = Assert.Throws<PyRaise>(() => engine.Run("import pydantic"));
+        engine.Run("import pydantic\nprint(pydantic.BaseModel)");
+        Assert.Equal("<class 'BaseModel'>\n", writer.ToString());
+    }
 
-        Assert.Equal("ModuleNotFoundError", ex.Value.Class.Name);
+    [Fact]
+    public void Defining_and_instantiating_a_BaseModel_subclass_is_the_current_frontier()
+    {
+        // Phase 2 (pydantic's own model machinery, not cross-cutting stdlib) starts here. Real
+        // CPython pydantic relies on its `ModelMetaclass.__new__` running during the `class
+        // User(BaseModel): ...` statement to build `__config__`/`__fields__`/validators — PySharp's
+        // `ExecClassDef` already ignores custom metaclasses everywhere (see TypeConstructorMethods'
+        // docs), so none of that setup runs and `BaseModel.__init__` (real pydantic source, not
+        // stubbed) fails looking up `self.__config__`. This is a real architectural gap, not a
+        // missing-name gap like everything fixed in Phase 1 — deliberately left for a dedicated
+        // look (custom-metaclass support in ExecClassDef) rather than guessed at inline.
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        engine.Importer.SearchPaths.Add(_fixture.SitePackages);
+
+        Assert.Throws<PyRaise>(() => engine.Run("""
+            from pydantic import BaseModel
+            class User(BaseModel):
+                id: int
+                name: str = "anon"
+            User(id=1)
+            """));
     }
 }

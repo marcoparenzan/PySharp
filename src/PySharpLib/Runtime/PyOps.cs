@@ -145,6 +145,9 @@ public static class PyOps
             }
             case string sa when b is string sb: return sa == sb;
             case PyBytes ba when b is PyBytes bb: return ba.Equals(bb);
+            case PyByteArray baa when b is PyByteArray bab: return baa.Data.SequenceEqual(bab.Data);
+            case PyByteArray baa when b is PyBytes bab: return baa.Data.SequenceEqual(bab.Data);
+            case PyBytes bab2 when b is PyByteArray baa2: return baa2.Data.SequenceEqual(bab2.Data);
             case PyTuple ta when b is PyTuple tb:
                 if (ta.Items.Length != tb.Items.Length)
                     return false;

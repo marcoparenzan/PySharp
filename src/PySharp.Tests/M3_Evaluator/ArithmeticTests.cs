@@ -71,3 +71,26 @@ public class ArithmeticTests
         Assert.Equal("ZeroDivisionError", ex.Value.Class.Name);
     }
 }
+
+/// <summary>complex, backed by System.Numerics.Complex — arithmetic/comparison dunders ride the
+/// interpreter's existing generic instance-dunder dispatch, same approach as decimal.Decimal.
+/// Found via pydantic v1's real dependency chain (a deepcopy type allowlist). See
+/// FASTAPI_PLAN.md Phase 1.9.</summary>
+public class ComplexTests
+{
+    [Theory]
+    [InlineData("complex(3, 4) + complex(1, 2)", "(4+6j)")]
+    [InlineData("complex(3, 4) - complex(1, 2)", "(2+2j)")]
+    [InlineData("complex(3, 4) * complex(1, 2)", "(-5+10j)")]
+    [InlineData("abs(complex(3, 4))", "5.0")]
+    [InlineData("complex(3, 4).real", "3.0")]
+    [InlineData("complex(3, 4).imag", "4.0")]
+    [InlineData("complex(3, 4) == complex(3, 4)", "True")]
+    [InlineData("complex()", "0j")]
+    [InlineData("1 + complex(3, 4)", "(4+4j)")]
+    [InlineData("complex(3, 4) + 1", "(4+4j)")]
+    [InlineData("isinstance(complex(1, 2), complex)", "True")]
+    [InlineData("complex(3, 4).conjugate()", "(3-4j)")]
+    public void Complex_arithmetic_and_properties(string expr, string expected)
+        => Assert.Equal(expected, Py.Eval(expr));
+}

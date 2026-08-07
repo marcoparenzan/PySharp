@@ -120,6 +120,8 @@ public static class BuiltinsFactory
             };
         });
 
+        d["complex"] = ComplexType.ComplexClass;
+
         Add("bool", (interp, args, _) => args.Length > 0 && PyOps.Truthy(interp, args[0]));
         Add("str", (interp, args, _) => args.Length == 0 ? "" : PyOps.Str(interp, args[0]));
         Add("repr", (interp, args, _) => PyOps.Repr(interp, args[0]));
@@ -192,11 +194,17 @@ public static class BuiltinsFactory
             return result;
         });
 
-        Add("type", (_, args, _) => args[0] switch
-        {
-            PyInstance inst => inst.Class,
-            _ => TypeNamePseudoClass(args[0]),
-        });
+        // 3-arg form: type(name, bases, namespace) builds a class dynamically, the same way
+        // `class Name(bases): body` would — real behavior (not a stub), needed by metaprogramming
+        // that goes through types.prepare_class/new_class (e.g. pydantic's create_model()). Custom
+        // metaclasses aren't supported (see ExecClassDef), so this is the only "meta" callers get.
+        Add("type", (_, args, _) => args.Length >= 3
+            ? PySharpLib.Runtime.TypeConstructorMethods.BuildClass((string)args[0], args[1], args[2])
+            : args[0] switch
+            {
+                PyInstance inst => inst.Class,
+                _ => TypeNamePseudoClass(args[0]),
+            });
 
         Add("isinstance", (_, args, _) => IsInstance(args[0], args[1]));
         Add("issubclass", (_, args, _) =>
@@ -475,7 +483,6 @@ public static class BuiltinsFactory
 
         Add("exec", (interp, args, _) => throw PyErr.NotImplementedError("exec() not supported"));
         Add("eval", (interp, args, _) => throw PyErr.NotImplementedError("eval() not supported"));
-        Add("globals", (interp, args, _) => throw PyErr.NotImplementedError("globals() gestita dall'interprete"));
 
         Add("open", (interp, args, kwargs) => FileObject.Open(interp, args, kwargs));
 
@@ -491,7 +498,9 @@ public static class BuiltinsFactory
         {
             var frame = Interp.CurrentFrame;
             if (frame is null)
-                return module.Dict; // module level: approximated with the globals
+                // Module level: same as globals() — the real currently-executing module's dict,
+                // not the builtins module `module` (this closure's own variable) would give.
+                return Interp.InnermostFrame?.Env.Module.Dict ?? module.Dict;
             var d2 = new PyDict();
             foreach (var kv in frame.Env.Locals)
                 d2[kv.Key] = kv.Value;
@@ -500,7 +509,10 @@ public static class BuiltinsFactory
         Add("globals", (interp, _, _) =>
         {
             var frame = Interp.CurrentFrame;
-            return frame?.Fn!.Module.Dict ?? module.Dict;
+            if (frame is not null)
+                return frame.Fn!.Module.Dict;
+            // No function call active: the innermost frame IS the module frame itself.
+            return Interp.InnermostFrame?.Env.Module.Dict ?? module.Dict;
         });
 
         Add("iter", (interp, args, _) =>

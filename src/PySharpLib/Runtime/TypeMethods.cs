@@ -71,6 +71,14 @@ public static class TypeMethods
                 case "step": value = r.Step; return true;
             }
         }
+        // Universal fallback: `x.__class__` for any builtin value (PyInstance has its own, correct,
+        // earlier in Interp.GetAttr's switch — this only runs for everything else: None, str, int,
+        // list, ...). Found via a real `NoneType = None.__class__` idiom (pydantic/typing.py).
+        if (name == "__class__")
+        {
+            value = PySharpLib.Builtins.BuiltinsFactory.TypeNamePseudoClass(obj);
+            return true;
+        }
         value = PyNone.Instance;
         return false;
     }
@@ -1160,16 +1168,18 @@ public static class TypeConstructorMethods
     public static readonly Dictionary<string, PyBuiltinFunction> Table = new()
     {
         ["__new__"] = new PyBuiltinFunction("type.__new__", (_, a, _) =>
-        {
-            string name = (string)a[1];
-            var bases = a[2] is PyTuple bt ? bt.Items.OfType<PyClass>().ToList() : new List<PyClass>();
-            var cls = new PyClass(name, bases);
-            if (a.Length > 3 && a[3] is PyDict ns)
-                foreach (var e in ns.Entries)
-                    cls.Dict[e.Key] = e.Value;
-            return cls;
-        }),
+            BuildClass((string)a[1], a[2], a.Length > 3 ? a[3] : PyNone.Instance)),
     };
+
+    public static PyClass BuildClass(string name, object basesObj, object namespaceObj)
+    {
+        var bases = basesObj is PyTuple bt ? bt.Items.OfType<PyClass>().ToList() : new List<PyClass>();
+        var cls = new PyClass(name, bases);
+        if (namespaceObj is PyDict ns)
+            foreach (var e in ns.Entries)
+                cls.Dict[e.Key] = e.Value;
+        return cls;
+    }
 }
 
 public static class GeneratorMethods

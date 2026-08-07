@@ -120,4 +120,18 @@ public class CollectionTests
     [Fact]
     public void Set_augmented_assignment_accepts_a_frozenset_operand()
         => Assert.Equal("{1, 2, 3}\n", Py.Run("s = {1, 2}\ns |= frozenset([2, 3])\nprint(s)"));
+
+    [Fact]
+    public void Bytearray_equality_compares_by_value_not_identity()
+        // Regression: PyEquals had no PyByteArray case, so two distinct bytearray instances with
+        // identical contents compared unequal — fell through to `return false`. Found while
+        // verifying the new pickle module's round-trip behavior manually (bytearray(b"ba") ==
+        // bytearray(b"ba") came back False). Real CPython also allows bytes == bytearray by value.
+        // See FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("True\nTrue\nTrue\nFalse\n", Py.Run("""
+            print(bytearray(b"ba") == bytearray(b"ba"))
+            print(bytearray(b"ba") == b"ba")
+            print(b"ba" == bytearray(b"ba"))
+            print(bytearray(b"ba") == bytearray(b"xy"))
+            """));
 }

@@ -50,8 +50,6 @@ public static class GenericAliasModule
         return inst;
     }
 
-    public static bool IsAlias(object o) => o is PyInstance { } inst && inst.Class == GenericAliasClass;
-
     /// <summary>typing.get_origin: the alias's origin, or None if not an alias at all.</summary>
     public static object GetOrigin(object tp) =>
         tp is PyInstance inst && inst.Class == GenericAliasClass && inst.Dict.TryGet("__origin__", out var o)
@@ -86,6 +84,15 @@ public static class GenericAliasModule
                 return false;
             return interp.RichEquals(x.Dict["__origin__"], y.Dict["__origin__"])
                    && interp.RichEquals(x.Dict["__args__"], y.Dict["__args__"]);
+        });
+        // Real CPython protocol: a non-class value used as a class base gets __mro_entries__
+        // called on it (with the full original bases tuple) to find its real substitute(s) — this
+        // is what makes `class Foo(Generic[T]):` work at all, since Generic[T] is this exact alias
+        // object, never meant to end up in the MRO itself. See Interp.cs's ExecClassDef.
+        Add("__mro_entries__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            return new PyTuple(new object[] { inst.Dict["__origin__"] });
         });
 
         return cls;

@@ -216,4 +216,27 @@ public class ImportTests : IDisposable
             print('tracked' in sys.modules)
             """));
     }
+
+    [Fact]
+    public void Globals_at_module_top_level_targets_that_module_not_builtins()
+    {
+        // Regression for a real bug found via pydantic's real dependency chain (FASTAPI_PLAN.md):
+        // globals() called with no active function call (i.e. from a module's own top-level code,
+        // not inside a def) fell back to whichever module happened to be the enclosing C# builtin
+        // factory's own `module` closure variable — the *builtins* module — instead of the actual
+        // currently-executing one. `globals()['X'] = 1` at module level would silently write into
+        // the shared builtins namespace instead of the module's own, making X leak into every other
+        // module as if it were a builtin. Fixed via Interp.InnermostFrame (the module frame itself,
+        // which CurrentFrame deliberately skips for other reasons).
+        WriteModule("leaky.py", "globals()['LEAKED_VALUE'] = 42\n");
+        Assert.Equal("42\nnot leaked\n", Run("""
+            import leaky
+            print(leaky.LEAKED_VALUE)
+            try:
+                LEAKED_VALUE
+                print('leaked')
+            except NameError:
+                print('not leaked')
+            """));
+    }
 }

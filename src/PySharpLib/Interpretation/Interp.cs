@@ -51,6 +51,14 @@ public sealed class Interp
     public static Frame? CurrentFrame
         => _frames?.FirstOrDefault(f => f.Fn is not null);
 
+    /// <summary>The innermost live frame, module frame included (unlike <see cref="CurrentFrame"/>).
+    /// Used by locals()/globals() to find the right module when called at true top level (no
+    /// function call active) — the fix for a real bug where they fell back to whichever module
+    /// happened to be the enclosing C# closure's `module` variable (the builtins module) instead of
+    /// the actual currently-executing one.</summary>
+    public static Frame? InnermostFrame
+        => _frames is { Count: > 0 } ? _frames.Peek() : null;
+
     /// <summary>
     /// Optional host hook invoked on every executed line, function call/return and unwinding
     /// exception. Runs synchronously on the interpreter thread — a debugger may block inside it
@@ -149,7 +157,11 @@ public sealed class Interp
             case AnnAssignStmt a:
                 if (a.Value is not null)
                     AssignTo(a.Target, Eval(a.Value, env), env);
-                // record the annotated name (needed by NamedTuple; annotations are not evaluated)
+                // Record the annotated name in __annotations__, evaluated the same way function
+                // parameter annotations already are (best-effort: an unresolvable forward
+                // reference just falls back to None rather than failing the assignment). Needed by
+                // NamedTuple (only cares about the keys) and by typing.get_type_hints on classes
+                // (cares about the values too — e.g. a pydantic BaseModel's `x: int` field).
                 if (a.Target is NameExpr annName)
                 {
                     if (!env.TryGet("__annotations__", out var annObj) || annObj is not PyDict ann
@@ -158,7 +170,16 @@ public sealed class Interp
                         ann = new PyDict();
                         env.Set("__annotations__", ann);
                     }
-                    ann[annName.Id] = PyNone.Instance;
+                    object annValue;
+                    try
+                    {
+                        annValue = Eval(a.Annotation, env);
+                    }
+                    catch (PyRaise)
+                    {
+                        annValue = PyNone.Instance;
+                    }
+                    ann[annName.Id] = annValue;
                 }
                 break;
 
@@ -415,17 +436,40 @@ public sealed class Interp
 
     private void ExecClassDef(ClassDef c, Env env)
     {
-        var bases = new List<PyClass>();
+        // Real CPython semantics: evaluate every base first (need the full tuple below), then for
+        // any base that isn't already a class, call its __mro_entries__(original_bases) to find the
+        // real substitute(s) — this is the general protocol behind `class Foo(Generic[T]):`,
+        // `class Foo(SomeGenericAlias):`, `class Foo(SomeSpecialForm):` (e.g. TypedDict) all
+        // working: none of those objects were ever meant to end up in the MRO themselves.
+        var rawBases = new List<object>();
         foreach (var b in c.Bases)
         {
             if (b.Name is not null || b.IsStar || b.IsDoubleStar)
                 continue; // metaclass=... and the like: ignored in v1
-            var baseVal = Eval(b.Value, env);
-            // Generic[T], Protocol[T], SomeGeneric[T]: a subscripted generic used as a base class
-            // resolves to its origin, the same way CPython's __mro_entries__ substitutes the real
-            // class for the alias — the alias itself was never meant to end up in the MRO.
-            if (Modules.GenericAliasModule.IsAlias(baseVal))
-                baseVal = ((PyInstance)baseVal).Dict["__origin__"];
+            rawBases.Add(Eval(b.Value, env));
+        }
+        var rawBasesTuple = new PyTuple(rawBases.ToArray());
+
+        var bases = new List<PyClass>();
+        foreach (var baseVal0 in rawBases)
+        {
+            var baseVal = baseVal0;
+            if (baseVal is PyInstance mroInst
+                && TryCallMethod(mroInst, "__mro_entries__", new object[] { rawBasesTuple }, out var entriesObj))
+            {
+                if (entriesObj is not PyTuple entries)
+                    throw PyErr.TypeError("__mro_entries__ must return a tuple");
+                foreach (var entry in entries.Items)
+                {
+                    if (entry is PyClass ec)
+                        bases.Add(ec);
+                    else if (entry is PyBuiltinFunction ebf)
+                        bases.Add(GetPseudoBaseClass(ebf.Name));
+                    else
+                        throw PyErr.TypeError($"__mro_entries__ must return classes, got {PyOps.TypeName(entry)}");
+                }
+                continue;
+            }
             switch (baseVal)
             {
                 case PyClass pc:

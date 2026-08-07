@@ -118,4 +118,82 @@ public class IntrospectionTests
             """;
         Assert.Equal("['name', 'flag']\n['flag']\n", Py.Run(src));
     }
+
+    [Fact]
+    public void Class_level_annotations_are_evaluated_not_just_recorded_as_None()
+    {
+        // Regression: class-body `x: int` used to record the name in __annotations__ with a bare
+        // None placeholder — never evaluating `int` — unlike function parameter annotations, which
+        // already did. Found via typing.get_type_hints() needing the real values for a pydantic
+        // BaseModel's fields. See FASTAPI_PLAN.md Phase 1.9.
+        Assert.Equal("<built-in function int>\n<built-in function str>\n", Py.Run("""
+            class C:
+                x: int
+                y: str = "default"
+            print(C.__annotations__['x'])
+            print(C.__annotations__['y'])
+            """));
+    }
+
+    [Fact]
+    public void Get_type_hints_merges_annotations_across_the_mro()
+    {
+        Assert.Equal("{'a': <built-in function int>, 'b': <built-in function str>, 'return': <built-in function bool>}\n"
+            + "{'x': <built-in function int>, 'y': <built-in function str>}\n", Py.Run("""
+            import typing
+
+            def f(a: int, b: str = "x") -> bool:
+                pass
+
+            print(typing.get_type_hints(f))
+
+            class Base:
+                x: int
+
+            class Sub(Base):
+                y: str
+
+            print(typing.get_type_hints(Sub))
+            """));
+    }
+
+    [Fact]
+    public void Typing_Match_and_Pattern_are_subscriptable_generic_aliases_over_re()
+        // Real CPython's typing.Match/Pattern are (deprecated) generic aliases over re.Match/
+        // re.Pattern, e.g. `Pattern[str]` used in pydantic's networks.py regex-returning helpers.
+        => Assert.Equal("True\nTrue\n", Py.Run("""
+            import typing, re
+            print(typing.get_origin(typing.Pattern[str]) is re.Pattern)
+            print(typing.get_origin(typing.Match[str]) is re.Match)
+            """));
+
+    [Fact]
+    public void Types_new_class_builds_a_class_from_data_like_a_real_class_statement()
+        // Real behavior (not a stub): used by pydantic's conlist/conset/confrozenset to attach
+        // per-call constraint attributes to a fresh subclass. See FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("True\n5\n", Py.Run("""
+            from types import new_class
+            class Base:
+                pass
+            C = new_class('C', (Base,), {}, lambda ns: ns.update({'x': 5}))
+            print(issubclass(C, Base))
+            print(C.x)
+            """));
+
+    [Fact]
+    public void Types_resolve_bases_and_prepare_class_support_dynamic_model_creation()
+        // Real behavior, ported from CPython's own new_class/prepare_class implementation — used
+        // by pydantic's create_model() (not exercised at import time, but a real gap once
+        // create_model() is actually called). See FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("True\nTrue\n", Py.Run("""
+            from types import resolve_bases, prepare_class
+            class Base:
+                pass
+            bases = (Base,)
+            resolved = resolve_bases(bases)
+            print(resolved is bases)
+            meta, ns, kwds = prepare_class('X', resolved)
+            X = meta('X', resolved, ns)
+            print(issubclass(X, Base))
+            """));
 }

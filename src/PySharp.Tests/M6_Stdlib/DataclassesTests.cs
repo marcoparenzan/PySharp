@@ -102,4 +102,25 @@ public class DataclassesTests
             print(d.value)
             print(d.shout() == "HELLO")
             """));
+
+    [Fact]
+    public void Is_dataclass_recognizes_decorated_classes_and_their_instances()
+        // Real check (not a stub): mirrors CPython's `hasattr(cls, '__dataclass_fields__')` test.
+        // Found via pydantic v1's real dependency chain (`pydantic/dataclasses.py`). See
+        // FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("True\nTrue\nFalse", Run("""
+            import dataclasses
+
+            @dataclasses.dataclass
+            class Point:
+                x: int
+                y: int
+
+            class Plain:
+                pass
+
+            print(dataclasses.is_dataclass(Point))
+            print(dataclasses.is_dataclass(Point(1, 2)))
+            print(dataclasses.is_dataclass(Plain))
+            """));
 }

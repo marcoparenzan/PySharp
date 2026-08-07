@@ -24,6 +24,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("sys", interp => SysModule.Create(interp, importer));
         importer.RegisterBuiltin("time", _ => TimeModule.Create());
         importer.RegisterBuiltin("os", _ => OsModule.Create());
+        importer.RegisterBuiltin("pathlib", _ => PathlibModule.Create());
         importer.RegisterBuiltin("errno", _ => MiscModules.CreateErrno());
         importer.RegisterBuiltin("platform", _ => MiscModules.CreatePlatform());
         importer.RegisterBuiltin("string", _ => MiscModules.CreateString());
@@ -46,6 +47,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("json", _ => JsonModule.Create());
         importer.RegisterBuiltin("yaml", _ => YamlModule.Create());
         importer.RegisterBuiltin("itertools", _ => ItertoolsModule.Create());
+        importer.RegisterBuiltin("weakref", _ => WeakrefModule.Create());
         importer.RegisterBuiltin("collections", _ => CollectionsModule.Create());
         importer.RegisterBuiltin("collections.abc", _ => CollectionsModule.CreateAbc());
         importer.RegisterBuiltin("threading", _ => ThreadingModule.Create());
@@ -57,6 +59,11 @@ public static class StdlibModules
         importer.RegisterBuiltin("ctypes", _ => CtypesModule.Create());
         importer.RegisterBuiltin("math", _ => MathModule.Create());
         importer.RegisterBuiltin("decimal", _ => DecimalModule.Create());
+        importer.RegisterBuiltin("datetime", _ => DateTimeModule.Create());
+        importer.RegisterBuiltin("ipaddress", _ => IpAddressModule.Create());
+        importer.RegisterBuiltin("re", _ => ReModule.Create());
+        importer.RegisterBuiltin("colorsys", _ => ColorSysModule.Create());
+        importer.RegisterBuiltin("pickle", _ => PickleModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());
         importer.RegisterBuiltin("contextlib", _ => ContextlibModule.Create());

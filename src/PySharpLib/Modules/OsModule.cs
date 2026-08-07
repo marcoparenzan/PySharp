@@ -11,11 +11,17 @@ namespace PySharpLib.Modules;
 
 public static class OsModule
 {
+    /// <summary>os.PathLike: the "has __fspath__" ABC. Plain base class — pathlib's Path/PurePath
+    /// subclass it (they already implement __fspath__), matching CPython's real inheritance shape,
+    /// but no structural isinstance-by-duck-typing beyond that.</summary>
+    public static readonly PyClass PathLikeClass = new("PathLike", new List<PyClass>());
+
     public static PyModule Create()
     {
         var m = new PyModule("os");
         var d = m.Dict;
 
+        d["PathLike"] = PathLikeClass;
         d["name"] = OperatingSystem.IsWindows() ? "nt" : "posix";
         d["sep"] = Path.DirectorySeparatorChar.ToString();
         d["linesep"] = Environment.NewLine;

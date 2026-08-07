@@ -160,6 +160,7 @@ public static class MiscModules
             "SupportsComplex", "SupportsBytes", "SupportsIndex",
             "ByteString", "AnyStr", "NoReturn", "Text", "Concatenate", "Self", "TypeAlias",
             "Unpack", "Annotated",
+            "Match", "Pattern",
             "ForwardRef", "_Final", "_BaseGenericAlias",
             "_SpecialGenericAlias", "_AnnotatedAlias", "_UnionGenericAlias",
             "_ConcatenateGenericAlias", "_ProtocolMeta", "_TypedDictMeta",
@@ -199,6 +200,29 @@ public static class MiscModules
         // just uncached (no scenario here depends on the caching itself, only on the name existing
         // and behaving as a decorator).
         d["_tp_cache"] = new PyBuiltinFunction("_tp_cache", (_, a, _) => a[0]);
+        // Real CPython resolves ForwardRef/string annotations against the given namespaces here.
+        // PySharp evaluates annotations eagerly already (not deferred strings), so by the time
+        // anything reaches _eval_type it's already a real object — a passthrough is correct for
+        // that case. A genuine ForwardRef built from a source string would need eval() to resolve,
+        // which PySharp's eval() doesn't support yet (raises NotImplementedError) — not attempted
+        // here since nothing has hit that path in a real run.
+        d["_eval_type"] = new PyBuiltinFunction("_eval_type", (_, a, _) => a[0]);
+        // Real behavior (not a stub): merges __annotations__ across the whole MRO (base classes
+        // first, so subclasses override), same as CPython. PySharp evaluates annotation
+        // expressions eagerly already (see __annotations__ in Interp.cs), so there's no forward-ref
+        // resolution to do here — this is just the merge-and-normalize-None-to-NoneType part.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "def get_type_hints(obj, globalns=None, localns=None, include_extras=False):\n"
+                + "    hints = {}\n"
+                + "    mro = getattr(obj, '__mro__', None)\n"
+                + "    if mro is not None:\n"
+                + "        for base in reversed(mro):\n"
+                + "            hints.update(getattr(base, '__annotations__', {}))\n"
+                + "    else:\n"
+                + "        hints.update(getattr(obj, '__annotations__', {}))\n"
+                + "    return {k: (type(None) if v is None else v) for k, v in hints.items()}\n"),
+            m);
         // Real CPython validates `arg` looks like a type hint and raises TypeError if not; no
         // scenario here has needed that validation, so this is a passthrough. It has to be a real
         // *Python* function (not a PyBuiltinFunction) because typing_extensions inspects its actual
@@ -264,6 +288,11 @@ public static class MiscModules
         GenericAliasModule.MapArgsTransform((PyClass)d["Optional"],
             args => args.Append((object)NoneTypeClass).ToArray());
 
+        // Real CPython's typing.Match/typing.Pattern are (deprecated) generic aliases over
+        // re.Match/re.Pattern, e.g. `Pattern[str]` used in pydantic's networks.py regex helpers.
+        GenericAliasModule.MapOrigin((PyClass)d["Match"], ReModule.MatchClass);
+        GenericAliasModule.MapOrigin((PyClass)d["Pattern"], ReModule.PatternClass);
+
         d["get_origin"] = new PyBuiltinFunction("get_origin", (_, a, _) => GenericAliasModule.GetOrigin(a[0]));
         d["get_args"] = new PyBuiltinFunction("get_args", (_, a, _) => GenericAliasModule.GetArgs(a[0]));
 
@@ -278,9 +307,68 @@ public static class MiscModules
     {
         var m = new PyModule("types");
         var d = m.Dict;
-        foreach (var name in new[] { "TracebackType", "FunctionType", "ModuleType", "GeneratorType" })
+        foreach (var name in new[]
+        {
+            "TracebackType", "FunctionType", "ModuleType", "GeneratorType",
+            "UnionType", "MethodType", "BuiltinFunctionType", "LambdaType", "CodeType",
+            "FrameType", "CellType", "CoroutineType", "AsyncGeneratorType", "MappingProxyType",
+        })
             d[name] = new PyClass(name, new List<PyClass>());
         d["NoneType"] = NoneTypeClass;
+        // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a
+        // bare placeholder, so isinstance(List[int], types.GenericAlias) is correct too, matching
+        // real code that checks `isinstance(tp, (typing._GenericAlias, types.GenericAlias, ...))`.
+        d["GenericAlias"] = GenericAliasModule.GenericAliasClass;
+        // Real behavior: builds a class dynamically the same way `class Name(bases): body` would,
+        // but from data instead of syntax — pydantic's `conlist`/`conset`/`confrozenset` use it to
+        // attach per-call constraint attributes (`min_items` etc.) to a fresh subclass. `kwds` (the
+        // 3rd positional arg, e.g. metaclass kwargs) is accepted but unused, matching how PySharp
+        // already ignores custom metaclasses everywhere else (see ExecClassDef).
+        d["new_class"] = new PyBuiltinFunction("new_class", (interp, a, _) =>
+        {
+            string name = (string)a[0];
+            var basesObj = a.Length > 1 ? a[1] : PyTuple.Empty;
+            var ns = new PyDict();
+            if (a.Length > 3 && a[3] is not PyNone)
+                interp.Call(a[3], new object[] { ns });
+            return Runtime.TypeConstructorMethods.BuildClass(name, basesObj, ns);
+        });
+        // Real behavior: resolves any non-class base via __mro_entries__ (same CPython protocol
+        // ExecClassDef uses for `class Foo(Generic[T]):` etc.), returning the SAME tuple object
+        // when nothing needed resolving — callers (e.g. pydantic's create_model) rely on that
+        // identity to detect whether __orig_bases__ needs recording.
+        d["resolve_bases"] = new PyBuiltinFunction("resolve_bases", (interp, a, _) =>
+        {
+            var bases = (PyTuple)a[0];
+            List<object>? resolved = null;
+            for (int i = 0; i < bases.Items.Length; i++)
+            {
+                if (bases.Items[i] is PyInstance inst && inst.Class.TryLookup("__mro_entries__", out var mro))
+                {
+                    resolved ??= bases.Items.Take(i).ToList();
+                    var entries = interp.Call(mro, new object[] { inst, bases });
+                    resolved.AddRange(((PyTuple)entries).Items);
+                }
+                else
+                {
+                    resolved?.Add(bases.Items[i]);
+                }
+            }
+            return resolved is null ? bases : new PyTuple(resolved.ToArray());
+        });
+        // Real behavior (simplified): PySharp doesn't support custom metaclasses (see ExecClassDef),
+        // so the "metaclass" is always effectively `type` — this returns a fresh empty namespace and
+        // the kwds dict with 'metaclass' popped, matching real prepare_class's shape for callers
+        // that just do `meta(name, bases, namespace, **kwds)` afterward.
+        d["prepare_class"] = new PyBuiltinFunction("prepare_class", (interp, a, kwargs) =>
+        {
+            var kwds = new PyDict();
+            if (kwargs is not null)
+                foreach (var kv in kwargs)
+                    if (kv.Key != "metaclass")
+                        kwds[kv.Key] = kv.Value;
+            return new PyTuple(new object[] { interp.BuiltinsModule.Dict["type"], new PyDict(), kwds });
+        });
         return m;
     }
 
@@ -310,6 +398,14 @@ public static class MiscModules
         d["asdict"] = new PyBuiltinFunction("asdict", (_, a, _) =>
             a[0] is PyInstance inst ? inst.Dict.Copy() : throw PyErr.TypeError("asdict() should be called on dataclass instances"));
 
+        // Real check (not a stub): mirrors CPython's own `hasattr(cls, '__dataclass_fields__')`
+        // test — true for both a decorated class and an instance of one.
+        d["is_dataclass"] = new PyBuiltinFunction("is_dataclass", (_, a, _) =>
+        {
+            var cls = a[0] as PyClass ?? (a[0] as PyInstance)?.Class;
+            return cls is not null && cls.TryLookup("__dataclass_fields__", out _);
+        });
+
         return m;
     }
 
@@ -335,6 +431,13 @@ public static class MiscModules
                     defaults[key] = def;
             }
         }
+        // Real dataclasses mark a decorated class with this (checked by dataclasses.is_dataclass);
+        // full Field objects aren't built here — only field presence has been needed so far.
+        var dataclassFields = new PyDict();
+        foreach (var f in fields)
+            dataclassFields[f] = f;
+        cls.Dict["__dataclass_fields__"] = dataclassFields;
+
         if (fields.Count == 0)
             return cls; // nothing to generate (e.g. a dataclass with only methods)
 
