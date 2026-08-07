@@ -64,6 +64,19 @@ public static class InspectModule
             var inst = (PyInstance)a[0];
             return $"<Parameter \"{inst.Dict["name"]}\">";
         });
+        // Real constructor (not just the internal signature()-builder path above): pydantic's real
+        // `generate_model_signature` builds extra params directly, e.g. `Parameter(param_name,
+        // Parameter.KEYWORD_ONLY, annotation=field.annotation, default=field.default)`. See
+        // FASTAPI_PLAN.md Phase 1.9.
+        cls.Dict["__init__"] = new PyBuiltinFunction("Parameter.__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict["name"] = a.Length > 1 ? a[1] : throw PyErr.TypeError("Parameter() missing required argument: 'name'");
+            inst.Dict["kind"] = a.Length > 2 ? a[2] : throw PyErr.TypeError("Parameter() missing required argument: 'kind'");
+            inst.Dict["default"] = kwargs is not null && kwargs.TryGetValue("default", out var def) ? def : Empty;
+            inst.Dict["annotation"] = kwargs is not null && kwargs.TryGetValue("annotation", out var ann) ? ann : Empty;
+            return PyNone.Instance;
+        });
         return cls;
     }
 
@@ -71,6 +84,26 @@ public static class InspectModule
     {
         var cls = new PyClass("Signature", new List<PyClass>());
         cls.Dict["empty"] = Empty;
+        // Real constructor (not just the internal signature()-builder path above): pydantic's real
+        // `generate_model_signature` builds one directly via `Signature(parameters=[...],
+        // return_annotation=None)`. Keys `.parameters` by each Parameter's own `.name`, matching
+        // signature()'s own representation (an insertion-ordered name->Parameter mapping) and real
+        // CPython's Signature.parameters shape. See FASTAPI_PLAN.md Phase 1.9.
+        cls.Dict["__init__"] = new PyBuiltinFunction("Signature.__init__", (interp, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            object paramsArg = a.Length > 1 ? a[1] : (kwargs is not null && kwargs.TryGetValue("parameters", out var p) ? p : null!);
+            var parameters = new PyDict();
+            if (paramsArg is not null)
+                foreach (var item in PyOps.Iterate(interp, paramsArg))
+                    if (item is PyInstance pi && pi.Dict.TryGet("name", out var name))
+                        parameters[name] = pi;
+            inst.Dict["parameters"] = parameters;
+            inst.Dict["return_annotation"] = kwargs is not null && kwargs.TryGetValue("return_annotation", out var ra)
+                ? ra
+                : Empty;
+            return PyNone.Instance;
+        });
         return cls;
     }
 

@@ -30,7 +30,20 @@ public static class BuiltinsFactory
         var objectClass = new PyClass("object", new List<PyClass>());
         objectClass.Dict["__setattr__"] = new PyBuiltinFunction("object.__setattr__", (_, a, _) =>
         {
-            ((PyInstance)a[0]).Dict[(string)a[1]] = a[2];
+            // Real CPython: `obj.__dict__ = newdict` replaces the instance's whole namespace —
+            // pydantic's real `object_setattr(self, '__dict__', values)` idiom relies on exactly
+            // this (BaseModel.__init__ sets every validated field at once, not one at a time).
+            var inst = (PyInstance)a[0];
+            string name = (string)a[1];
+            if (name == "__dict__")
+            {
+                inst.Dict.Clear();
+                if (a[2] is PyDict newDict)
+                    foreach (var e in newDict.Entries)
+                        inst.Dict[e.Key] = e.Value;
+                return PyNone.Instance;
+            }
+            inst.Dict[name] = a[2];
             return PyNone.Instance;
         });
         objectClass.Dict["__delattr__"] = new PyBuiltinFunction("object.__delattr__", (_, a, _) =>
@@ -198,25 +211,26 @@ public static class BuiltinsFactory
         // `class Name(bases): body` would — real behavior (not a stub), needed by metaprogramming
         // that goes through types.prepare_class/new_class (e.g. pydantic's create_model()). Custom
         // metaclasses aren't supported (see ExecClassDef), so this is the only "meta" callers get.
-        Add("type", (_, args, _) => args.Length >= 3
+        Add("type", (interp, args, _) => args.Length >= 3
             ? PySharpLib.Runtime.TypeConstructorMethods.BuildClass((string)args[0], args[1], args[2])
             : args[0] switch
             {
                 PyInstance inst => inst.Class,
-                _ => TypeNamePseudoClass(args[0]),
+                _ => TypeNamePseudoClass(interp, args[0]),
             });
 
         Add("isinstance", (_, args, _) => IsInstance(args[0], args[1]));
         Add("issubclass", (_, args, _) =>
         {
-            if (args[0] is not PyClass cls)
-                throw PyErr.TypeError("issubclass() arg 1 must be a class");
-            return args[1] switch
-            {
-                PyClass other => cls.IsSubclassOf(other),
-                PyTuple t => t.Items.OfType<PyClass>().Any(cls.IsSubclassOf),
-                _ => throw PyErr.TypeError("issubclass() arg 2 must be a class or tuple of classes"),
-            };
+            // `int`/`str`/etc. themselves (as issubclass's 1st arg, e.g. `issubclass(int, X)`) are
+            // real classes too — resolved to the SAME pseudo-base-class `class Foo(int): ...` uses,
+            // so a class that really does subclass a builtin type compares correctly against it.
+            var cls = args[0] as PyClass
+                ?? (args[0] is PyBuiltinFunction bf0 && BuiltinTypeNames.Contains(bf0.Name)
+                    ? Interp.GetPseudoBaseClass(bf0.Name)
+                    : null)
+                ?? throw PyErr.TypeError("issubclass() arg 1 must be a class");
+            return IsSubclass(cls, args[1]);
         });
 
         Add("callable", (_, args, _) => args[0] is PyFunction or PyBuiltinFunction or PyBoundMethod or PyClass
@@ -603,10 +617,18 @@ public static class BuiltinsFactory
 
     private static readonly Dictionary<string, PyClass> PseudoClasses = new();
 
-    /// <summary>type(x) for builtin values: singleton pseudo-classes for comparisons like type(x) == type(y).</summary>
-    internal static PyClass TypeNamePseudoClass(object o)
+    /// <summary>type(x) for builtin values. For types with a real, correctly-behaving builtin
+    /// constructor (int/str/list/set/dict/.../type itself), returns THAT — not a bare
+    /// non-constructible stand-in — so idioms like `v.__class__(new_items)` (clone a container in
+    /// its own concrete type, or `type.__call__`-style dynamic construction) actually work. Found
+    /// via pydantic's real `v.__class__(seq_args)` (BaseModel._get_value, used by model.dict()).
+    /// Falls back to a singleton pseudo-class (for comparisons like type(x) == type(y)) for
+    /// non-constructible types (function/method/module/NoneType/...).</summary>
+    internal static object TypeNamePseudoClass(Interp interp, object o)
     {
         string name = PyOps.TypeName(o);
+        if (interp.BuiltinsModule.Dict.TryGet(name, out var real) && real is PyBuiltinFunction)
+            return real;
         lock (PseudoClasses)
         {
             if (!PseudoClasses.TryGetValue(name, out var cls))
@@ -638,6 +660,27 @@ public static class BuiltinsFactory
         }
     }
 
+    internal static bool IsSubclass(PyClass cls, object classInfo)
+    {
+        switch (classInfo)
+        {
+            case PyTuple t:
+                return t.Items.Any(x => IsSubclass(cls, x));
+            case PyClass other:
+                return cls.IsSubclassOf(other);
+            case PyBuiltinFunction bf:
+                // issubclass(cls, dict) where dict is the builtin conversion function: true if cls
+                // (or an ancestor) IS the pseudo-base-class a builtin base produces (see
+                // ExecClassDef's `class Foo(dict): ...` handling), matching isinstance's equivalent
+                // TypeMatchesBuiltinName check. Found via pydantic's real `lenient_issubclass(type_,
+                // dict)` (typing.py's is_typeddict) — `dict`/`list`/`str`/etc. as issubclass's 2nd
+                // arg previously always raised, since they're PyBuiltinFunction, not PyClass.
+                return cls.Mro.Any(m => m.Name == bf.Name);
+            default:
+                throw PyErr.TypeError("issubclass() arg 2 must be a class or tuple of classes");
+        }
+    }
+
     // enum.IntEnum members are real Python ints (IntEnum derives from int), so
     // isinstance(x, int) must be true for them too — found via aiomqtt/paho-mqtt's
     // ConnackCode(enum.IntEnum), whose ReasonCode.__eq__ relies on exactly this
@@ -660,9 +703,21 @@ public static class BuiltinsFactory
         "frozenset" => obj is PyFrozenSet,
         "range" => obj is PyRange,
         "slice" => obj is PySlice,
-        "type" => obj is PyClass,
+        // `dict`/`str`/etc. themselves (the builtin conversion functions used as pseudo-classes) are
+        // real instances of `type` too — e.g. `isinstance(dict, type)` — but a builtin FUNCTION like
+        // `len`/`print` is not, so this can't just be `obj is PyBuiltinFunction`; only names that are
+        // themselves one of these known builtin-type pseudo-classes count. Found via pydantic's real
+        // `isinstance(cls, type) and issubclass(cls, class_or_tuple)` idiom (utils.lenient_issubclass)
+        // being called with a builtin type itself as `cls`.
+        "type" => obj is PyClass || (obj is PyBuiltinFunction btf && BuiltinTypeNames.Contains(btf.Name)),
         "NoneType" => obj is PyNone,
         _ => PyOps.TypeName(obj) == name,
+    };
+
+    private static readonly HashSet<string> BuiltinTypeNames = new()
+    {
+        "int", "float", "bool", "str", "bytes", "bytearray", "list", "tuple",
+        "dict", "set", "frozenset", "range", "slice", "type",
     };
 
     private static IEnumerable<object> CallableIter(Interp interp, object callable, object sentinel)

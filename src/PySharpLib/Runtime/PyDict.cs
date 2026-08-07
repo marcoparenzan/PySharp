@@ -86,6 +86,20 @@ public sealed class PyDict
     }
 }
 
+/// <summary>
+/// dict.keys(): a live view over the source dict — iterates in insertion order (unlike a plain
+/// set/PySet, which real CPython's dict_keys is not, but PySharp's dict.keys() used to be
+/// represented as before this type existed, losing order) while also supporting the set operators
+/// (&amp;/|/-/^) real CPython's dict_keys view supports (dict keys are already unique, so treating
+/// them as a set for those operators is exact, not an approximation). Found via pydantic's real
+/// `kwargs.keys() &amp; some_set` usage (ModelMetaclass.__new__). See FASTAPI_PLAN.md Phase 1.9.
+/// </summary>
+public sealed class PyDictKeysView
+{
+    public PyDict Source { get; }
+    public PyDictKeysView(PyDict source) => Source = source;
+}
+
 /// <summary>set Python.</summary>
 public sealed class PySet
 {

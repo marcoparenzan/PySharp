@@ -55,26 +55,78 @@ public class PydanticSmokeTests : IClassFixture<PydanticInstallFixture>
     }
 
     [Fact]
-    public void Defining_and_instantiating_a_BaseModel_subclass_is_the_current_frontier()
+    public void Defining_and_instantiating_a_BaseModel_subclass_works()
     {
-        // Phase 2 (pydantic's own model machinery, not cross-cutting stdlib) starts here. Real
-        // CPython pydantic relies on its `ModelMetaclass.__new__` running during the `class
-        // User(BaseModel): ...` statement to build `__config__`/`__fields__`/validators — PySharp's
-        // `ExecClassDef` already ignores custom metaclasses everywhere (see TypeConstructorMethods'
-        // docs), so none of that setup runs and `BaseModel.__init__` (real pydantic source, not
-        // stubbed) fails looking up `self.__config__`. This is a real architectural gap, not a
-        // missing-name gap like everything fixed in Phase 1 — deliberately left for a dedicated
-        // look (custom-metaclass support in ExecClassDef) rather than guessed at inline.
+        // Phase 2 (pydantic's own model machinery, not cross-cutting stdlib) — real CPython
+        // pydantic relies on its `ModelMetaclass.__new__` running during the `class User(BaseModel):
+        // ...` statement to build `__config__`/`__fields__`/validators. This now actually happens:
+        // ExecClassDef implements a real (if simplified) custom-metaclass protocol — a `metaclass=`
+        // kwarg (or one inherited from a base) has its own `__new__` called instead of always
+        // allocating a plain PyClass, with `super().__new__(...)`/direct `SomeStubBase.__new__(...)`
+        // calls bottoming out at a real class-build fallback. Getting an actual field validated and
+        // stored on the instance needed one more real fix: `object.__setattr__(obj, '__dict__',
+        // newdict)` — pydantic's real `BaseModel.__init__` bulk-replace idiom — used to set a
+        // literal key named "__dict__" instead of replacing the instance's whole namespace. See
+        // FASTAPI_PLAN.md Phase 1.9/2 for the full list of gaps closed to get here.
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
         engine.Importer.SearchPaths.Add(_fixture.SitePackages);
 
-        Assert.Throws<PyRaise>(() => engine.Run("""
+        engine.Run("""
             from pydantic import BaseModel
             class User(BaseModel):
                 id: int
                 name: str = "anon"
-            User(id=1)
-            """));
+            u = User(id=1, name="Marco")
+            print(u.id, u.name)
+            """);
+        Assert.Equal("1 Marco\n", writer.ToString());
+    }
+
+    [Fact]
+    public void Invalid_field_data_raises_a_real_ValidationError()
+    {
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        engine.Importer.SearchPaths.Add(_fixture.SitePackages);
+
+        engine.Run("""
+            from pydantic import BaseModel, ValidationError
+            class User(BaseModel):
+                id: int
+                name: str = "anon"
+            try:
+                User(id="not-an-int")
+            except ValidationError:
+                print("caught")
+            """);
+        Assert.Equal("caught\n", writer.ToString());
+    }
+
+    [Fact]
+    public void Basemodel_dict_output_is_the_current_frontier()
+    {
+        // `.dict()` runs and includes the real field values, but also currently leaks
+        // `__fields_set__` as a key — real pydantic keeps it out of `self.__dict__` (and so out of
+        // `.dict()`) via a `__slots__` entry of its own, giving it storage separate from the
+        // instance's regular attribute dict. PySharp doesn't implement real `__slots__`-backed
+        // separate storage (every instance attribute lives in the same `PyInstance.Dict`, slotted or
+        // not) — a real, but distinctly scoped, gap from everything fixed so far. Captured as a
+        // concrete starting point for whoever picks up real `__slots__` support next.
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        engine.Importer.SearchPaths.Add(_fixture.SitePackages);
+
+        engine.Run("""
+            from pydantic import BaseModel
+            class User(BaseModel):
+                id: int
+                name: str = "anon"
+            u = User(id=1, name="Marco")
+            d = u.dict()
+            print(d["id"], d["name"])
+            print("__fields_set__" in d)
+            """);
+        Assert.Equal("1 Marco\nTrue\n", writer.ToString());
     }
 }

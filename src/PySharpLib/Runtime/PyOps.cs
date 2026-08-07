@@ -36,6 +36,7 @@ public static class PyOps
         PyDict => "dict",
         PySet => "set",
         PyFrozenSet => "frozenset",
+        PyDictKeysView => "dict_keys",
         PyRange => "range",
         PySlice => "slice",
         PyFunction or PyBuiltinFunction => "function",
@@ -261,6 +262,8 @@ public static class PyOps
                 ? "set()"
                 : $"{{{string.Join(", ", s.Items.Select(x => Repr(interp, x)))}}}";
             case PyFrozenSet s: return $"frozenset({{{string.Join(", ", s.Items.Select(x => Repr(interp, x)))}}})";
+            case PyDictKeysView v:
+                return $"dict_keys([{string.Join(", ", v.Source.Keys.Select(x => Repr(interp, x)))}])";
             case PyRange r: return r.Step.IsOne
                 ? $"range({r.Start}, {r.Stop})"
                 : $"range({r.Start}, {r.Stop}, {r.Step})";
@@ -376,6 +379,7 @@ public static class PyOps
             case PyBytes b: return new PyIterator(b.Data.Select(x => (object)new BigInteger(x)).GetEnumerator());
             case PyByteArray b: return new PyIterator(b.Data.Select(x => (object)new BigInteger(x)).ToList().GetEnumerator());
             case PyDict d: return new PyIterator(d.Keys.ToList().GetEnumerator());
+            case PyDictKeysView v: return new PyIterator(v.Source.Keys.ToList().GetEnumerator());
             case PySet s: return new PyIterator(s.Items.ToList().GetEnumerator());
             case PyFrozenSet s: return new PyIterator(s.Items.ToList().GetEnumerator());
             case PyRange r: return new PyIterator(r.Enumerate().GetEnumerator());
@@ -471,6 +475,7 @@ public static class PyOps
         PyList l => l.Items.Count,
         PyTuple t => t.Items.Length,
         PyDict d => d.Count,
+        PyDictKeysView v => v.Source.Count,
         PySet s => s.Items.Count,
         PyFrozenSet s => s.Items.Count,
         PyRange r => (int)r.Count,
@@ -489,6 +494,7 @@ public static class PyOps
                 return sub.Length == 0 || b.Data.AsSpan().IndexOf(sub.Data) >= 0;
             case PyBytes b when item is BigInteger i: return b.Data.Contains((byte)i);
             case PyDict d: return d.ContainsKey(item);
+            case PyDictKeysView v: return v.Source.ContainsKey(item);
             case PySet s: return s.Items.Contains(item);
             case PyFrozenSet s: return s.Items.Contains(item);
             case PyInstance inst when interp.TryCallMethod(inst, "__contains__", new[] { item }, out var r):

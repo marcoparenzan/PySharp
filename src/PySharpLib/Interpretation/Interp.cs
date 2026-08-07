@@ -442,10 +442,16 @@ public sealed class Interp
         // `class Foo(SomeGenericAlias):`, `class Foo(SomeSpecialForm):` (e.g. TypedDict) all
         // working: none of those objects were ever meant to end up in the MRO themselves.
         var rawBases = new List<object>();
+        object? explicitMetaclass = null;
         foreach (var b in c.Bases)
         {
+            if (b.Name == "metaclass")
+            {
+                explicitMetaclass = Eval(b.Value, env);
+                continue;
+            }
             if (b.Name is not null || b.IsStar || b.IsDoubleStar)
-                continue; // metaclass=... and the like: ignored in v1
+                continue; // other class keywords (__init_subclass__ kwargs and the like): ignored in v1
             rawBases.Add(Eval(b.Value, env));
         }
         var rawBasesTuple = new PyTuple(rawBases.ToArray());
@@ -484,18 +490,54 @@ public sealed class Interp
             }
         }
 
+        // Winning metaclass (simplified — see PyClass.Metaclass's doc comment): the explicit
+        // `metaclass=` kwarg if given (and it's a real class, not e.g. the `type` builtin, which
+        // means "no custom metaclass"), else the first base that itself carries one.
+        var metaclass = explicitMetaclass as PyClass ?? bases.Select(b => b.Metaclass).FirstOrDefault(m => m is not null);
+
         var classEnv = new Env(env.Module, env) { IsClassScope = true };
         ExecStmts(c.Body, classEnv);
 
-        var cls = new PyClass(c.Name, bases);
-        foreach (var kv in classEnv.Locals)
+        PyClass cls;
+        if (metaclass is not null)
         {
-            cls.Dict[kv.Key] = kv.Value;
-            // Record the defining class for zero-arg super().
-            foreach (var inner in InnerFunctions(kv.Value))
-                inner.DefiningClass = cls;
+            // Real metaclass protocol (simplified to what's been observed — e.g. pydantic's
+            // ModelMetaclass): calling the metaclass is what `type.__call__(mcs, name, bases,
+            // namespace)` does for a normal `class X(Y, metaclass=M): ...` statement in real
+            // CPython. Calls the metaclass's own __new__ (real, interpreted Python, e.g.
+            // ModelMetaclass.__new__ building __config__/__fields__/validators) instead of just
+            // allocating a plain PyClass — the metaclass's `super().__new__(...)` chain bottoms out
+            // at the real class-building fallback in the `case PySuper sup:` __new__ handling below.
+            // Metaclass __init__ is deliberately not dispatched: no metaclass in scope so far
+            // defines one (ModelMetaclass/ABCMeta don't) — a real gap if that ever changes.
+            var namespaceDict = new PyDict();
+            foreach (var kv in classEnv.Locals)
+                namespaceDict[kv.Key] = kv.Value;
+            namespaceDict["__qualname__"] = c.Name;
+            namespaceDict["__module__"] = env.Module.Name;
+            var basesTuple = new PyTuple(bases.Cast<object>().ToArray());
+            object built = metaclass.TryLookup("__new__", out var newFn)
+                ? Call(newFn, new object[] { metaclass, c.Name, basesTuple, namespaceDict })
+                : TypeConstructorMethods.BuildClass(c.Name, basesTuple, namespaceDict);
+            cls = built as PyClass
+                ?? throw PyErr.TypeError($"metaclass.__new__() must return a class, not {PyOps.TypeName(built)}");
+            cls.Metaclass = metaclass;
+            foreach (var kv in namespaceDict.Entries)
+                foreach (var inner in InnerFunctions(kv.Value))
+                    inner.DefiningClass = cls;
         }
-        cls.Dict["__qualname__"] = c.Name;
+        else
+        {
+            cls = new PyClass(c.Name, bases);
+            foreach (var kv in classEnv.Locals)
+            {
+                cls.Dict[kv.Key] = kv.Value;
+                // Record the defining class for zero-arg super().
+                foreach (var inner in InnerFunctions(kv.Value))
+                    inner.DefiningClass = cls;
+            }
+            cls.Dict["__qualname__"] = c.Name;
+        }
 
         // Enum transformation: plain attributes become members (PyInstance with name/value).
         if (bases.Any(b => b.TryLookup("__is_enum__", out _)))
@@ -511,9 +553,58 @@ public sealed class Interp
         env.Set(c.Name, result);
     }
 
+    // object's default __new__/__init__ — shared by both direct class attribute access
+    // (`case PyClass cls:`) and `super().__new__`/`super().__init__` (`case PySuper sup:`), since a
+    // class that doesn't override them should behave identically whichever way they're reached.
+    private static readonly PyBuiltinFunction ObjectInitFallback =
+        new("object.__init__", (_, _, _) => PyNone.Instance);
+
+    /// <summary>Real CPython: `obj.__dict__ = newdict` (equivalently `object.__setattr__(obj,
+    /// '__dict__', newdict)`) replaces the instance's whole namespace — pydantic's real
+    /// `BaseModel.__init__` uses exactly this (`object_setattr(self, '__dict__', values)`) to set
+    /// every validated field at once instead of one attribute at a time.</summary>
+    private static void ObjectSetAttrImpl(PyInstance inst, string name, object value)
+    {
+        if (name == "__dict__")
+        {
+            inst.Dict.Clear();
+            if (value is PyDict newDict)
+                foreach (var e in newDict.Entries)
+                    inst.Dict[e.Key] = e.Value;
+            return;
+        }
+        inst.Dict[name] = value;
+    }
+
+    // object.__setattr__ accessed directly on a class (not via super()) — e.g. pydantic's real
+    // `object_setattr = object.__setattr__` module-level alias. Unbound-method shaped: the instance
+    // is an explicit first argument, matching ObjectNewFallback's calling convention.
+    private static readonly PyBuiltinFunction ObjectSetattrFallback = new("object.__setattr__", (_, a, _) =>
+    {
+        if (a[0] is not PyInstance inst)
+            throw PyErr.AttributeError($"'{PyOps.TypeName(a[0])}' object has no attribute '{a[1]}'");
+        ObjectSetAttrImpl(inst, (string)a[1], a[2]);
+        return PyNone.Instance;
+    });
+
+    private static readonly PyBuiltinFunction ObjectNewFallback = new("object.__new__", (_, a, _) =>
+        // type.__new__-shaped call (mcs, name, bases, namespace) — a custom metaclass's own __new__
+        // calling `super().__new__(...)` or a stub base's `.__new__` directly (e.g. typing_extensions'
+        // real `_ProtocolMeta.__new__` calls `abc.ABCMeta.__new__(mcls, name, bases, namespace,
+        // **kwargs)` directly rather than via super()) bottoms out here: build the real class,
+        // exactly like real CPython's type.__new__ does.
+        a.Length >= 3 && a[0] is PyClass && a[1] is string clsName && a[2] is PyTuple
+            ? TypeConstructorMethods.BuildClass(clsName, a[2], a.Length > 3 ? a[3] : PyNone.Instance)
+            // object.__new__(cls, ...): a blank instance — the shape used when nothing overrides
+            // __new__ for a regular (non-metaclass) class.
+            : a.Length > 0 && a[0] is PyClass cls0 ? new PyInstance(cls0) : PyNone.Instance);
+
     private static readonly Dictionary<string, PyClass> PseudoBases = new();
 
-    private static PyClass GetPseudoBaseClass(string name)
+    /// <summary>The same singleton "class base for a builtin type" pseudo-class `class Foo(int):`
+    /// uses for `int`/`str`/etc. — shared (not internal-only) so issubclass()'s builtin-type-as-arg-1
+    /// handling compares against the identical objects, not a lookalike copy.</summary>
+    internal static PyClass GetPseudoBaseClass(string name)
     {
         lock (PseudoBases)
         {
@@ -1611,6 +1702,15 @@ public sealed class Interp
     {
         PySet s => s.Items,
         PyFrozenSet f => f.Items,
+        // dict.keys() is already-unique by construction, so this is exact, not an approximation —
+        // matches real CPython's dict_keys supporting the set operators directly.
+        PyDictKeysView v => new HashSet<object>(v.Source.Keys, PyEqualityComparer.Instance),
+        // A plain dict is set-like over its own keys for &/-/^ and for | when the other side isn't
+        // also a dict (dict|dict merges instead — handled explicitly, and first, in the "|" case).
+        // Real CPython: `some_dict | some_dict.keys()` dispatches to dict_keys.__ror__, which treats
+        // the dict as its keys. Found via pydantic's real `fields | private_attributes.keys() |
+        // {'__slots__'}` (ModelMetaclass.__new__).
+        PyDict d => new HashSet<object>(d.Keys, PyEqualityComparer.Instance),
         _ => null,
     };
 
@@ -1742,14 +1842,16 @@ public sealed class Interp
                 break;
 
             case "|":
-                if (SetItems(a) is { } su1 && SetItems(b) is { } su2)
-                    return MakeSetLike(a, su1.Union(su2));
+                // dict | dict merges (checked first: both operands satisfy SetItems below too,
+                // via dict-as-its-own-keys, but merge is dict's own real __or__, taking priority).
                 if (a is PyDict d1 && b is PyDict d2)
                 {
                     var merged = d1.Copy();
                     merged.Update(d2);
                     return merged;
                 }
+                if (SetItems(a) is { } su1 && SetItems(b) is { } su2)
+                    return MakeSetLike(a, su1.Union(su2));
                 break;
             case "&":
                 if (SetItems(a) is { } si1 && SetItems(b) is { } si2)
@@ -2167,6 +2269,12 @@ public sealed class Interp
                     case "__module__":
                         value = "builtins";
                         return true;
+                    // Real CPython: `SomeClass.__class__` is its metaclass (`type` by default).
+                    // Found via pydantic's real `ModelField.prepare()` (`self.outer_type_.__class__`
+                    // idiom checking a field's declared type for GenericAlias-ness).
+                    case "__class__":
+                        value = (object?)cls.Metaclass ?? Builtins.BuiltinsFactory.TypeNamePseudoClass(this, cls);
+                        return true;
                     case "__mro__":
                         value = new PyTuple(cls.Mro.Cast<object>().ToArray());
                         return true;
@@ -2182,6 +2290,25 @@ public sealed class Interp
                         // what real code checking `SomeClass.__doc__ or default` expects to see.
                         value = PyNone.Instance;
                         return true;
+                    // object's default __new__/__init__, accessed directly on a class that doesn't
+                    // override them (not via super() — that's the `case PySuper` branch below).
+                    // Real pattern this unblocks: a stub base class like our bare ABCMeta being used
+                    // as `SomeRealMetaclass.__new__ = ...; return abc.ABCMeta.__new__(mcls, name,
+                    // bases, namespace, **kwargs)` the way typing_extensions' real `_ProtocolMeta`
+                    // does — it calls `abc.ABCMeta.__new__` directly rather than via super() (its own
+                    // comment explains why: avoiding slow real-CPython ABCMeta machinery on old
+                    // versions), so it needs the same real class-building fallback super() gets.
+                    case "__new__":
+                        value = ObjectNewFallback;
+                        return true;
+                    case "__init__":
+                        value = ObjectInitFallback;
+                        return true;
+                    // Real pattern this unblocks: pydantic's real `object_setattr = object.__setattr__`
+                    // module-level alias (BaseModel.__init__ uses it to bulk-set `__dict__`).
+                    case "__setattr__":
+                        value = ObjectSetattrFallback;
+                        return true;
                 }
                 value = PyNone.Instance;
                 return false;
@@ -2190,6 +2317,14 @@ public sealed class Interp
             case PyModule module:
                 if (module.Dict.TryGet(name, out value!))
                     return true;
+                // Real CPython: a module's own namespace, e.g. pydantic's real
+                // `sys.modules[model.__module__].__dict__` idiom (update_model_forward_refs)
+                // resolving forward-ref annotations against the defining module's globals.
+                if (name == "__dict__")
+                {
+                    value = module.Dict;
+                    return true;
+                }
                 value = PyNone.Instance;
                 return false;
 
@@ -2281,6 +2416,13 @@ public sealed class Interp
                     case "__dict__":
                         value = fn.Attributes;
                         return true;
+                    // Universal fallback (matches the same case for PyBuiltinFunction/other builtin
+                    // values, see TypeMethods.TryGetBuiltinAttr): `v.__class__` for a real (non-
+                    // builtin) function. Found via pydantic's real `v.__class__.__name__ ==
+                    // 'cython_function_or_method'` idiom (ModelMetaclass.__new__'s is_untouched()).
+                    case "__class__":
+                        value = Builtins.BuiltinsFactory.TypeNamePseudoClass(this, obj);
+                        return true;
                     default:
                         if (fn.Attributes.TryGet(name, out value!))
                             return true;
@@ -2355,7 +2497,7 @@ public sealed class Interp
                     {
                         if (target is not PyInstance inst)
                             throw PyErr.AttributeError($"'{PyOps.TypeName(target)}' object has no attribute '{a[0]}'");
-                        inst.Dict[(string)a[0]] = a[1];
+                        ObjectSetAttrImpl(inst, (string)a[0], a[1]);
                         return PyNone.Instance;
                     });
                     return true;
@@ -2371,11 +2513,16 @@ public sealed class Interp
                     });
                     return true;
                 }
-                if (name is "__init__" or "__new__")
+                if (name == "__init__")
                 {
                     // object's default: a no-op. Common pattern this unblocks: a class whose base
                     // is (effectively) object still calls `super().__init__(...)` defensively.
-                    value = new PyBuiltinFunction($"object.{name}", (_, _, _) => PyNone.Instance);
+                    value = ObjectInitFallback;
+                    return true;
+                }
+                if (name == "__new__")
+                {
+                    value = ObjectNewFallback;
                     return true;
                 }
                 value = PyNone.Instance;

@@ -239,4 +239,19 @@ public class ImportTests : IDisposable
                 print('not leaked')
             """));
     }
+
+    [Fact]
+    public void Module_dunder_dict_exposes_its_own_namespace()
+    {
+        // Regression: a module's `__dict__` attribute wasn't handled at all (fell through to a plain
+        // AttributeError). Found via pydantic's real `sys.modules[model.__module__].__dict__` idiom
+        // (typing.update_model_forward_refs), resolving forward-ref annotations against the
+        // defining module's globals. See FASTAPI_PLAN.md Phase 1.9.
+        WriteModule("hasdict.py", "VALUE = 42\n");
+        Assert.Equal("True\n42\n", Run("""
+            import hasdict
+            print('VALUE' in hasdict.__dict__)
+            print(hasdict.__dict__['VALUE'])
+            """));
+    }
 }

@@ -27,11 +27,21 @@ public static class TypeMethods
                 "bytes" => BytesMethods.Table,
                 "bytearray" => ByteArrayMethods.Table,
                 "type" => TypeConstructorMethods.Table,
+                "chain" => ChainMethods.Table,
                 _ => null,
             };
             if (typeTable is not null && typeTable.TryGetValue(name, out var unbound))
             {
                 value = unbound;
+                return true;
+            }
+            // Universal fallback (was unreachable before: this branch always returned before falling
+            // through to the shared one below, meaning `some_builtin_function.__class__` — e.g. after
+            // pydantic's real `typing.NewType(...)` stub returns a builtin type object directly —
+            // always raised AttributeError instead of returning the "function"/"type" pseudo-class).
+            if (name == "__class__")
+            {
+                value = PySharpLib.Builtins.BuiltinsFactory.TypeNamePseudoClass(interp, obj);
                 return true;
             }
             value = PyNone.Instance;
@@ -76,7 +86,7 @@ public static class TypeMethods
         // list, ...). Found via a real `NoneType = None.__class__` idiom (pydantic/typing.py).
         if (name == "__class__")
         {
-            value = PySharpLib.Builtins.BuiltinsFactory.TypeNamePseudoClass(obj);
+            value = PySharpLib.Builtins.BuiltinsFactory.TypeNamePseudoClass(interp, obj);
             return true;
         }
         value = PyNone.Instance;
@@ -834,7 +844,7 @@ public static class DictMethods
         void Add(string name, BuiltinFn fn) => t[name] = new PyBuiltinFunction($"dict.{name}", fn);
 
         Add("get", (_, a, _) => D(a).TryGet(a[1], out var v) ? v : TypeMethods.OptArg(a, 2) ?? PyNone.Instance);
-        Add("keys", (_, a, _) => new PyList(D(a).Keys));
+        Add("keys", (_, a, _) => new PyDictKeysView(D(a)));
         Add("values", (_, a, _) => new PyList(D(a).Values));
         Add("items", (_, a, _) =>
             new PyList(D(a).Entries.Select(e => (object)new PyTuple(new[] { e.Key, e.Value }))));
@@ -1180,6 +1190,19 @@ public static class TypeConstructorMethods
                 cls.Dict[e.Key] = e.Value;
         return cls;
     }
+}
+
+/// <summary>itertools.chain.from_iterable: the alternate constructor real CPython's chain exposes
+/// as a classmethod, dispatched the same unbound-method way as type.__new__/dict.get. Found via
+/// pydantic's real `chain.from_iterable(...)` usage (class_validators.check_for_unused). See
+/// FASTAPI_PLAN.md Phase 1.9.</summary>
+public static class ChainMethods
+{
+    public static readonly Dictionary<string, PyBuiltinFunction> Table = new()
+    {
+        ["from_iterable"] = new PyBuiltinFunction("chain.from_iterable", (interp, a, _) =>
+            new PyIterator(PyOps.Iterate(interp, a[0]).SelectMany(x => PyOps.Iterate(interp, x)).GetEnumerator())),
+    };
 }
 
 public static class GeneratorMethods

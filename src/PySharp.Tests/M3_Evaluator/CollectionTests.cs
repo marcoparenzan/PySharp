@@ -134,4 +134,28 @@ public class CollectionTests
             print(b"ba" == bytearray(b"ba"))
             print(bytearray(b"ba") == bytearray(b"xy"))
             """));
+
+    // Regression for real gaps found via pydantic v1's ModelMetaclass.__new__ (FASTAPI_PLAN.md
+    // Phase 1.9): dict.keys() used to be a plain PyList (order-preserving but not set-like), so
+    // `kwargs.keys() & some_set` raised. dict.keys() is now a real dict_keys-shaped view: still
+    // order-preserving for iteration, but also usable with the set operators — and a plain dict is
+    // itself set-like over its own keys for the same operators (matching real CPython's
+    // dict_keys.__ror__ etc.), except `|` between two dicts, which still merges.
+    [Theory]
+    [InlineData("{'a': 1, 'b': 2}.keys() & {'b', 'c'}", "{'b'}")]
+    [InlineData("{'a': 1, 'b': 2}.keys() | {'c'}", "{'a', 'b', 'c'}")]
+    [InlineData("{'a': 1, 'b': 2} | {'a': 1, 'b': 2}.keys()", "{'a', 'b'}")]
+    [InlineData("{'a': 1} | {'b': 2}", "{'a': 1, 'b': 2}")]
+    public void Dict_keys_and_plain_dicts_support_the_set_operators(string expr, string expected)
+        => Assert.Equal(expected, Py.Eval(expr));
+
+    [Fact]
+    public void Dict_keys_preserves_insertion_order_for_plain_iteration()
+        => Assert.Equal("['b', 'a', 'c']\n", Py.Run("""
+            d = {}
+            d['b'] = 1
+            d['a'] = 2
+            d['c'] = 3
+            print(list(d.keys()))
+            """));
 }

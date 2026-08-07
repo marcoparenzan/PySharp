@@ -503,15 +503,103 @@ ran on plain CPython 3.6+).
 ## Phase 2 — pydantic v1 (real scope now known — Phase 1 is done)
 
 - [x] 2.1 Get `import pydantic` to succeed. Done — see Phase 1.9's final entries.
-- [ ] 2.2 Get a minimal `BaseModel` subclass to construct and validate simple fields (str/int/bool),
-  raising `ValidationError` on bad input — the load-bearing subset FastAPI's request/response models
-  actually need. **Current frontier**: needs custom-metaclass support in `ExecClassDef` (real
-  pydantic's `ModelMetaclass.__new__` must run during the `class User(BaseModel): ...` statement to
-  build `__config__`/`__fields__`/validators) — a real architectural gap, not a missing-name gap.
-  See the last Phase 1.9 entry and `PydanticSmokeTests.Defining_and_instantiating_a_BaseModel_subclass_is_the_current_frontier`
-  for the concrete failing repro.
+- [x] 2.2 Get a minimal `BaseModel` subclass to construct and validate simple fields (str/int/bool),
+  raising `ValidationError` on bad input. Done — required building real (simplified) custom-metaclass
+  support into `ExecClassDef`, since real pydantic's `ModelMetaclass.__new__` must run during the
+  `class User(BaseModel): ...` statement to build `__config__`/`__fields__`/validators. Full
+  blow-by-blow below (2.2.1).
 - [ ] 2.3 Expand field types/validators as real usage in Phase 4's target app demands. Do not attempt
   full pydantic v1 API parity — same non-goal discipline as NUMPY_PLAN.md's "not full API parity".
+  **Current known gap**: `BaseModel.dict()` includes a spurious `__fields_set__` key — real pydantic
+  keeps it out of `self.__dict__` (and so out of `.dict()`) via a `__slots__` entry giving it storage
+  separate from the instance's regular attribute dict; PySharp doesn't implement real
+  `__slots__`-backed separate storage (every instance attribute lives in the same `PyInstance.Dict`,
+  slotted or not — a deliberate simplification up to now, first surfaced here). Captured as
+  `PydanticSmokeTests.Basemodel_dict_output_is_the_current_frontier`, a concrete starting point for
+  whoever picks up real `__slots__` support next. Not attempted inline: implementing real per-slot
+  storage is its own architectural undertaking, same category of decision as 2.2's metaclass work,
+  not a quick fix.
+
+### 2.2.1 — custom-metaclass support: the blow-by-blow
+
+Real, simplified (not full-generality) support for `class X(Y, metaclass=M): ...`, landed in one
+long session once the author said "procedi" to continue past Phase 1's completion:
+
+- **Core plumbing** (`Interp.cs`): `PyClass` gained a `Metaclass` field (null = default `type`).
+  `ExecClassDef` now evaluates an explicit `metaclass=` keyword argument (previously silently
+  dropped, "ignored in v1") and determines a winning metaclass — the explicit kwarg if it's a real
+  class, else the first base that already carries one (subclasses inherit their base's metaclass
+  without redeclaring it — real CPython computes the most-derived metaclass across every base for
+  multi-metaclass conflicts; not needed for anything in scope so far, single custom-metaclass chains
+  only). When a metaclass is found, `ExecClassDef` builds the class body's namespace as a plain
+  `PyDict` (not immediately a `PyClass`) and **calls the metaclass's own `__new__`** with it — the
+  same thing `type.__call__(mcs, name, bases, namespace)` does for a real `class` statement in
+  CPython — instead of always allocating a plain `PyClass`. Metaclass `__init__` is deliberately not
+  dispatched (no metaclass encountered defines one).
+- For `super().__new__(...)`/a stub base's `.__new__` called directly to actually build something:
+  added a real `type.__new__`-shaped fallback (`ObjectNewFallback`) reachable both via `super()` (the
+  `PySuper` GetAttr case) and via **direct** attribute access on a class that doesn't override it
+  (the plain `PyClass` GetAttr case) — needed because typing_extensions' real `_ProtocolMeta.__new__`
+  calls `abc.ABCMeta.__new__(mcls, name, bases, namespace, **kwargs)` **directly**, not through
+  `super()` (its own comment explains why: avoiding slow real-CPython ABCMeta machinery on old
+  versions) — our bare `ABCMeta` stub had no `__new__` of its own, so this was a real, previously
+  unreachable gap. Same PyClass-direct-access fallback added for `__init__` and `__setattr__`.
+- **`object.__setattr__(obj, '__dict__', newdict)` bulk-namespace-replace**: real pydantic's
+  `BaseModel.__init__` sets every validated field at once via `object_setattr(self, '__dict__',
+  values)` (a real, documented CPython idiom: assigning `obj.__dict__` replaces the whole instance
+  namespace). The pre-existing `object.__setattr__` implementation (already in `Builtins.cs`, predates
+  this round) didn't know about this special case — it just set a literal key named `"__dict__"`.
+  This was the single most confusing bug of the round: `f.__dict__` printed the *correct* merged
+  contents (since `__dict__` access already special-cases returning `inst.Dict` directly) while
+  `f.x` failed, because the real per-key entries were never actually written — found only by
+  instrumenting `TryGetAttr` itself with a raw dict-hash/count dump, not by reading source, after a
+  plain source read strongly suggested the fix should have worked.
+- **`issubclass()`/`isinstance()` didn't accept builtin types as arguments** on either side:
+  `issubclass(int, X)` (arg 1) and `issubclass(X, dict)` (arg 2) both raised `TypeError`, since
+  `int`/`dict`/etc. are `PyBuiltinFunction`, not `PyClass` — `IsSubclass` (new shared helper,
+  mirroring the existing `IsInstance`) now resolves a builtin-type-named `PyBuiltinFunction` to the
+  same singleton pseudo-base-class `class Foo(int): ...` already uses, on **both** the class-being-
+  checked and the class-being-checked-against side. Also fixed `isinstance(dict, type)` (a builtin
+  type object IS an instance of `type`) the same way. Found via pydantic's real
+  `isinstance(cls, type) and issubclass(cls, class_or_tuple)` idiom (`utils.lenient_issubclass`).
+- **`dict.keys()` couldn't be used with the set operators**: was a plain `PyList` (order-preserving,
+  but not set-like). New `PyDictKeysView` type: still order-preserving for iteration (`list(d.keys())`
+  stays correct), but now real dict_keys-shaped — usable with `&`/`|`/`-`/`^`. Also made a **plain
+  dict** set-like over its own keys for those same operators when the other side isn't also a dict
+  (matching real CPython's `dict_keys.__ror__` etc. treating a dict as its keys) — `dict | dict`
+  still merges (checked first, explicitly, ahead of the generic set-union path). Found via pydantic's
+  real `kwargs.keys() & allowed_config_kwargs` and `fields | private_attributes.keys() |
+  {'__slots__'}` (`ModelMetaclass.__new__`).
+- **`v.__class__` for a builtin container/scalar value used to be a bare, non-constructible
+  pseudo-class** — fine for identity comparisons (`type(x) == type(y)`) but broken for the common
+  `v.__class__(new_items)` clone-in-concrete-type idiom, since the pseudo-class had no `__init__`.
+  `TypeNamePseudoClass` now takes the interpreter and returns the **real builtin constructor
+  function** (`d["set"]`, `d["list"]`, etc.) when one exists for the type name, falling back to the
+  bare singleton pseudo-class only for genuinely non-constructible types (function/method/module/
+  NoneType/...). Found via pydantic's real `v.__class__(seq_args)` (`BaseModel._get_value`, used by
+  `model.dict()`).
+- Smaller, self-contained gaps closed the same way (real fix, not a stub) along the way: a class's
+  own namespace dict never carried a real `__module__` (always fell back to a hardcoded `"builtins"`)
+  — this one **actively caused an infinite loop**, not just a wrong answer: pydantic's own
+  `ModelMetaclass.__new__` skips its field-processing block specifically for `BaseModel`'s own
+  definition by checking `namespace.get('__module__') == 'pydantic.main'`; with `__module__` always
+  missing, that check silently failed to fire, so `BaseModel`'s own definition ran the *full* field-
+  processing logic on itself, recursing into pydantic's own self-referential type machinery. Found by
+  bisecting with `Console.Error` trace prints around every metaclass build (after several dead-end
+  attempts to guess the cause from source alone — the traceback's line numbers were themselves
+  misleading, `"<string>"` filenames throughout meaning line numbers don't correlate with the real
+  installed `.py` files at all). `module.__dict__` (a module's own namespace) wasn't handled at all —
+  found via pydantic's real `sys.modules[model.__module__].__dict__` idiom
+  (`typing.update_model_forward_refs`). `inspect.Signature`/`inspect.Parameter` only existed via the
+  internal `signature()`-builder path (bare classes, no real `__init__`) — real pydantic's own
+  `generate_model_signature` constructs them directly (`Signature(parameters=[...],
+  return_annotation=...)`, `Parameter(name, kind, default=..., annotation=...)`); given real
+  `__init__`s. `itertools.chain.from_iterable` (the alternate-constructor classmethod real CPython's
+  `chain` exposes) didn't exist at all, since `chain` was a plain `PyBuiltinFunction` with no
+  attribute surface — added via the same unbound-method dispatch table pattern `type.__new__`/
+  `dict.get` already use.
+- Full suite green after every single step (776/776 by the end of this round, up from 759 at the
+  start of it — 17 new tests); `git status` clean of scratch installs after each round.
 
 ## Phase 3 — starlette + anyio (placeholder)
 
@@ -573,14 +661,38 @@ the common built-in types, own binary format), plus real (not stubbed) metaprogr
 `type(name, bases, namespace)` dynamic-class-creation call (previously only the 4-arg
 `type.__new__(metaclass, ...)` unbound-method form existed).
 
-**Current frontier is Phase 2, not another stdlib gap**: constructing a `BaseModel` subclass instance
-fails with `AttributeError: 'type' object has no attribute '__config__'`, because real pydantic's
-`ModelMetaclass.__new__` — which builds `__config__`/`__fields__`/validators while the `class
-User(BaseModel): ...` statement executes — never runs. `ExecClassDef` ignores custom metaclasses
-everywhere in PySharp today (a deliberate, documented simplification up to this point, not an
-oversight) — this is the first scenario where that simplification actually blocks something. A real
-architectural gap, not a missing-name gap like everything in Phase 1's list — deliberately left for a
-dedicated look (custom-metaclass support in `ExecClassDef`) rather than guessed at inline. Captured as
-a concrete, currently-failing smoke test:
-`PydanticSmokeTests.Defining_and_instantiating_a_BaseModel_subclass_is_the_current_frontier`.
-Phases 3–4 remain placeholders (see architecture decisions) until Phase 2 is scoped from real probing.
+**Phase 2's first real milestone is also done**: a `BaseModel` subclass now constructs, validates
+real field types, raises real `ValidationError` on bad input, and serializes back out via `.dict()`.
+Getting there required building real (simplified, not full-generality) **custom-metaclass support**
+into `ExecClassDef` — the first PySharp scenario where "custom metaclasses are ignored" (a
+deliberate, documented simplification up to this point) actually blocked something, since real
+pydantic's `ModelMetaclass.__new__` must run while the `class User(BaseModel): ...` statement
+executes to build `__config__`/`__fields__`/validators. `PyClass` gained a `Metaclass` field;
+`ExecClassDef` now evaluates `metaclass=` (previously silently dropped) and calls the winning
+metaclass's own `__new__` — subclasses inherit their base's metaclass without redeclaring it. Getting
+an actual field to end up validated and stored on the instance needed one more real fix beyond the
+metaclass plumbing itself: `object.__setattr__(obj, '__dict__', newdict)` (real pydantic's
+`BaseModel.__init__` bulk-namespace-replace idiom) was silently setting a literal key named
+`"__dict__"` instead of replacing the instance's whole namespace — the single most confusing bug of
+the round, since `obj.__dict__` printed the *correct* merged contents (its own code path already
+special-cased returning the instance dict directly) while `obj.x` failed, because the real per-key
+writes never actually happened; found only by instrumenting attribute lookup itself with a raw
+dict-hash/count dump, after source reading alone strongly (and wrongly) suggested the fix should
+already have worked. Along the way: a **hang** (not a crash — an honest infinite loop, entered via
+`ModelMetaclass.__new__` silently taking the wrong branch because a class's namespace never carried a
+real `__module__`) was bisected via `Console.Error` trace prints around every metaclass build,
+`issubclass`/`isinstance` were fixed to accept builtin types as either argument, `dict.keys()` became
+a real (order-preserving) dict_keys-shaped view usable with the set operators, and `v.__class__` for
+a builtin container/scalar became the real, constructible builtin type instead of a bare
+non-constructible stand-in. Full blow-by-blow in Phase 2.2.1. 776/776 tests green (up from 759 at the
+start of this round).
+
+**Current known gap** (Phase 2.3, not a new architectural blocker): `BaseModel.dict()` leaks a
+spurious `__fields_set__` key, because PySharp doesn't implement real `__slots__`-backed storage
+separate from an instance's regular attribute dict (everything lives in the same `PyInstance.Dict`
+today) — real pydantic relies on exactly that separation to keep `__fields_set__` out of
+`self.__dict__`. A real, but distinctly-scoped gap (its own architectural decision, same category as
+this round's metaclass work, not a quick fix) — captured as
+`PydanticSmokeTests.Basemodel_dict_output_is_the_current_frontier`.
+Phases 3–4 remain placeholders (see architecture decisions) until Phase 2 is scoped further from real
+probing (more field types, validators, and — separately — real `__slots__` support).

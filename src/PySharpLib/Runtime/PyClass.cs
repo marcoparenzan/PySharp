@@ -13,6 +13,14 @@ public sealed class PyClass
     public PyDict Dict { get; } = new();
     /// <summary>MRO computed with C3 linearization (this included at the head).</summary>
     public List<PyClass> Mro { get; }
+    /// <summary>
+    /// The custom metaclass this class was built with (`class X(Y, metaclass=M): ...`), or null for
+    /// the default (`type`). Subclasses that don't specify their own `metaclass=` inherit the first
+    /// non-null one found among their bases — see ExecClassDef. Real CPython computes the winning
+    /// metaclass across every base for multi-metaclass conflicts; not needed for anything in scope
+    /// so far (single custom-metaclass chains, e.g. pydantic's BaseModel/ModelMetaclass).
+    /// </summary>
+    public PyClass? Metaclass { get; set; }
 
     public PyClass(string name, List<PyClass> bases)
     {

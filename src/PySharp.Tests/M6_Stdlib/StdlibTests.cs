@@ -319,6 +319,23 @@ public class InspectTests
                     Indented block.
             '''))
             """));
+
+    [Fact]
+    public void Signature_and_Parameter_have_real_constructors_not_just_the_internal_builder()
+        // Regression: Signature/Parameter previously only existed via the internal signature()
+        // builder path (a bare class with no __init__), so calling the real constructors directly —
+        // `Signature(parameters=[...], return_annotation=...)`, `Parameter(name, kind, ...)` — raised
+        // "takes no arguments". Found via pydantic's real `generate_model_signature` (utils.py),
+        // used while building a BaseModel subclass. See FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("['a', 'b']\nTrue\n1", Run("""
+            import inspect
+            p1 = inspect.Parameter('a', inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            p2 = inspect.Parameter('b', inspect.Parameter.KEYWORD_ONLY, default=1)
+            sig = inspect.Signature(parameters=[p1, p2], return_annotation=None)
+            print(list(sig.parameters.keys()))
+            print(sig.return_annotation is None)
+            print(sig.parameters['b'].default)
+            """));
 }
 
 /// <summary>itertools (chain/islice/zip_longest) and the collections.Counter/ChainMap additions —
@@ -332,6 +349,17 @@ public class ItertoolsAndCollectionsTests
         => Assert.Equal("[1, 2, 3, 4]", Run("""
             import itertools
             print(list(itertools.chain([1, 2], (3, 4))))
+            """));
+
+    [Fact]
+    public void Chain_from_iterable_flattens_an_iterable_of_iterables()
+        // Regression: chain was a plain PyBuiltinFunction with no attributes at all, so the real
+        // alternate-constructor classmethod `chain.from_iterable(...)` raised AttributeError. Found
+        // via pydantic's real `chain.from_iterable(...)` usage (class_validators.check_for_unused).
+        // See FASTAPI_PLAN.md Phase 1.9.
+        => Assert.Equal("[1, 2, 3, 4]", Run("""
+            import itertools
+            print(list(itertools.chain.from_iterable([[1, 2], (3, 4)])))
             """));
 
     [Fact]
