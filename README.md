@@ -450,28 +450,39 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 ### Works
 
 - **Language**: decorators, type hints (evaluated on access via `__annotations__`), classes,
-  generators, exceptions, comprehensions, f-strings.
-- **Present stdlib modules**: `json`, `yaml`, `collections`, `functools`, `enum`, `math`, `struct`,
-  `socket`, `ssl`, `threading`, `asyncio` (incl. `Lock`/`Event`/`Semaphore`/`Queue`, `wait`,
-  `add_reader`/`add_writer`, `run_in_executor`), `contextlib`, `dataclasses` (real field-driven
-  `__init__`/`__repr__`/`__eq__`, `frozen=True`), `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`,
-  `sys`, `time`, `io`, `string`, `types`; stub for `typing`.
+  generators, exceptions, comprehensions, f-strings, real (simplified) custom metaclasses
+  (`class X(Y, metaclass=M): ...` calls `M.__new__` for real).
+- **Present stdlib modules**: `json`, `yaml`, `collections` (`Counter`/`ChainMap`/`deque`),
+  `collections.abc`, `functools`, `enum`, `math`, `decimal`, `struct`, `socket`, `ssl`, `threading`,
+  `asyncio` (incl. `Lock`/`Event`/`Semaphore`/`Queue`, `wait`, `add_reader`/`add_writer`,
+  `run_in_executor`), `contextlib`, `dataclasses` (real field-driven `__init__`/`__repr__`/`__eq__`,
+  `frozen=True`, `is_dataclass`), `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`, `sys`, `time`, `io`,
+  `string`, `types`, `re` (a real `System.Text.RegularExpressions`-backed engine), `datetime`,
+  `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`, `itertools`, `operator`, `abc`, `inspect`
+  (`signature`/`Signature`/`Parameter`); real (not stub) `typing` (`get_type_hints`, `Annotated`,
+  generic-alias tracking).
 - **Done scenarios**: Azure IoT Hub device (MQTT, sync **and async**), a sync FastAPI-shaped HTTP API,
   an **async FastAPI-shaped HTTP API on a real asyncio event loop**
   ([async_api.py](samples/async_api.py)), an MQTT subscribe round-trip, and YAML+JSON
   (de)serialization — see [ROADMAP.md](ROADMAP.md) and [samples/](samples/).
-- **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt).
+- **In progress**: real **pydantic v1** (pure Python, from PyPI unmodified) — `import pydantic`
+  succeeds, and a `BaseModel` subclass constructs, validates real field types, raises real
+  `ValidationError`, and serializes via `.dict()`. See [FASTAPI_PLAN.md](FASTAPI_PLAN.md) for the
+  full probe-driven log and the current known gap (`.dict()` leaking a `__fields_set__` key, since
+  real `__slots__`-backed separate storage isn't implemented).
+- **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt,
+  pydantic v1).
 
 ### Does not work (yet)
 
 | Scenario | Verified blocker | Feasibility |
 |---|---|---|
 | **SQLite / Postgres** | the `sqlite3` module is missing (in CPython it is a C extension, not on PyPI) | **Feasible**: add a C# `sqlite3` DB-API module backed by `Microsoft.Data.Sqlite` (Postgres via `Npgsql`), following the other modules in `Modules/` |
-| **FastAPI** | `async`/`await` ✅ and an `asyncio` event loop ✅ now exist (see [async_api.py](samples/async_api.py)); still missing: `re`, `datetime`, `abc`, `contextlib`, `inspect`; `pydantic-core` is compiled in Rust (the mini-pip only installs pure wheels); starlette/uvicorn assume an ASGI stack | **Partly unblocked**: async is done and a hand-rolled async web framework runs; the real FastAPI package still needs a non-compiled pydantic + ASGI. See [ROADMAP.md](ROADMAP.md) scenario 2 |
+| **FastAPI** | `async`/`await` ✅, an `asyncio` event loop ✅, and pydantic v1 (`BaseModel` construct/validate) ✅ now exist; still missing: an ASGI stack (starlette/uvicorn) and full `__slots__` support | **Well underway**: async, the stdlib surface pydantic needs, and a working `BaseModel` are all done. What's left is the ASGI server layer. See [ROADMAP.md](ROADMAP.md) scenario 2 and [FASTAPI_PLAN.md](FASTAPI_PLAN.md) |
 
-Modules missing today and required by many real scenarios: `re` (regex), `datetime`, `decimal`,
-`abc`, `importlib`, `itertools`, `operator`, `sqlite3`. Adding one means writing a module in
-[src/PySharpLib/Modules/](src/PySharpLib/Modules/) and registering it in `StdlibModules.RegisterAll`.
+Modules still missing today: `importlib`, `sqlite3`, `email`/`http` (needed for the ASGI work above).
+Adding one means writing a module in [src/PySharpLib/Modules/](src/PySharpLib/Modules/) and
+registering it in `StdlibModules.RegisterAll`.
 
 ### Running original PyPI packages
 
@@ -481,9 +492,9 @@ often violate (outcomes below verified by running the mini-pip):
 
 | # | Constraint | What happens if it is missing |
 |---|---|---|
-| 1 | **Pure wheel** (`py3-none-any`, no C/Rust) | `install numpy` → rejected ("No pure-python wheel found"). Excludes pandas, psycopg2, cryptography, pydantic-core, orjson, lxml, … |
-| 2 | **Dependencies installed by hand** (the mini-pip does **not** resolve them) | `install pydantic` succeeds, but its `pydantic-core` dependency is not downloaded |
-| 3 | **Transitive imports within the ~36 present stdlib modules** + syntax in the subset | `six` fails on its first line (`from __future__ import absolute_import`); `pydantic` on `import importlib` |
+| 1 | **Pure wheel** (`py3-none-any`, no C/Rust) | `install numpy` → rejected ("No pure-python wheel found"). Excludes pandas, psycopg2, cryptography, pydantic-core (pydantic **v2**), orjson, lxml, … — **pydantic v1** is pure Python and works |
+| 2 | **Dependencies installed by hand** (the mini-pip does **not** resolve them) | `install pydantic==1.10.13` needs `install typing_extensions` done separately too; `install pydantic` (latest, v2) succeeds but its `pydantic-core` dependency can't be, since it isn't a pure wheel |
+| 3 | **Transitive imports within the ~50 present stdlib modules** + syntax in the subset | `six` fails on its first line (`from __future__ import absolute_import`); `pydantic==1.10.13` now imports cleanly (see [FASTAPI_PLAN.md](FASTAPI_PLAN.md)) |
 
 In practice a **pure, self-contained** package runs (or one whose dependencies are themselves pure)
 as long as it stays within the implemented stdlib and language subset. **paho-mqtt works because it

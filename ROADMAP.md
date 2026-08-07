@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0 + hardening ✅, 2a `async`/`await` ✅, 2b `asyncio` ✅) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, `re`, `datetime`, `inspect`, real `typing`, ~~`contextlib`~~ ✅, `abc`, ASGI, pydantic |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e ⚪ not started) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel ✅, more validators/`__slots__` open), ASGI |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -172,18 +172,31 @@ as the test bench.
   — delivered by scenario 1b's aiomqtt work (`AIOMQTT_PLAN.md` phases 2–3), which also added the
   event-loop reactor (`add_reader`/`add_writer`/`call_soon_threadsafe`/`run_in_executor`) this
   scenario will need for a real ASGI server.
-- **2c — cross-cutting stdlib.** `re` (regex — pervasive in routing/validation), `datetime`, `inspect`
-  (FastAPI reads signatures at runtime), **real** `typing` (not the current stub: needs
-  `get_type_hints`, `Annotated`, …), ~~`contextlib`~~ ✅ (scenario 1b), `abc`, `importlib`, `email`/`http`
-  for the HTTP details.
-- **2d — data validation (pydantic).** `pydantic` v2 depends on `pydantic-core` **compiled in Rust** →
-  a wall. Options to decide: (i) pydantic **v1**, which is pure Python; (ii) a C# shim reimplementing
-  the core; (iii) a minimal ad-hoc validation model for the scenario.
-- **2e — ASGI server + FastAPI.** uvicorn is async-native. Options: a mini ASGI server written over
-  the C# `socket`, or starlette (pure but with async dependencies).
+- **2c — cross-cutting stdlib.** ✅ **Done** (closed as part of the pydantic v1 probe-driven push — see
+  `FASTAPI_PLAN.md` Phase 1). `re` (a full `System.Text.RegularExpressions`-backed engine), `datetime`,
+  `inspect` (`signature`/`Signature`/`Parameter`, incl. their real constructors, not just the internal
+  builder path), real `typing` (`get_type_hints`, `Annotated`, generic-alias tracking with real
+  `__origin__`/`__args__`, the generalized `__mro_entries__` protocol), ~~`contextlib`~~ ✅ (scenario
+  1b), `abc`, `pathlib`, `weakref`, `ipaddress`, `pickle`, `colorsys`, `decimal`, `complex`. `email`/
+  `http` for the HTTP details remain open for 2e.
+- **2d — data validation (pydantic).** 🟡 **In progress**, pydantic **v1** chosen (pure Python, no
+  `pydantic-core` Rust wall). `import pydantic` succeeds end to end; a `BaseModel` subclass now
+  constructs, validates real field types, raises real `ValidationError` on bad input, and serializes
+  via `.dict()`. Getting there required building real (simplified) **custom-metaclass support** into
+  the interpreter's class-statement execution (`ExecClassDef`) — the first scenario where "custom
+  metaclasses are ignored" (a deliberate v1 simplification) actually blocked something, since real
+  pydantic's `ModelMetaclass.__new__` must run while `class User(BaseModel): ...` executes to build
+  `__config__`/`__fields__`/validators. Known remaining gap: `.dict()` leaks a `__fields_set__` key,
+  since PySharp doesn't implement real `__slots__`-backed storage separate from an instance's regular
+  attributes. Full phased log in `FASTAPI_PLAN.md`.
+- **2e — ASGI server + FastAPI.** ⚪ Not started. uvicorn is async-native. Options: a mini ASGI server
+  written over the C# `socket`, or starlette (pure but with async dependencies).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
-handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp.
+handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
+scenario-2 status, including the pydantic v1 probe-driven blow-by-blow, lives in `FASTAPI_PLAN.md` —
+this roadmap entry is kept in sync at each major checkpoint but the plan doc is the live source of
+truth while 2d/2e are in progress.
 
 ### Scenario 3 — SQL access ⚪
 
@@ -247,6 +260,7 @@ and *which scenario drove it*.
 | 5 — MQTT subscribe | *none* — paho's subscribe side already ran | — |
 | 9 — JSON + YAML | new stdlib module **`yaml`** (safe_load/dump, PyYAML subset) | [YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs); test [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs) |
 | 1b — aiomqtt | new stdlib module **`contextlib`** (`contextmanager`/`suppress`, needed `PyGenerator.ThrowInto` — inject an exception at a suspended `yield`, like `gen.throw()`); **`asyncio.Queue`/`Lock`/`Event`/`Semaphore`/`BoundedSemaphore`**, **`asyncio.wait`/`FIRST_COMPLETED`**; event-loop **`add_reader`/`add_writer`/`call_soon_threadsafe`/`run_in_executor`** (a `Socket.Select`-based poller thread + a `SocketModule` fd→`Socket` registry); real **`dataclasses`** field-driven `__init__`/`__repr__`/`__eq__`/frozen generation (walks the MRO so a no-new-fields subclass still inherits its base's fields); `types` module (`TracebackType`); `sys.version_info` rich comparison against a tuple; `typing.Concatenate`/`Self`/`TypeAlias`/`ParamSpec`; `isinstance(x, int)` now recognizes `IntEnum` members; `Interp.SetAttr`'s `__setattr__` dispatch now accepts a builtin (not just user-defined) hook; `ssl.CertificateError` (alias of `SSLCertVerificationError`); `create_task`/`loop.create_task` relaxed to accept a bare `Future` | [ContextlibModule.cs](src/PySharpLib/Modules/ContextlibModule.cs), [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs), [MiscModules.cs](src/PySharpLib/Modules/MiscModules.cs), [SocketModule.cs](src/PySharpLib/Modules/SocketModule.cs), [SslModule.cs](src/PySharpLib/Modules/SslModule.cs), [SysModule.cs](src/PySharpLib/Modules/SysModule.cs), [Builtins.cs](src/PySharpLib/Builtins/Builtins.cs), [Interp.cs](src/PySharpLib/Interpretation/Interp.cs), [PyGenerator.cs](src/PySharpLib/Runtime/PyGenerator.cs); full log in `AIOMQTT_PLAN.md` |
+| 2c/2d — pydantic v1 (real dependency-chain probe) | **~70 real gaps closed** driving `import pydantic` from failing to succeeding, then a `BaseModel` subclass to constructing/validating/`.dict()`-ing: new stdlib modules `re` (real regex engine), `datetime`, `ipaddress` (incl. real `_BaseAddress`/`_BaseNetwork` base classes), `pathlib`, `weakref`, `pickle`, `colorsys`; real `typing`/`types` metaprogramming (`get_type_hints`, generic-alias tracking with real `__origin__`/`__args__`, the generalized `__mro_entries__` protocol enabling `TypedDict` as a base class, `types.new_class`/`resolve_bases`/`prepare_class`, the 3-arg `type(name, bases, ns)` form); real (simplified) **custom-metaclass support** in `ExecClassDef` (`class X(Y, metaclass=M): ...` now calls `M.__new__` for real, with `super().__new__`/direct stub-base `.__new__` access both bottoming out at a real class-build fallback); `object.__setattr__(obj, '__dict__', newdict)` bulk-namespace-replace; `issubclass`/`isinstance` accepting builtin types as either argument; `dict.keys()` as a real (order-preserving) dict_keys-shaped view usable with the set operators; `v.__class__` returning the real constructible builtin type instead of a bare stand-in. Two more generically important interpreter bugs found along the way (not pydantic-specific): `from pkg import name` was masking real fallback-import errors behind a generic message; `globals()`/`locals()` at true module top level leaked writes into the shared builtins module. Full phased blow-by-blow (every fix with its own regression test) in `FASTAPI_PLAN.md` | `Modules/ReModule.cs`, `Modules/DateTimeModule.cs`, `Modules/IpAddressModule.cs`, `Modules/PathlibModule.cs`, `Modules/WeakrefModule.cs`, `Modules/PickleModule.cs`, `Modules/ColorSysModule.cs`, `Modules/MiscModules.cs`, `Modules/GenericAliasModule.cs`, `Interpretation/Interp.cs` (`ExecClassDef`, `TryGetAttr`), `Runtime/PyClass.cs` (`Metaclass`), `Runtime/PyDict.cs` (`PyDictKeysView`), `Builtins/Builtins.cs`; tests `M6_Stdlib`, `M4_Functions/MetaclassTests.cs`, `M16_FastApi`; full log in `FASTAPI_PLAN.md` |
 
 With `co_varnames` (names) + `__annotations__` (types, including `'return'`) the **signature is
 complete**: the framework injects every parameter, treating unannotated ones as `str` (like FastAPI).
@@ -266,17 +280,20 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 | Supported | Missing (out of scope for v1) |
 |---|---|
-| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`) | `match`, `exec()`/`eval()`, complex numbers (`1j`), exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, custom metaclasses |
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch) | `match`, `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not) |
 
 ### Axis B — Stdlib
 
-Implemented **~37 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+Implemented **~50 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
 `errno`, `io`, `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio`, `struct`, `hashlib`,
-`hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`, `enum`,
-`functools`, `math`, `logging`, `ctypes`; stubs for `typing`, `dataclasses`, `__future__`.
+`hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
+(`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
+`re` (real regex engine), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
+`decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`; real (not stub) `typing`
+and `dataclasses`; stub `__future__`.
 
-**High-priority missing** (surfaced by the scenario probes): `re`, `datetime`, `importlib`,
-`itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`, `decimal`, `sqlite3`.
+**High-priority missing**: `importlib`, `sqlite3`, `email`/`http` (needed for scenario 2e's ASGI
+work).
 
 ### Axis C — Native extensions (C/Rust)
 
@@ -338,12 +355,17 @@ in scenario 1).
 
 ## Progress indicators
 
-- Scenarios: **1, 1b, 5, 9 complete**; **2** started (phases 2.0/2.0+/2.0++/2.0+++ ✅); 3 and 4/6/7/8 to
-  do; native cross-cutting partial.
-- Stdlib modules: **~36 / ~200** of CPython (added `yaml`).
+- Scenarios: **1, 1b, 5, 9 complete**; **2** well underway (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic v1
+  `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); 3 and 4/6/7/8 to do; native
+  cross-cutting partial.
+- Stdlib modules: **~50 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
+  `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`;
+  `typing`/`dataclasses` upgraded from stubs to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
-  `'return'`, `__code__.co_varnames` ✅; `inspect.signature` ❌); `async`/`match`/`exec`/`complex`
-  missing (Axis A).
-- Tests: **547 green** (+18 for the `yaml` module).
+  `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
+  support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`match`/`exec` still missing
+  (Axis A); real `__slots__` (separate per-slot storage) still missing.
+- Tests: **776 green** (up from 547 — pydantic v1 probe-driven work across `FASTAPI_PLAN.md`, plus
+  aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
