@@ -107,7 +107,225 @@ public static class UrllibModule
             return new PyTuple(new object[] { scheme, netloc, path, "", query, fragment });
         });
 
+        d["SplitResult"] = SplitResultClass;
+        d["urlsplit"] = new PyBuiltinFunction("urlsplit", (interp, a, kwargs) =>
+        {
+            string url = (string)a[0];
+            bool allowFragments = a.Length > 2 ? PyOps.Truthy(interp, a[2])
+                : kwargs is null || !kwargs.TryGetValue("allow_fragments", out var af) || PyOps.Truthy(interp, af);
+            var (scheme, netloc, path, query, fragment) = SplitUrl(url, allowFragments);
+            return MakeSplitResult(scheme, netloc, path, query, fragment);
+        });
+        d["parse_qsl"] = new PyBuiltinFunction("parse_qsl", (interp, a, kwargs) =>
+        {
+            string qs = (string)a[0];
+            bool keepBlank = kwargs is not null && kwargs.TryGetValue("keep_blank_values", out var kb) && PyOps.Truthy(interp, kb);
+            var result = new List<object>();
+            foreach (var pair in qs.Split('&', ';'))
+            {
+                if (pair.Length == 0)
+                    continue;
+                int eq = pair.IndexOf('=');
+                string key = eq >= 0 ? pair[..eq] : pair;
+                string value = eq >= 0 ? pair[(eq + 1)..] : "";
+                if (eq < 0 && !keepBlank)
+                    continue;
+                if (value.Length == 0 && !keepBlank && eq >= 0)
+                    continue;
+                result.Add(new PyTuple(new object[] { Unquote(key.Replace('+', ' ')), Unquote(value.Replace('+', ' ')) }));
+            }
+            return new PyList(result);
+        });
+
         return m;
+    }
+
+    /// <summary>Real (not stubbed) urlsplit algorithm — ported from CPython's own, scoped to the
+    /// common `scheme://netloc/path?query#fragment` / `path?query` shapes real code actually builds
+    /// (no RFC-3986 percent-encoded-scheme edge cases, no scheme-specific netloc allowlist). Found
+    /// via starlette's real `urlsplit`/`SplitResult` usage (datastructures.URL). See
+    /// FASTAPI_PLAN.md.</summary>
+    private static (string Scheme, string Netloc, string Path, string Query, string Fragment) SplitUrl(string url, bool allowFragments)
+    {
+        string scheme = "", netloc = "", query = "", fragment = "";
+
+        int colon = url.IndexOf(':');
+        if (colon > 0 && char.IsLetter(url[0])
+            && url[..colon].All(c => char.IsLetterOrDigit(c) || c is '+' or '-' or '.'))
+        {
+            scheme = url[..colon].ToLowerInvariant();
+            url = url[(colon + 1)..];
+        }
+
+        if (url.StartsWith("//", StringComparison.Ordinal))
+        {
+            int end = url.Length;
+            foreach (char stop in "/?#")
+            {
+                int idx = url.IndexOf(stop, 2);
+                if (idx >= 0 && idx < end)
+                    end = idx;
+            }
+            netloc = url[2..end];
+            url = url[end..];
+        }
+
+        if (allowFragments)
+        {
+            int hash = url.IndexOf('#');
+            if (hash >= 0)
+            {
+                fragment = url[(hash + 1)..];
+                url = url[..hash];
+            }
+        }
+
+        int q = url.IndexOf('?');
+        if (q >= 0)
+        {
+            query = url[(q + 1)..];
+            url = url[..q];
+        }
+
+        return (scheme, netloc, url, query, fragment);
+    }
+
+    private static readonly string[] SplitResultFields = { "scheme", "netloc", "path", "query", "fragment" };
+    public static readonly PyClass SplitResultClass = BuildSplitResultClass();
+
+    private static PyClass BuildSplitResultClass()
+    {
+        var cls = new PyClass("SplitResult", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"SplitResult.{n}", fn);
+
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            for (int i = 0; i < SplitResultFields.Length; i++)
+            {
+                object value = i + 1 < a.Length ? a[i + 1]
+                    : kwargs is not null && kwargs.TryGetValue(SplitResultFields[i], out var v) ? v
+                    : throw PyErr.TypeError($"SplitResult() missing argument: '{SplitResultFields[i]}'");
+                inst.Dict[SplitResultFields[i]] = value;
+            }
+            return PyNone.Instance;
+        });
+        Add("geturl", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string scheme = (string)inst.Dict["scheme"], netloc = (string)inst.Dict["netloc"],
+                path = (string)inst.Dict["path"], query = (string)inst.Dict["query"], fragment = (string)inst.Dict["fragment"];
+            string url = netloc.Length > 0 || path.StartsWith("//", StringComparison.Ordinal) ? $"//{netloc}{path}" : path;
+            if (scheme.Length > 0)
+                url = $"{scheme}:{url}";
+            if (query.Length > 0)
+                url += $"?{query}";
+            if (fragment.Length > 0)
+                url += $"#{fragment}";
+            return url;
+        });
+        Add("__getitem__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            int i = (int)PyOps.AsBigInt(a[1], "index");
+            if (i < 0)
+                i += SplitResultFields.Length;
+            if (i < 0 || i >= SplitResultFields.Length)
+                throw PyErr.IndexError("SplitResult index out of range");
+            return inst.Dict[SplitResultFields[i]];
+        });
+        Add("__len__", (_, _, _) => new System.Numerics.BigInteger(SplitResultFields.Length));
+        Add("__iter__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            return new PyIterator(SplitResultFields.Select(f => inst.Dict[f]).GetEnumerator());
+        });
+        Add("__eq__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var self = SplitResultFields.Select(f => inst.Dict[f]).ToArray();
+            var other = a[1] switch
+            {
+                PyInstance oi when oi.Class == cls => SplitResultFields.Select(f => oi.Dict[f]).ToArray(),
+                PyTuple t => t.Items,
+                _ => null,
+            };
+            return other is not null && self.Length == other.Length && self.Zip(other).All(p => interp.RichEquals(p.First, p.Second));
+        });
+        Add("__repr__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            return $"SplitResult({string.Join(", ", SplitResultFields.Select(f => $"{f}={PyOps.Repr(interp, inst.Dict[f])}"))})";
+        });
+
+        (string? User, string? Pass, string Host, int? Port) SplitNetloc(PyInstance inst)
+        {
+            string netloc = (string)inst.Dict["netloc"];
+            string? user = null, pass = null;
+            int at = netloc.LastIndexOf('@');
+            if (at >= 0)
+            {
+                string userinfo = netloc[..at];
+                netloc = netloc[(at + 1)..];
+                int c = userinfo.IndexOf(':');
+                user = c >= 0 ? userinfo[..c] : userinfo;
+                pass = c >= 0 ? userinfo[(c + 1)..] : null;
+            }
+            string host = netloc;
+            int? port = null;
+            if (netloc.StartsWith('[') && netloc.Contains(']'))
+            {
+                int close = netloc.IndexOf(']');
+                host = netloc[1..close];
+                string rest = netloc[(close + 1)..];
+                if (rest.StartsWith(':') && int.TryParse(rest[1..], out var p1))
+                    port = p1;
+            }
+            else
+            {
+                int colon = netloc.LastIndexOf(':');
+                if (colon >= 0 && int.TryParse(netloc[(colon + 1)..], out var p2))
+                {
+                    host = netloc[..colon];
+                    port = p2;
+                }
+            }
+            return (user, pass, host.ToLowerInvariant(), port);
+        }
+
+        cls.Dict["hostname"] = new PyProperty { Getter = new PyBuiltinFunction("SplitResult.hostname", (_, a, _) =>
+        {
+            var (_, _, host, _) = SplitNetloc((PyInstance)a[0]);
+            return host.Length == 0 ? (object)PyNone.Instance : host;
+        }) };
+        cls.Dict["port"] = new PyProperty { Getter = new PyBuiltinFunction("SplitResult.port", (_, a, _) =>
+        {
+            var (_, _, _, port) = SplitNetloc((PyInstance)a[0]);
+            return port is null ? (object)PyNone.Instance : new System.Numerics.BigInteger(port.Value);
+        }) };
+        cls.Dict["username"] = new PyProperty { Getter = new PyBuiltinFunction("SplitResult.username", (_, a, _) =>
+        {
+            var (user, _, _, _) = SplitNetloc((PyInstance)a[0]);
+            return user is null ? (object)PyNone.Instance : user;
+        }) };
+        cls.Dict["password"] = new PyProperty { Getter = new PyBuiltinFunction("SplitResult.password", (_, a, _) =>
+        {
+            var (_, pass, _, _) = SplitNetloc((PyInstance)a[0]);
+            return pass is null ? (object)PyNone.Instance : pass;
+        }) };
+
+        return cls;
+    }
+
+    private static PyInstance MakeSplitResult(string scheme, string netloc, string path, string query, string fragment)
+    {
+        var inst = new PyInstance(SplitResultClass);
+        inst.Dict["scheme"] = scheme;
+        inst.Dict["netloc"] = netloc;
+        inst.Dict["path"] = path;
+        inst.Dict["query"] = query;
+        inst.Dict["fragment"] = fragment;
+        return inst;
     }
 
     private static string Quote(string s, string safe)

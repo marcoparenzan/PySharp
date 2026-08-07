@@ -40,6 +40,32 @@ public static class InspectModule
         d["Signature"] = SignatureClass;
         d["signature"] = new PyBuiltinFunction("signature", (interp, a, _) => BuildSignature(interp, a[0]));
 
+        // Real predicates (not stubs) over PySharp's actual runtime object shapes — found via
+        // starlette's/anyio's real dependency chain (route-handler introspection: is this a plain
+        // function, a bound method, a generator function, a coroutine function, ...). Async
+        // generators aren't a construct PySharp can produce at all (see ROADMAP.md), so
+        // isasyncgenfunction/isasyncgen are real in the sense that they correctly always report
+        // False, not a stub pretending otherwise. See FASTAPI_PLAN.md.
+        d["isfunction"] = new PyBuiltinFunction("isfunction", (_, a, _) => a[0] is PyFunction { IsGenerator: false, IsAsync: false });
+        d["ismethod"] = new PyBuiltinFunction("ismethod", (_, a, _) => a[0] is PyBoundMethod);
+        d["isclass"] = new PyBuiltinFunction("isclass", (_, a, _) => a[0] is PyClass);
+        d["ismodule"] = new PyBuiltinFunction("ismodule", (_, a, _) => a[0] is PyModule);
+        d["isbuiltin"] = new PyBuiltinFunction("isbuiltin", (_, a, _) => a[0] is PyBuiltinFunction);
+        d["isgeneratorfunction"] = new PyBuiltinFunction("isgeneratorfunction", (_, a, _) =>
+            a[0] is PyFunction { IsGenerator: true, IsAsync: false });
+        d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
+            a[0] is PyFunction { IsAsync: true });
+        d["isasyncgenfunction"] = new PyBuiltinFunction("isasyncgenfunction", (_, _, _) => false);
+        d["isgenerator"] = new PyBuiltinFunction("isgenerator", (_, a, _) => a[0] is PyGenerator);
+        d["iscoroutine"] = new PyBuiltinFunction("iscoroutine", (_, a, _) => a[0] is PyCoroutine);
+        d["isasyncgen"] = new PyBuiltinFunction("isasyncgen", (_, _, _) => false);
+        d["isawaitable"] = new PyBuiltinFunction("isawaitable", (_, a, _) => a[0] switch
+        {
+            PyCoroutine or PyFuture => true, // PyTask derives from PyFuture
+            PyInstance inst => inst.Class.TryLookup("__await__", out _),
+            _ => false,
+        });
+
         return m;
     }
 

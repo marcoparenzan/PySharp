@@ -1542,7 +1542,33 @@ public sealed class Interp
             throw PyErr.ValueError($"{PyOps.Repr(this, lookup)} is not a valid {cls.Name}");
         }
 
-        var instance = new PyInstance(cls);
+        // Real CPython's type.__call__ protocol: call the class's own __new__ if it defines one
+        // (only reachable here via a REAL user/parsed-Python `def __new__(cls, ...):` in the MRO —
+        // cls.TryLookup is a raw dict scan, so it never picks up the synthetic ObjectNewFallback
+        // GetAttr exposes for classes that DON'T define one, keeping this a no-op for the vast
+        // majority of classes exactly as before). __init__ is only called if the __new__ result is
+        // actually an instance of cls — real Python skips it entirely otherwise (the common pattern
+        // this unblocks: `def __new__(cls, ...): return really_different_object`, e.g.
+        // typing_extensions' real backported TypeVar, which returns a real typing.TypeVar instance
+        // rather than an instance of its own wrapper class). Found via typing_extensions' real
+        // `class TypeVar(metaclass=_TypeVarLikeMeta): def __new__(cls, name, ...): ...`.
+        object built;
+        bool hasCustomNew = cls.TryLookup("__new__", out var newMethod) && newMethod is PyFunction or PyBuiltinFunction;
+        if (hasCustomNew)
+        {
+            var newArgs = new object[args.Length + 1];
+            newArgs[0] = cls;
+            Array.Copy(args, 0, newArgs, 1, args.Length);
+            built = Call(newMethod!, newArgs, kwargs);
+        }
+        else
+        {
+            built = new PyInstance(cls);
+        }
+
+        if (built is not PyInstance instance || !instance.Class.IsSubclassOf(cls))
+            return built;
+
         if (cls.TryLookup("__init__", out var init))
         {
             var newArgs = new object[args.Length + 1];
@@ -1556,7 +1582,7 @@ public sealed class Interp
         {
             instance.Dict["args"] = new PyTuple(args);
         }
-        else if (args.Length > 0 || kwargs is { Count: > 0 })
+        else if (!hasCustomNew && (args.Length > 0 || kwargs is { Count: > 0 }))
         {
             throw PyErr.TypeError($"{cls.Name}() takes no arguments");
         }
@@ -1852,6 +1878,17 @@ public sealed class Interp
                 }
                 if (SetItems(a) is { } su1 && SetItems(b) is { } su2)
                     return MakeSetLike(a, su1.Union(su2));
+                // PEP 604: `X | Y` between two type-like objects (real classes, builtin type
+                // constructors, None, or an existing union/generic alias for chaining `X | Y | Z`)
+                // builds a real union — matching real CPython's `types.UnionType`, not a crash. Real
+                // CPython gates this on `type(X)` supporting `__or__`, which for our simplified model
+                // means "is this a type" rather than mirroring the full internal type-check; nothing
+                // in scope needs the distinction. Found via anyio's real `str | bytes | PathLike[str]
+                // | PathLike[bytes]` module-level type alias (abc/_eventloop.py), itself evaluated
+                // eagerly (PySharp doesn't defer annotations under `from __future__ import
+                // annotations` the way real CPython does — see FASTAPI_PLAN.md).
+                if (IsTypeLike(a) && IsTypeLike(b))
+                    return Modules.GenericAliasModule.MakeAlias(Modules.MiscModules.UnionTypeClass, new[] { a, b });
                 break;
             case "&":
                 if (SetItems(a) is { } si1 && SetItems(b) is { } si2)
@@ -1890,6 +1927,18 @@ public sealed class Interp
     /// frozenset, set | frozenset -> set).</summary>
     private static object MakeSetLike(object template, IEnumerable<object> items)
         => template is PyFrozenSet ? new PyFrozenSet(items) : new PySet(items);
+
+    /// <summary>Is `o` something PEP 604's `|` operator accepts: a real class, a builtin type
+    /// constructor (int/str/list/...), None (special-cased to NoneType in a union, same as real
+    /// CPython), or an existing generic-alias/union instance (so `X | Y | Z` chains left-to-right).</summary>
+    private static bool IsTypeLike(object o) => o switch
+    {
+        PyClass => true,
+        PyNone => true,
+        PyBuiltinFunction bf => Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bf.Name),
+        PyInstance inst => inst.Class == Modules.GenericAliasModule.GenericAliasClass,
+        _ => false,
+    };
 
     private static IEnumerable<byte> BytesOf(object o) => o switch
     {
@@ -2129,6 +2178,15 @@ public sealed class Interp
                 // List[int], Dict[str, int], SomeGeneric[T], ecc.: builds a real generic alias
                 // (__origin__/__args__) instead of a no-op, so typing.get_origin/get_args work.
                 return Modules.GenericAliasModule.Subscript(pc, index);
+            // PEP 585 (Python 3.9+): subscripting a builtin type directly — `list[int]`,
+            // `tuple[int, str]`, `dict[str, int]`, ... — not just `typing.List[int]`. Real CPython
+            // returns a `types.GenericAlias`; here it's the same real GenericAliasModule alias
+            // `List[int]` etc. already build, with the builtin function itself as `__origin__`
+            // (matching real `get_origin(tuple[int, str]) is tuple`). Found via real modern
+            // (`from __future__ import annotations`-era) type hints in typing_extensions/anyio using
+            // this syntax directly instead of the `typing.Tuple`-style spelling.
+            case PyBuiltinFunction bf when Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bf.Name):
+                return Modules.GenericAliasModule.MakeAlias(bf, index is PyTuple bt ? bt.Items : new[] { index });
             case ClrObject clr:
                 if (ClrBinder.TryGetIndex(clr, index, out var indexed))
                     return indexed;

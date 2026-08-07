@@ -12,9 +12,16 @@ namespace PySharpLib.Modules;
 /// <summary>io: StringIO e BytesIO in memoria (usate da print(file=...) e json).</summary>
 public static class IoModule
 {
+    /// <summary>Real (if bare) base class — real CPython's whole io hierarchy (RawIOBase,
+    /// BufferedIOBase, TextIOBase, and so StringIO/BytesIO/opened files) descends from it, so
+    /// `isinstance(f, IOBase)` is a common real check. Found via anyio's real `from io import
+    /// IOBase` (abc/_sockets.py). See FASTAPI_PLAN.md.</summary>
+    public static readonly PyClass IOBaseClass = new("IOBase", new List<PyClass>());
+
     public static PyModule Create()
     {
         var m = new PyModule("io");
+        m.Dict["IOBase"] = IOBaseClass;
         m.Dict["StringIO"] = BuildStringIo();
         m.Dict["BytesIO"] = BuildBytesIo();
         return m;
@@ -22,7 +29,7 @@ public static class IoModule
 
     private static PyClass BuildStringIo()
     {
-        var cls = new PyClass("StringIO", new List<PyClass>());
+        var cls = new PyClass("StringIO", new List<PyClass> { IOBaseClass });
         const string key = "__sb__";
         const string posKey = "__pos__";
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"StringIO.{name}", fn);
@@ -58,7 +65,7 @@ public static class IoModule
 
     private static PyClass BuildBytesIo()
     {
-        var cls = new PyClass("BytesIO", new List<PyClass>());
+        var cls = new PyClass("BytesIO", new List<PyClass> { IOBaseClass });
         const string key = "__buf__";
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"BytesIO.{name}", fn);
 

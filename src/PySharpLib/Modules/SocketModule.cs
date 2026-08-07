@@ -6,6 +6,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Numerics;
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -29,10 +30,31 @@ public static class SocketModule
     public static readonly PyClass GaiErrorClass = new("gaierror", new List<PyClass> { PyErr.OSErrorClass });
     public static readonly PyClass SocketClass = BuildSocketClass();
 
-    public static PyModule Create()
+    public static PyModule Create(Interp interp)
     {
         var m = new PyModule("socket");
         var d = m.Dict;
+
+        // Real IntEnum classes (built via real parsed Python source, the same trick used for other
+        // stdlib IntEnums in this project — see SignalModule) — not just the bare int constants
+        // below. Found via anyio's real `from socket import AddressFamily` (abc/_sockets.py), itself
+        // a real dependency of starlette. socket.SocketKind added alongside for the same reason,
+        // matching real CPython's shape (AF_INET/SOCK_STREAM etc. are literally enum members there,
+        // even though PySharp's own plain-int constants below stay as-is — real IntEnum values
+        // compare equal to plain ints, so nothing here needs to change to stay consistent). See
+        // FASTAPI_PLAN.md.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "from enum import IntEnum\n"
+                + "class AddressFamily(IntEnum):\n"
+                + "    AF_UNSPEC = 0\n"
+                + "    AF_UNIX = 1\n"
+                + "    AF_INET = 2\n"
+                + "    AF_INET6 = 10\n"
+                + "class SocketKind(IntEnum):\n"
+                + "    SOCK_STREAM = 1\n"
+                + "    SOCK_DGRAM = 2\n"),
+            m);
 
         d["AF_INET"] = new BigInteger(2);
         d["AF_INET6"] = new BigInteger(10);

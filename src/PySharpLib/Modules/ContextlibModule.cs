@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -21,6 +22,8 @@ public static class ContextlibModule
     public static readonly PyClass SuppressClass = BuildSuppressClass();
     public static readonly PyClass AbstractContextManagerClass = BuildAbstractContextManagerClass("AbstractContextManager", "__enter__", "__exit__");
     public static readonly PyClass AbstractAsyncContextManagerClass = BuildAbstractContextManagerClass("AbstractAsyncContextManager", "__aenter__", "__aexit__");
+    public static readonly PyClass ExitStackClass = BuildExitStackClass(isAsync: false);
+    public static readonly PyClass AsyncExitStackClass = BuildExitStackClass(isAsync: true);
 
     public static PyModule Create()
     {
@@ -29,6 +32,8 @@ public static class ContextlibModule
 
         d["AbstractContextManager"] = AbstractContextManagerClass;
         d["AbstractAsyncContextManager"] = AbstractAsyncContextManagerClass;
+        d["ExitStack"] = ExitStackClass;
+        d["AsyncExitStack"] = AsyncExitStackClass;
 
         d["contextmanager"] = new PyBuiltinFunction("contextmanager", (interp, a, _) =>
         {
@@ -155,5 +160,169 @@ public static class ContextlibModule
         var fut = new PyFuture { Loop = PyEventLoop.Running };
         fut.SetResult(result);
         return fut;
+    }
+
+    private const string CallbacksKey = "__callbacks__";
+
+    /// <summary>
+    /// contextlib.ExitStack / AsyncExitStack: real callback-stack semantics (enter_context/push/
+    /// callback/pop_all/close, unwound in LIFO order on __exit__, matching real CPython) — not a
+    /// stub. The async variant's async-specific entry points (enter_async_context/push_async_exit/
+    /// push_async_callback/aclose) support context managers whose __aenter__/__aexit__ resolve
+    /// immediately (an already-resolved Future, or a plain value — the shape every async context
+    /// manager written in this codebase so far actually has); one whose __aenter__/__aexit__ is a
+    /// real *suspending* coroutine raises NotImplementedError rather than silently hanging or
+    /// misbehaving, since driving an arbitrary inner coroutine to completion from a plain builtin
+    /// function (outside the calling coroutine's own suspension loop) isn't supported yet — a real,
+    /// clearly-scoped limitation, not attempted blind. Found via anyio's real `AsyncExitStack()`
+    /// usage (abc/_sockets.py) — referenced but not yet exercised beyond import, so this is ahead of
+    /// what's been observed to actually run; kept honest about that gap rather than guessed at.
+    /// See FASTAPI_PLAN.md.
+    /// </summary>
+    private static PyClass BuildExitStackClass(bool isAsync)
+    {
+        string className = isAsync ? "AsyncExitStack" : "ExitStack";
+        var cls = new PyClass(className, new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"{className}.{n}", fn);
+
+        static PyList Callbacks(PyInstance inst)
+        {
+            if (!inst.Dict.TryGet(CallbacksKey, out var v) || v is not PyList list)
+            {
+                list = new PyList();
+                inst.Dict[CallbacksKey] = list;
+            }
+            return list;
+        }
+
+        object UnwrapAsync(object awaited)
+        {
+            switch (awaited)
+            {
+                case PyFuture { IsDone: true } f:
+                    return f.GetResult();
+                case PyFuture:
+                case PyCoroutine:
+                    throw PyErr.NotImplementedError(
+                        $"{className}: only already-resolved async context managers/callbacks are supported so far");
+                default:
+                    return awaited;
+            }
+        }
+
+        Add("__init__", (_, a, _) =>
+        {
+            Callbacks((PyInstance)a[0]).Items.Clear();
+            return PyNone.Instance;
+        });
+        Add(isAsync ? "__aenter__" : "__enter__", (_, a, _) =>
+            isAsync ? MakeResolvedFuture(a[0]) : a[0]);
+
+        object RunExit(Interp interp, PyInstance inst, object excType, object exc, object tb)
+        {
+            var callbacks = Callbacks(inst).Items;
+            bool suppressed = false;
+            while (callbacks.Count > 0)
+            {
+                var cb = callbacks[^1];
+                callbacks.RemoveAt(callbacks.Count - 1);
+                var result = interp.Call(cb, new[] { excType, exc, tb });
+                if (isAsync)
+                    result = UnwrapAsync(result);
+                if (PyOps.Truthy(interp, result))
+                    suppressed = true;
+            }
+            return suppressed;
+        }
+
+        Add(isAsync ? "__aexit__" : "__exit__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            object excType = a.Length > 1 ? a[1] : PyNone.Instance;
+            object exc = a.Length > 2 ? a[2] : PyNone.Instance;
+            object tb = a.Length > 3 ? a[3] : PyNone.Instance;
+            var suppressed = RunExit(interp, inst, excType, exc, tb);
+            return isAsync ? MakeResolvedFuture(suppressed) : suppressed;
+        });
+        Add(isAsync ? "aclose" : "close", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            RunExit(interp, inst, PyNone.Instance, PyNone.Instance, PyNone.Instance);
+            return isAsync ? MakeResolvedFuture(PyNone.Instance) : PyNone.Instance;
+        });
+
+        Add("enter_context", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var cm = a[1];
+            var entered = interp.CallMethod(cm, "__enter__", Array.Empty<object>());
+            Callbacks(inst).Items.Add(new PyBuiltinFunction("_exit_wrapper", (interp2, exitArgs, _) =>
+                interp2.CallMethod(cm, "__exit__", exitArgs)));
+            return entered;
+        });
+        Add("push", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var exitObj = a[1];
+            if (interp.TryGetAttr(exitObj, "__exit__", out var unusedExitAttr))
+                Callbacks(inst).Items.Add(new PyBuiltinFunction("_exit_wrapper", (interp2, exitArgs, _) =>
+                    interp2.CallMethod(exitObj, "__exit__", exitArgs)));
+            else
+                Callbacks(inst).Items.Add(exitObj);
+            return exitObj;
+        });
+        Add("callback", (interp, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            var fn = a[1];
+            var extraArgs = a.Skip(2).ToArray();
+            Callbacks(inst).Items.Add(new PyBuiltinFunction("_callback_wrapper", (interp2, _, _) =>
+                interp2.Call(fn, extraArgs, kwargs)));
+            return fn;
+        });
+        Add("pop_all", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var newInst = new PyInstance(cls);
+            var newList = new PyList(Callbacks(inst).Items);
+            newInst.Dict[CallbacksKey] = newList;
+            Callbacks(inst).Items.Clear();
+            return newInst;
+        });
+
+        if (isAsync)
+        {
+            Add("enter_async_context", (interp, a, _) =>
+            {
+                var inst = (PyInstance)a[0];
+                var cm = a[1];
+                var entered = UnwrapAsync(interp.CallMethod(cm, "__aenter__", Array.Empty<object>()));
+                Callbacks(inst).Items.Add(new PyBuiltinFunction("_aexit_wrapper", (interp2, exitArgs, _) =>
+                    interp2.CallMethod(cm, "__aexit__", exitArgs)));
+                return MakeResolvedFuture(entered);
+            });
+            Add("push_async_exit", (interp, a, _) =>
+            {
+                var inst = (PyInstance)a[0];
+                var exitObj = a[1];
+                if (interp.TryGetAttr(exitObj, "__aexit__", out var unusedAexitAttr))
+                    Callbacks(inst).Items.Add(new PyBuiltinFunction("_aexit_wrapper", (interp2, exitArgs, _) =>
+                        interp2.CallMethod(exitObj, "__aexit__", exitArgs)));
+                else
+                    Callbacks(inst).Items.Add(exitObj);
+                return exitObj;
+            });
+            Add("push_async_callback", (interp, a, kwargs) =>
+            {
+                var inst = (PyInstance)a[0];
+                var fn = a[1];
+                var extraArgs = a.Skip(2).ToArray();
+                Callbacks(inst).Items.Add(new PyBuiltinFunction("_acallback_wrapper", (interp2, _, _) =>
+                    interp2.Call(fn, extraArgs, kwargs)));
+                return fn;
+            });
+        }
+
+        return cls;
     }
 }

@@ -601,14 +601,112 @@ long session once the author said "procedi" to continue past Phase 1's completio
 - Full suite green after every single step (776/776 by the end of this round, up from 759 at the
   start of it — 17 new tests); `git status` clean of scratch installs after each round.
 
-## Phase 3 — starlette + anyio (placeholder)
+## Phase 3 — starlette + anyio 🟡 in progress
 
-- [ ] 3.1 Get `import starlette` to succeed.
+- [ ] 3.1 Get `import starlette` to succeed. **In progress** — real starlette 1.4.1 (from PyPI,
+  unmodified) + its real `anyio` dependency drove a long probe-driven round (triggered by the
+  author's "puoi proseguire" after Phase 2's BaseModel milestone), closing ~20 real gaps: full
+  blow-by-blow in 3.1.1 below. **Current frontier**: a real, large-scope language gap — `match`/
+  `case` structural pattern matching (PEP 634, Python 3.10+), used by anyio's real
+  `_core/_tasks.py` (`match self.status: case TaskHandle.Status.PENDING: ...`). PySharp's parser
+  doesn't support `match` at all (a long-standing, explicitly out-of-v1-scope item — see
+  ROADMAP.md's Axis A gap list). Unlike everything closed in this round (real bugs/missing stdlib
+  surface, each a self-contained fix), this is a genuine new parser+interpreter language construct —
+  comparable in scope to the `async`/`await` work in Phase 2a of this same plan — deliberately left
+  for a dedicated look rather than attempted inline.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
   asyncio-backed shim (it supports multiple backends upstream; only the asyncio backend matters here)
   is a decision to make once its actual usage surface from starlette is visible.
+
+### 3.1.1 — the blow-by-blow (real starlette 1.4.1 + anyio probe)
+
+Every fix below was found by running real, unmodified `starlette`/`anyio` (both from PyPI) and
+fixing the next real error — same discipline as every phase before this one. Every fix has its own
+regression test; suite stayed green throughout.
+
+- **New stdlib modules, built for real** (not stubbed): `shlex` (a POSIX-aware tokenizer ported from
+  CPython's own algorithm — found via starlette's real `shlex(value, posix=True)` comma-splitting a
+  header value while respecting quoted commas); `contextvars` (`ContextVar`/`Token`/`Context`/
+  `copy_context`, scoped to a single current value per `ContextVar` rather than true per-task context
+  isolation — PySharp's coroutines already run cooperatively one at a time, so nothing observed needs
+  real forked-context propagation); `importlib` (`import_module`, delegating to the same real
+  `Importer` real `import` statements use); `textwrap` (`dedent`, ported faithfully); `signal`
+  (`Signals`, a real IntEnum built via real parsed Python source — no actual OS signal delivery/
+  handling attempted, nothing's called `signal.signal`/`getsignal` yet).
+- **`urllib.parse` grew real `SplitResult`/`urlsplit`/`parse_qsl`** — the pre-existing `urlparse`
+  only ever returned a raw positional tuple; starlette's own `URL` class relies on `urlsplit()`
+  returning a real tuple-like object with named fields (`.scheme`/`.netloc`/...), a `.geturl()`
+  method, and derived `.hostname`/`.port`/`.username`/`.password` properties parsed out of `netloc`
+  — all implemented for real, ported from CPython's own algorithm, verified against known-correct
+  values before writing tests.
+- **`inspect` grew real predicates** (`isfunction`/`ismethod`/`isclass`/`ismodule`/`isbuiltin`/
+  `isgeneratorfunction`/`iscoroutinefunction`/`isgenerator`/`iscoroutine`/`isawaitable`, plus
+  `isasyncgenfunction`/`isasyncgen` which correctly always report `False` since PySharp can't produce
+  async generators at all — see ROADMAP.md) — found via starlette's own route-handler introspection
+  and anyio's real `from inspect import isasyncgen` (transitively, via a nested import).
+- **`threading.local`**: real per-OS-thread attribute storage backed by `System.Threading.ThreadLocal`,
+  not a single shared dict — routed through the interpreter's existing real `__getattr__`/
+  `__setattr__` class-override dispatch (the native `ThreadLocal<PyDict>` lives in the instance's own
+  dict under a key Python code never asks for, so there's no recursion back through that dispatch).
+  Verified with real concurrent `threading.Thread`s each seeing independent values. Found via anyio's
+  real `threadlocals = threading.local()` (_core/_eventloop.py).
+- **`socket.AddressFamily`/`SocketKind`**: real IntEnum classes (built the same real-parsed-Python-
+  source way as `signal.Signals`) alongside the pre-existing plain-int `AF_INET`/`SOCK_STREAM`
+  constants (left untouched — real IntEnum values compare equal to plain ints, so nothing needed to
+  change for the two to stay consistent). Found via anyio's real `from socket import AddressFamily`.
+- **`io.IOBase`**: a real (if bare) base class, with `StringIO`/`BytesIO` now actually subclassing it
+  (previously unrelated classes) — real CPython's whole `io` hierarchy descends from it, so
+  `isinstance(f, IOBase)` is a common real check. Found via anyio's real `from io import IOBase`.
+- **`contextlib.ExitStack`/`AsyncExitStack`**: real LIFO callback-stack semantics
+  (`enter_context`/`push`/`callback`/`pop_all`/`close`, unwound in LIFO order on `__exit__`, matching
+  real CPython) — not a stub. The async variant's async-specific entry points
+  (`enter_async_context`/`push_async_exit`/`push_async_callback`/`aclose`) support context managers
+  whose `__aenter__`/`__aexit__` resolve immediately (an already-resolved `Future`, matching every
+  async context manager written in this codebase so far); one whose `__aenter__`/`__aexit__` is a
+  real *suspending* coroutine raises `NotImplementedError` rather than silently hanging or
+  misbehaving — a real, clearly-scoped limitation (driving an arbitrary inner coroutine to completion
+  from a plain builtin function, outside the calling coroutine's own suspension loop, isn't supported
+  yet), not attempted blind. Found via anyio's real `AsyncExitStack()` usage — referenced but not yet
+  exercised beyond import.
+- **PEP 604 union operator (`X | Y` between types)**: `str | bytes`-style expressions between two
+  type-like objects (real classes, builtin type constructors, `None`, or an existing union/generic
+  alias for chaining `X | Y | Z`) previously raised `TypeError: unsupported operand type(s) for |`,
+  since neither operand is a `PyInstance` (the only case the existing dunder-dispatch fallback
+  handled) — now builds a real generic-alias union (`types.UnionType` as origin), so
+  `get_origin`/`get_args` work. Found via anyio's real module-level `StrOrBytesPath: TypeAlias = str
+  | bytes | PathLike[str] | PathLike[bytes]` (abc/_eventloop.py) — a genuine **value expression**,
+  not just a type-hint comment, and evaluated *eagerly*, since PySharp doesn't defer annotations
+  under `from __future__ import annotations` the way real CPython does (a known, standing difference
+  — real CPython would never evaluate this expression at all under that future import; nothing in
+  scope has needed true deferred-annotation semantics yet, so this wasn't attempted).
+- **PEP 585 builtin generic subscripting (`tuple[int, str]`, `list[int]`, ...)**: subscripting a
+  builtin type *directly* (not just `typing.Tuple[...]`) raised `TypeError: 'function' object is not
+  subscriptable`, since builtin types are `PyBuiltinFunction`, not `PyClass` (the only case
+  `GetItem`'s generic-alias handling covered). Now builds the same real `GenericAliasModule` alias
+  `List[int]` etc. already build, with the builtin function itself as `__origin__` (matching real
+  `get_origin(tuple[int, str]) is tuple`). Found via real modern
+  (`from __future__ import annotations`-era) type hints in typing_extensions/anyio using this syntax
+  directly.
+- **The single most consequential fix of this round: `Instantiate()` now calls a class's own real
+  `__new__`, not just `__init__`.** Previously, constructing ANY instance always did `new
+  PyInstance(cls)` directly, completely ignoring a class's own `__new__` if it defined one — a real
+  gap for the common `def __new__(cls, ...): ...; return obj` idiom (sometimes returning an object
+  that ISN'T even an instance of the wrapper class at all). Now implements real CPython's
+  `type.__call__` protocol: call `cls.__new__(cls, *args, **kwargs)` if the class (or an ancestor)
+  defines one; only call `__init__` afterward if the result actually is an instance of `cls` (real
+  Python skips `__init__` entirely otherwise). Verified safe for every pre-existing class: `PyClass
+  .TryLookup` is a raw MRO dict-scan, so it never picks up the synthetic `object.__new__` fallback
+  `GetAttr` exposes for classes that don't define their own (added earlier in Phase 2) — meaning this
+  is a strict no-op for the overwhelming majority of classes that never define `__new__`, exactly as
+  before. Found via typing_extensions' real backported `class TypeVar(metaclass=_TypeVarLikeMeta):
+  def __new__(cls, name, ...): ...` (needed on any Python version without PEP 696, i.e. everywhere
+  PySharp reports itself as being) — calling `TypeVar('T')` raised `TypeError: TypeVar() takes no
+  arguments`, the exact same message the *unrelated* `Signature`/`Parameter` gap produced back in
+  Phase 1, both symptoms of the identical root cause finally fixed here for real, everywhere.
+- Full suite green after every single step above (799/799 by the end of this round, up from 776 at
+  the start of it — 23 new tests); `git status` clean of scratch installs after each round.
 
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
@@ -687,12 +785,32 @@ a builtin container/scalar became the real, constructible builtin type instead o
 non-constructible stand-in. Full blow-by-blow in Phase 2.2.1. 776/776 tests green (up from 759 at the
 start of this round).
 
-**Current known gap** (Phase 2.3, not a new architectural blocker): `BaseModel.dict()` leaks a
+**Current known gap in Phase 2** (not a new architectural blocker): `BaseModel.dict()` leaks a
 spurious `__fields_set__` key, because PySharp doesn't implement real `__slots__`-backed storage
 separate from an instance's regular attribute dict (everything lives in the same `PyInstance.Dict`
 today) — real pydantic relies on exactly that separation to keep `__fields_set__` out of
 `self.__dict__`. A real, but distinctly-scoped gap (its own architectural decision, same category as
-this round's metaclass work, not a quick fix) — captured as
-`PydanticSmokeTests.Basemodel_dict_output_is_the_current_frontier`.
-Phases 3–4 remain placeholders (see architecture decisions) until Phase 2 is scoped further from real
-probing (more field types, validators, and — separately — real `__slots__` support).
+the metaclass work) — captured as `PydanticSmokeTests.Basemodel_dict_output_is_the_current_frontier`.
+
+**Phase 3 is underway too** (started the same round, after the author's go-ahead to keep going): real
+starlette 1.4.1 + its real `anyio` dependency (both from PyPI, unmodified) closed ~20 more real gaps
+— new stdlib modules (`shlex`, `contextvars`, `importlib`, `textwrap`, `signal.Signals`), real
+`urllib.parse.SplitResult`/`urlsplit`/`parse_qsl`, real `inspect` predicates
+(`isfunction`/`iscoroutine`/etc.), real `threading.local` (genuine per-OS-thread storage), `io.IOBase`,
+`socket.AddressFamily`/`SocketKind`, real `contextlib.ExitStack`/`AsyncExitStack`, and — the most
+consequential fix of the round — **`Instantiate()` now calls a class's own real `__new__`**, not just
+`__init__` (previously ignored entirely; a real gap for the `def __new__(cls, ...): return obj` idiom,
+found via typing_extensions' real backported `TypeVar`). Also added real PEP 604 (`X | Y` union
+operator between types) and PEP 585 (`tuple[int, str]` builtin-generic subscripting) support, both hit
+as genuine *value expressions* (not just type-hint comments) in anyio's real source. Full blow-by-blow
+in 3.1.1. 799/799 tests green (up from 776 at the start of this round).
+
+**Current frontier for Phase 3 is a real language gap, not another stdlib/interpreter-plumbing fix**:
+anyio's real `_core/_tasks.py` uses a `match`/`case` statement (PEP 634, Python 3.10+ structural
+pattern matching) — PySharp's parser doesn't support `match` at all, a long-standing item explicitly
+out of v1 scope (see ROADMAP.md's Axis A). Comparable in size to the `async`/`await` language-core
+work in Phase 2a of this same plan — a genuine new parser+interpreter construct, not a quick fix —
+deliberately left for a dedicated look rather than attempted inline.
+
+Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
+probing (which will itself likely need `match` support to get much further).

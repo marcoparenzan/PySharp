@@ -301,6 +301,9 @@ public static class MiscModules
 
     /// <summary>type(None) — a singleton so callers can compare by identity, matching CPython.</summary>
     public static readonly PyClass NoneTypeClass = new("NoneType", new List<PyClass>());
+    /// <summary>The real class behind `X | Y` (PEP 604) — see Interp.cs's BinaryOp "|" handling,
+    /// which builds a real GenericAliasModule alias with this as `__origin__`, not a no-op/crash.</summary>
+    public static readonly PyClass UnionTypeClass = new("UnionType", new List<PyClass>());
 
     /// <summary>Minimal types module: just the names real-world scripts have needed so far.</summary>
     public static PyModule CreateTypes()
@@ -310,10 +313,11 @@ public static class MiscModules
         foreach (var name in new[]
         {
             "TracebackType", "FunctionType", "ModuleType", "GeneratorType",
-            "UnionType", "MethodType", "BuiltinFunctionType", "LambdaType", "CodeType",
+            "MethodType", "BuiltinFunctionType", "LambdaType", "CodeType",
             "FrameType", "CellType", "CoroutineType", "AsyncGeneratorType", "MappingProxyType",
         })
             d[name] = new PyClass(name, new List<PyClass>());
+        d["UnionType"] = UnionTypeClass;
         d["NoneType"] = NoneTypeClass;
         // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a
         // bare placeholder, so isinstance(List[int], types.GenericAlias) is correct too, matching

@@ -261,6 +261,18 @@ public class SocketTests
             """);
         Assert.Equal("True hello from server\n", output);
     }
+
+    [Fact]
+    public void AddressFamily_and_SocketKind_are_real_IntEnums_matching_the_plain_int_constants()
+        // Regression: AF_INET/SOCK_STREAM etc. were only ever plain BigInteger constants — real
+        // CPython also exposes them as real IntEnum members (socket.AddressFamily/SocketKind).
+        // Found via anyio's real `from socket import AddressFamily` (abc/_sockets.py), itself a real
+        // dependency of starlette. See FASTAPI_PLAN.md.
+        => Assert.Equal("True\nTrue\n", Py.Run("""
+            import socket
+            print(socket.AddressFamily.AF_INET == socket.AF_INET)
+            print(socket.SocketKind.SOCK_STREAM == socket.SOCK_STREAM)
+            """));
 }
 
 /// <summary>inspect.signature/Parameter (see FASTAPI_PLAN.md — the FastAPI-shaped need ROADMAP.md
@@ -335,6 +347,35 @@ public class InspectTests
             print(list(sig.parameters.keys()))
             print(sig.return_annotation is None)
             print(sig.parameters['b'].default)
+            """));
+
+    [Fact]
+    public void Predicates_report_real_runtime_object_shapes()
+        // Real predicates (not stubs), added over PySharp's actual runtime object shapes — found
+        // via starlette's/anyio's real dependency chain (route-handler introspection). Async
+        // generators aren't a construct PySharp can produce (see ROADMAP.md), so
+        // isasyncgenfunction/isasyncgen correctly always report False. See FASTAPI_PLAN.md.
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nTrue\nFalse", Run("""
+            import inspect
+
+            def plain(): pass
+            def gen():
+                yield 1
+            async def coro(): pass
+
+            class C:
+                def m(self): pass
+            c = C()
+
+            print(inspect.isfunction(plain))
+            print(inspect.ismethod(c.m))
+            print(inspect.isclass(C))
+            print(inspect.isgeneratorfunction(gen))
+            print(inspect.iscoroutinefunction(coro))
+            print(inspect.isgenerator(gen()))
+            print(inspect.isgenerator(plain))
+            print(inspect.iscoroutine(coro()))
+            print(inspect.isasyncgenfunction(plain))
             """));
 }
 
@@ -930,5 +971,332 @@ public class PickleTests
                 pickle.dumps(Foo())
             except pickle.PicklingError:
                 print("caught")
+            """));
+}
+
+/// <summary>shlex: a real POSIX-aware tokenizer, ported from CPython's own algorithm. Found via
+/// starlette's real `shlex(value, posix=True)` (datastructures.CommaSeparatedStrings, splitting a
+/// comma-separated header value while respecting quoted commas). See FASTAPI_PLAN.md.</summary>
+public class ShlexTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Shlex_splits_on_custom_whitespace_respecting_quotes()
+        => Assert.Equal("['a', 'b, c', 'd']", Run("""
+            from shlex import shlex
+            s = shlex('a, "b, c", d', posix=True)
+            s.whitespace = ","
+            s.whitespace_split = True
+            print([item.strip() for item in s])
+            """));
+
+    [Fact]
+    public void Split_handles_quoted_spaces()
+        => Assert.Equal("['foo', 'bar baz', 'qux']", Run("""
+            import shlex
+            print(shlex.split('foo "bar baz" qux'))
+            """));
+}
+
+/// <summary>urllib.parse: SplitResult/urlsplit/parse_qsl, real behavior ported from CPython's own
+/// algorithm — not just the pre-existing raw-tuple urlparse. Found via starlette's real
+/// `from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit` (datastructures.URL).
+/// See FASTAPI_PLAN.md.</summary>
+public class UrlSplitTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Urlsplit_parses_all_components_and_derived_netloc_properties()
+        => Assert.Equal(
+            "http user:pass@example.com:8080 /path/to a=1&b=2 frag\n"
+            + "example.com 8080 user pass\n"
+            + "http://user:pass@example.com:8080/path/to?a=1&b=2#frag",
+            Run("""
+                from urllib.parse import urlsplit
+                r = urlsplit("http://user:pass@example.com:8080/path/to?a=1&b=2#frag")
+                print(r.scheme, r.netloc, r.path, r.query, r.fragment)
+                print(r.hostname, r.port, r.username, r.password)
+                print(r.geturl())
+                """));
+
+    [Fact]
+    public void Urlsplit_handles_a_bare_path_with_no_scheme_or_netloc()
+        => Assert.Equal("  /path query=1\nNone None", Run("""
+            from urllib.parse import urlsplit
+            r = urlsplit("/path?query=1")
+            print(r.scheme, r.netloc, r.path, r.query)
+            print(r.hostname, r.port)
+            """));
+
+    [Fact]
+    public void SplitResult_is_directly_constructible_and_tuple_like()
+        => Assert.Equal("http://example.com/x\nhttp", Run("""
+            from urllib.parse import SplitResult
+            s = SplitResult(scheme="http", netloc="example.com", path="/x", query="", fragment="")
+            print(s.geturl())
+            print(s[0])
+            """));
+
+    [Fact]
+    public void Parse_qsl_splits_query_strings_with_and_without_blank_values()
+        => Assert.Equal("[('a', '1'), ('b', '2')]\n[('a', '1'), ('c', '')]", Run("""
+            from urllib.parse import parse_qsl
+            print(parse_qsl("a=1&b=2&c="))
+            print(parse_qsl("a=1&c=", keep_blank_values=True))
+            """));
+}
+
+/// <summary>contextvars: real get/set/reset/Context/copy_context — scoped to a single current value
+/// per ContextVar rather than true per-task context isolation (PySharp's coroutines already run
+/// cooperatively one at a time). Found via anyio's real `from contextvars import Token`/`Context`
+/// (a real dependency of starlette). See FASTAPI_PLAN.md.</summary>
+public class ContextVarsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Get_set_and_reset_round_trip_through_a_token()
+        => Assert.Equal("1\n5\n1", Run("""
+            import contextvars
+            var = contextvars.ContextVar("x", default=1)
+            print(var.get())
+            token = var.set(5)
+            print(var.get())
+            var.reset(token)
+            print(var.get())
+            """));
+
+    [Fact]
+    public void Get_without_a_default_raises_LookupError()
+        => Assert.Equal("caught", Run("""
+            import contextvars
+            try:
+                contextvars.ContextVar("y").get()
+            except LookupError:
+                print("caught")
+            """));
+
+    [Fact]
+    public void Copy_context_run_invokes_the_callable()
+        => Assert.Equal("5", Run("""
+            import contextvars
+            ctx = contextvars.copy_context()
+            def f(a, b):
+                return a + b
+            print(ctx.run(f, 2, 3))
+            """));
+}
+
+/// <summary>importlib.import_module: delegates to the real Importer real `import` statements use.
+/// Found via anyio's real `from importlib import import_module` (_core/_eventloop.py, picking an
+/// async backend module by name at runtime), itself a real dependency of starlette.
+/// See FASTAPI_PLAN.md.</summary>
+public class ImportlibTests
+{
+    [Fact]
+    public void Import_module_returns_the_real_module()
+        => Assert.Equal("3.141592653589793\n", Py.Run("""
+            import importlib
+            m = importlib.import_module("math")
+            print(m.pi)
+            """));
+}
+
+/// <summary>textwrap.dedent: ported faithfully from CPython's own algorithm. Found via anyio's real
+/// `from textwrap import dedent` (_core/_exceptions.py), itself a real dependency of starlette.
+/// See FASTAPI_PLAN.md.</summary>
+public class TextwrapTests
+{
+    [Fact]
+    public void Dedent_strips_the_common_leading_whitespace()
+        => Assert.Equal("'\\nhello\\n    world\\n'\n", Py.Run("""
+            import textwrap
+            print(repr(textwrap.dedent('''
+                hello
+                    world
+                ''')))
+            """));
+
+    [Fact]
+    public void Dedent_leaves_text_unchanged_when_margin_is_zero()
+        => Assert.Equal("'no indent\\n  some indent\\nno indent again'\n", Py.Run("""
+            import textwrap
+            print(repr(textwrap.dedent("no indent\n  some indent\nno indent again")))
+            """));
+}
+
+/// <summary>threading.local: real per-OS-thread attribute storage, not a single shared dict. Found
+/// via anyio's real `threading.local()` usage (_core/_eventloop.py), itself a real dependency of
+/// starlette. See FASTAPI_PLAN.md.</summary>
+public class ThreadingLocalTests
+{
+    [Fact]
+    public void Each_thread_sees_its_own_independent_values()
+    {
+        string output = Py.Run("""
+            import threading
+            tl = threading.local()
+            tl.x = 1
+
+            results = []
+            def worker(n):
+                tl.x = n
+                results.append(tl.x)
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            print(sorted(results))
+            print(tl.x)
+            """);
+        Assert.Equal("[0, 1, 2]\n1\n", output);
+    }
+
+    [Fact]
+    public void Unset_attribute_raises_AttributeError()
+        => Assert.Equal("caught\n", Py.Run("""
+            import threading
+            tl = threading.local()
+            try:
+                tl.y
+            except AttributeError:
+                print("caught")
+            """));
+}
+
+/// <summary>signal.Signals: a real IntEnum (built via real parsed Python source, so it gets the
+/// interpreter's own real IntEnum machinery for free) — not OS signal handling itself. Found via
+/// anyio's real `from signal import Signals` (a real dependency of starlette). See FASTAPI_PLAN.md.</summary>
+public class SignalTests
+{
+    [Fact]
+    public void Signals_members_compare_equal_to_the_module_level_constants()
+        => Assert.Equal("Signals.SIGINT\n2\nTrue\n15\n", Py.Run("""
+            import signal
+            print(signal.Signals.SIGINT)
+            print(signal.Signals.SIGINT.value)
+            print(signal.SIGINT == signal.Signals.SIGINT)
+            print(int(signal.SIGTERM))
+            """));
+}
+
+/// <summary>contextlib.ExitStack/AsyncExitStack: real LIFO callback-stack semantics. Found via
+/// anyio's real `AsyncExitStack()` usage (abc/_sockets.py), itself a real dependency of starlette.
+/// See FASTAPI_PLAN.md.</summary>
+public class ExitStackTests
+{
+    [Fact]
+    public void Callbacks_and_context_managers_unwind_in_LIFO_order()
+    {
+        string output = Py.Run("""
+            from contextlib import ExitStack, contextmanager
+            log = []
+
+            @contextmanager
+            def cm(name):
+                log.append(f"enter {name}")
+                yield name
+                log.append(f"exit {name}")
+
+            with ExitStack() as stack:
+                a = stack.enter_context(cm("a"))
+                b = stack.enter_context(cm("b"))
+                stack.callback(lambda: log.append("callback"))
+                print(a, b)
+
+            print(log)
+            """);
+        Assert.Equal("a b\n['enter a', 'enter b', 'callback', 'exit b', 'exit a']\n", output);
+    }
+
+    [Fact]
+    public void AsyncExitStack_is_importable_and_constructible()
+        => Assert.Equal("<class 'AsyncExitStack'>\n", Py.Run("""
+            import contextlib
+            print(contextlib.AsyncExitStack)
+            """));
+}
+
+/// <summary>Custom __new__ (real type.__call__ dispatch in Instantiate) and PEP 604/585 generic
+/// syntax — see FASTAPI_PLAN.md's Phase 3 log for the full context.</summary>
+public class InstantiationProtocolTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Custom_new_is_called_and_init_runs_only_when_it_returns_an_instance_of_the_class()
+        // Regression: Instantiate() used to always allocate `new PyInstance(cls)` directly,
+        // completely ignoring a class's own `__new__` — a real gap for the common
+        // `def __new__(cls, ...): ...; return obj` idiom, found via typing_extensions' real
+        // backported `TypeVar`/`ParamSpec` (metaclass=_TypeVarLikeMeta, __new__ returning a real
+        // typing.TypeVar instance, not an instance of the wrapper class itself).
+        => Assert.Equal("new called 5\ninit called 5\n5\nnot an instance at all\nPlain", Run("""
+            class Foo:
+                def __new__(cls, x):
+                    print("new called", x)
+                    return super().__new__(cls)
+                def __init__(self, x):
+                    print("init called", x)
+                    self.x = x
+
+            f = Foo(5)
+            print(f.x)
+
+            class Redirector:
+                def __new__(cls, *a, **kw):
+                    return "not an instance at all"
+
+            print(Redirector())
+
+            class Plain:
+                pass
+            print(type(Plain()).__name__)
+            """));
+
+    [Fact]
+    public void Union_operator_between_types_builds_a_real_union_not_a_crash()
+        // Regression: `X | Y` between two type-like objects (real classes, builtin type
+        // constructors, None) raised "unsupported operand type(s) for |" — real CPython (PEP 604)
+        // returns a real types.UnionType. Found via anyio's real module-level `str | bytes |
+        // PathLike[str] | PathLike[bytes]` type alias (abc/_eventloop.py), evaluated eagerly since
+        // PySharp doesn't defer annotations under `from __future__ import annotations`.
+        => Assert.Equal("True\n(<built-in function str>, <built-in function bytes>)", Run("""
+            import typing
+            x = str | bytes
+            print(typing.get_origin(x) is not None)
+            print(typing.get_args(x))
+            """));
+
+    [Fact]
+    public void Builtin_types_are_directly_subscriptable_PEP_585()
+        // Regression: `tuple[int, str]`/`list[int]` (PEP 585, subscripting a builtin type directly,
+        // not just `typing.Tuple`/`typing.List`) raised "'function' object is not subscriptable"
+        // since builtin types are PyBuiltinFunction, not PyClass. Found via real modern
+        // (`from __future__ import annotations`-era) type hints in typing_extensions/anyio.
+        => Assert.Equal("True\n(<built-in function int>, <built-in function str>)\nTrue", Run("""
+            import typing
+            x = tuple[int, str]
+            print(typing.get_origin(x) is tuple)
+            print(typing.get_args(x))
+            y = list[int]
+            print(typing.get_origin(y) is list)
+            """));
+}
+
+/// <summary>io.IOBase: real (if bare) base class real CPython's whole io hierarchy descends from.
+/// Found via anyio's real `from io import IOBase` (abc/_sockets.py), itself a real dependency of
+/// starlette. See FASTAPI_PLAN.md.</summary>
+public class IoBaseTests
+{
+    [Fact]
+    public void StringIO_and_BytesIO_are_real_IOBase_instances()
+        => Assert.Equal("True\nTrue\n", Py.Run("""
+            import io
+            print(isinstance(io.StringIO(), io.IOBase))
+            print(isinstance(io.BytesIO(), io.IOBase))
             """));
 }

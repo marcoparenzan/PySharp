@@ -51,7 +51,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("collections", _ => CollectionsModule.Create());
         importer.RegisterBuiltin("collections.abc", _ => CollectionsModule.CreateAbc());
         importer.RegisterBuiltin("threading", _ => ThreadingModule.Create());
-        importer.RegisterBuiltin("socket", _ => SocketModule.Create());
+        importer.RegisterBuiltin("socket", interp => SocketModule.Create(interp));
         importer.RegisterBuiltin("ssl", _ => SslModule.Create());
         importer.RegisterBuiltin("select", _ => SelectModule.Create());
         importer.RegisterBuiltin("enum", _ => EnumModule.Create());
@@ -63,6 +63,11 @@ public static class StdlibModules
         importer.RegisterBuiltin("ipaddress", _ => IpAddressModule.Create());
         importer.RegisterBuiltin("re", _ => ReModule.Create());
         importer.RegisterBuiltin("colorsys", _ => ColorSysModule.Create());
+        importer.RegisterBuiltin("shlex", _ => ShlexModule.Create());
+        importer.RegisterBuiltin("contextvars", _ => ContextVarsModule.Create());
+        importer.RegisterBuiltin("importlib", _ => ImportlibModule.Create(importer));
+        importer.RegisterBuiltin("textwrap", _ => TextwrapModule.Create());
+        importer.RegisterBuiltin("signal", interp => SignalModule.Create(interp));
         importer.RegisterBuiltin("pickle", _ => PickleModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());

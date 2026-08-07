@@ -714,7 +714,7 @@ public static class BuiltinsFactory
         _ => PyOps.TypeName(obj) == name,
     };
 
-    private static readonly HashSet<string> BuiltinTypeNames = new()
+    internal static readonly HashSet<string> BuiltinTypeNames = new()
     {
         "int", "float", "bool", "str", "bytes", "bytearray", "list", "tuple",
         "dict", "set", "frozenset", "range", "slice", "type",

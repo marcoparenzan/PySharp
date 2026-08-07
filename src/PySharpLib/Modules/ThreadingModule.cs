@@ -22,6 +22,7 @@ public static class ThreadingModule
         d["Condition"] = BuildConditionClass();
         d["Event"] = BuildEventClass();
         d["Timer"] = BuildTimerClass();
+        d["local"] = BuildLocalClass();
 
         d["current_thread"] = new PyBuiltinFunction("current_thread", (_, _, _) =>
         {
@@ -396,6 +397,57 @@ public static class ThreadingModule
             ((PyInstance)a[0]).Dict["_cancelled"] = true;
             return PyNone.Instance;
         });
+        return cls;
+    }
+
+    // ---------------------------------------------------------------- local
+
+    private const string ThreadLocalStorageKey = "__native_threadlocal__";
+
+    /// <summary>
+    /// threading.local: real per-OS-thread attribute storage (backed by System.Threading.ThreadLocal),
+    /// not a single shared dict. Attribute get/set are routed here via the interpreter's real
+    /// __getattr__/__setattr__ dispatch (SetAttr already calls a class's __setattr__ before falling
+    /// back to a plain instance-dict write); the ThreadLocal itself lives in the instance's own dict
+    /// under a key Python code never asks for, so there's no recursion back through that dispatch.
+    /// v1 scope: the plain `threading.local()` shape only — no support for a subclass's own
+    /// per-thread-initializing __init__ override. Found via anyio's real `threading.local()` usage
+    /// (_core/_eventloop.py), itself a real dependency of starlette. See FASTAPI_PLAN.md.
+    /// </summary>
+    private static PyClass BuildLocalClass()
+    {
+        var cls = new PyClass("local", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"local.{n}", fn);
+
+        static PyDict Storage(PyInstance inst)
+        {
+            if (!inst.Dict.TryGet(ThreadLocalStorageKey, out var tlObj))
+            {
+                tlObj = new ThreadLocal<PyDict>(() => new PyDict());
+                inst.Dict[ThreadLocalStorageKey] = tlObj;
+            }
+            return ((ThreadLocal<PyDict>)tlObj).Value!;
+        }
+
+        Add("__init__", (_, a, _) =>
+        {
+            Storage((PyInstance)a[0]); // ensures the current thread has its own dict from the start
+            return PyNone.Instance;
+        });
+        Add("__getattr__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string name = (string)a[1];
+            if (Storage(inst).TryGet(name, out var v))
+                return v;
+            throw PyErr.AttributeError($"'local' object has no attribute '{name}'");
+        });
+        Add("__setattr__", (_, a, _) =>
+        {
+            Storage((PyInstance)a[0])[(string)a[1]] = a[2];
+            return PyNone.Instance;
+        });
+
         return cls;
     }
 }
