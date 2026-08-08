@@ -394,8 +394,15 @@ in scenario 1).
   fastapi` resolves pydantic v2/Rust). Found and fixed a serious, general deadlock in the import
   system (a module-level generator expression evaluated during an import could spawn a real OS
   thread that blocked forever on a lock the importing thread wouldn't release until that same
-  generator finished). Currently past that into real pydantic v1 field-validator internals. 6/7/8 to
-  do; native cross-cutting partial.
+  generator finished). Root-caused two more real bugs in pydantic v1 field-validator internals:
+  `typing.NoneType`/`Optional[X]`'s implicit `None` member wasn't the same object `type(None)`
+  returns, and `issubclass(list, typing.List)`-style checks against typing generics didn't delegate
+  to their real origin — plus a second real concurrency bug the `issubclass` fix itself exposed
+  (`GenericAliasModule`'s origin-mapping dictionaries weren't thread-safe, causing the test suite to
+  hang intermittently under real parallel execution; fixed with `ConcurrentDictionary`). **Current
+  frontier is a real language-feature wall**: real `eval()` (Axis A, documented, never previously
+  exercised), needed for `Schema.update_forward_refs()`'s genuinely self-referential string forward
+  refs. 6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -459,8 +466,16 @@ in scenario 1).
   real OS thread that blocked forever on that lock — narrowed to only the module-registry
   bookkeeping); real **`email.message.Message`** ✅ (didn't exist at all); real **`Morsel._reserved`
   as an actual class attribute** ✅ (was a module-level name closed over by methods, invisible to
-  starlette's real `Morsel._reserved[...] = ...` module-level patch).
-- Tests: **911 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  starlette's real `Morsel._reserved[...] = ...` module-level patch); unified **`typing.NoneType`
+  with `type(None)`** ✅ (were two different objects; `Optional[X]`'s implicit `None` member is now
+  identical to what `None.__class__` returns); real **`issubclass` delegation for typing generics**
+  ✅ (`issubclass(list, typing.List)` now delegates to the real mapped origin, matching CPython's
+  `_SpecialGenericAlias.__subclasscheck__`); real **`inspect.Parameter.replace(**changes)`** ✅
+  (didn't exist); **fixed a second real concurrency bug** ✅ (`GenericAliasModule.OriginMap`/
+  `ArgsTransform` were plain, non-thread-safe `Dictionary`s written on every `import typing` and
+  read on every `issubclass` call — under real parallel test execution this could corrupt their
+  internal state; switched to `ConcurrentDictionary`).
+- Tests: **914 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

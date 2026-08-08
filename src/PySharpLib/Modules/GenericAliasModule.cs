@@ -21,10 +21,25 @@ public static class GenericAliasModule
     /// builtin), so `get_origin(List[int]) is list` matches CPython. Unmapped classes (arbitrary
     /// user generics, or typing names with no natural runtime counterpart like Union) use
     /// themselves as the origin, which is also correct CPython behavior.</summary>
-    private static readonly Dictionary<PyClass, object> OriginMap = new();
-    private static readonly Dictionary<PyClass, Func<object[], object[]>> ArgsTransform = new();
+    // ConcurrentDictionary, not plain Dictionary: these are static/shared across every Interp
+    // instance, written on every `import typing` (MiscModules.CreateTyping) and read on every
+    // `issubclass`/subscript call — under real concurrent test execution (xUnit parallelizes across
+    // test classes, each with its own PyEngine), a plain unsynchronized Dictionary being written by
+    // one thread's `import typing` while another thread reads it via `issubclass` can corrupt its
+    // internal bucket structure, which for .NET's Dictionary can manifest as a genuine infinite loop
+    // — found the hard way as a real test-suite hang once TryGetOrigin (below) started giving
+    // `issubclass` a reason to read this far more often than the old, narrower Subscript-only path.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<PyClass, object> OriginMap = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<PyClass, Func<object[], object[]>> ArgsTransform = new();
 
     public static void MapOrigin(PyClass typingClass, object realOrigin) => OriginMap[typingClass] = realOrigin;
+
+    /// <summary>The real-world origin a typing placeholder (e.g. `typing.List`) maps to, if any —
+    /// lets `issubclass`/`isinstance` treat `issubclass(list, typing.List)` as real CPython's own
+    /// `_SpecialGenericAlias.__subclasscheck__` does (delegating to the origin), instead of a flat
+    /// MRO check against an unrelated placeholder class with no real relationship to `list`.</summary>
+    public static bool TryGetOrigin(PyClass typingClass, out object origin) =>
+        OriginMap.TryGetValue(typingClass, out origin!);
 
     /// <summary>The `typing.Generic` placeholder class, set once by MiscModules.CreateTyping —
     /// __mro_entries__ needs to recognize it by identity to de-duplicate redundant `Generic[T]`

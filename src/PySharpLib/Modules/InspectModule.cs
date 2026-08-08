@@ -147,6 +147,15 @@ public static class InspectModule
             inst.Dict["annotation"] = kwargs is not null && kwargs.TryGetValue("annotation", out var ann) ? ann : Empty;
             return PyNone.Instance;
         });
+        // Real CPython's Parameter.replace(**changes): a new Parameter with the given field(s)
+        // overridden, defaulting to self's current values for anything not passed. Found via real
+        // pydantic v1's own generate_model_signature (utils.py): `var_kw.replace(name=var_kw_name)`.
+        cls.Dict["replace"] = new PyBuiltinFunction("Parameter.replace", (_, a, kwargs) =>
+        {
+            var self = (PyInstance)a[0];
+            object Get(string key) => kwargs is not null && kwargs.TryGetValue(key, out var v) ? v : self.Dict[key];
+            return MakeParameter((string)Get("name"), Get("kind"), Get("default"), Get("annotation"));
+        });
         return cls;
     }
 

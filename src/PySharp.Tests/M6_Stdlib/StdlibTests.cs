@@ -350,6 +350,20 @@ public class InspectTests
             """));
 
     [Fact]
+    public void Parameter_replace_returns_a_new_Parameter_with_the_given_fields_overridden()
+        // Regression: Parameter.replace(**changes) didn't exist — found via real pydantic v1's own
+        // generate_model_signature (utils.py): `var_kw.replace(name=var_kw_name)`, renaming a
+        // VAR_KEYWORD parameter while building a BaseModel's real __init__ signature.
+        => Assert.Equal("a\nb\nTrue", Run("""
+            import inspect
+            p = inspect.Parameter('a', inspect.Parameter.VAR_KEYWORD)
+            print(p.name)
+            p2 = p.replace(name='b')
+            print(p2.name)
+            print(p2.kind is inspect.Parameter.VAR_KEYWORD)
+            """));
+
+    [Fact]
     public void Predicates_report_real_runtime_object_shapes()
         // Real predicates (not stubs), added over PySharp's actual runtime object shapes — found
         // via starlette's/anyio's real dependency chain (route-handler introspection). Async
@@ -1749,6 +1763,49 @@ public class TypingOverrideTests
             print(Sub().f())
             print(Sub.f.__override__)
             """).TrimEnd('\n'));
+}
+
+/// <summary>Two real identity/inheritance bugs found via real pydantic v1's own field-validator
+/// machinery (reached from `import fastapi`, pinned to the last pydantic-v1-only combination —
+/// see FASTAPI_PLAN.md Phase 4). Both are general correctness issues, not fastapi-specific.</summary>
+public class TypingIdentityTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void NoneType_from_type_None_and_from_Optional_args_are_the_same_object()
+        // Regression: MiscModules.NoneTypeClass (typing.NoneType, and the implicit member
+        // Optional[X]/Union[X, None] append to their args tuple) was a completely separate PyClass
+        // object from what None.__class__/type(None) actually returned (via
+        // Builtins.TypeNamePseudoClass's own independent cache) — so `x in (None, NoneType)`-style
+        // identity/equality checks on a value pulled out of a real Optional[...]/Union[...]
+        // annotation silently failed. Found via real pydantic v1's own `is_none_type`
+        // (`type_ in NONE_TYPES`, pydantic/typing.py): `RuntimeError: no validator found for
+        // NoneType` even though the value visibly *was* NoneType — just not the *same* NoneType.
+        => Assert.Equal("True\nTrue", Run("""
+            from typing import Optional, get_args
+            NoneType = type(None)
+            member = get_args(Optional[int])[1]
+            print(member is NoneType)
+            print(member in (None, NoneType))
+            """));
+
+    [Fact]
+    public void Issubclass_of_a_typing_generic_delegates_to_its_real_origin()
+        // Regression: issubclass(list, typing.List) returned False — typing.List (and Set/
+        // FrozenSet/Dict/...) are bare placeholder classes with no real relationship to the actual
+        // builtin they represent, so a flat MRO-based issubclass check against them always failed,
+        // unlike real CPython's _SpecialGenericAlias.__subclasscheck__, which delegates to the real
+        // origin. Found via real pydantic v1's own schema.py resolving a Field(min_items=...)
+        // constraint on a real `Optional[List[str]]` field (fastapi's own openapi/models.py) —
+        // `issubclass(get_origin(List[str]), List)` came back False, so pydantic thought the
+        // constraint was silently unenforced and raised.
+        => Assert.Equal("True\nTrue\nTrue", Run("""
+            from typing import List, Set, FrozenSet, get_origin
+            print(issubclass(get_origin(List[str]), List))
+            print(issubclass(get_origin(Set[str]), Set))
+            print(issubclass(get_origin(FrozenSet[str]), FrozenSet))
+            """));
 }
 
 /// <summary>subprocess: real process spawning (System.Diagnostics.Process) — Popen with real

@@ -1528,6 +1528,71 @@ exact recipe at the start of any future round rather than defaulting to `install
 - 1 test added (`M5_Imports/ImportTests.cs`: the deadlock regression). Full suite green throughout:
   911/911 by the end of this round, up from 910 at the start of it.
 
+### 4.1.2 — root-caused: two real identity/inheritance bugs, then a real language-feature wall (`eval()`)
+
+Picking up the exact 4.1.1 frontier (`RuntimeError: no validator found for NoneType`). Root-caused
+via direct probing (constructing the exact failing expression in isolation, comparing `is`/`==`/
+`in` against real pydantic's own `is_none_type` logic) rather than blind guessing.
+
+- **`NoneType` from `type(None)` and from `Optional[X]`'s implicit member were two different
+  objects**: `MiscModules.NoneTypeClass` (`typing.NoneType`, and what `Optional`/`Union`'s
+  args-transform appends for the implicit `None` member) was built completely independently of
+  `Builtins.TypeNamePseudoClass`'s own lazily-created-and-cached "NoneType" pseudo-class — the thing
+  `None.__class__`/`type(None)` actually return. Confirmed directly: `get_args(Optional[int])[1] is
+  type(None))` was `False`. Real pydantic v1's own `is_none_type` (`type_ in NONE_TYPES`,
+  `pydantic/typing.py`) relies on exactly this identity holding. Fixed by special-casing
+  `TypeNamePseudoClass` to return `MiscModules.NoneTypeClass` directly for the "NoneType" name,
+  unifying both paths onto one canonical object (no import-order dependency, unlike a "seed the
+  cache once" approach would have needed).
+- **`issubclass(list, typing.List)` returned `False`**: `typing.List`/`Set`/`FrozenSet`/`Dict`/...
+  are bare placeholder `PyClass`es with no real relationship to the concrete builtin they represent
+  — a flat MRO-based `issubclass` check against them always failed, unlike real CPython's
+  `_SpecialGenericAlias.__subclasscheck__`, which delegates to the real origin
+  (`GenericAliasModule`'s existing `OriginMap`, e.g. `List` → `list`, already used for
+  `get_origin`/subscripting but never consulted by `issubclass`). Found via real pydantic v1's own
+  `schema.py` resolving a `Field(min_items=1)` constraint on a real `Optional[List[str]]` field
+  (fastapi's real `openapi/models.py`) — `issubclass(get_origin(List[str]), List)` silently came back
+  `False`, so pydantic concluded the constraint was unenforced and raised. Fixed by adding a public
+  `GenericAliasModule.TryGetOrigin` and consulting it as a fallback in `Builtins.IsSubclass`'s
+  `PyClass` case.
+- **`inspect.Parameter.replace(**changes)` didn't exist** — a small, independent gap found along the
+  way (real pydantic v1's own `generate_model_signature`, `pydantic/utils.py`:
+  `var_kw.replace(name=var_kw_name)`, renaming a `VAR_KEYWORD` parameter while building a real
+  `BaseModel`'s `__init__` signature). Added for real, returning a new `Parameter` with the given
+  field(s) overridden.
+- **New frontier — a real language-feature wall, not a gap-fill**: past all three fixes above,
+  `import fastapi` now reaches `Schema.update_forward_refs()` (fastapi's real `openapi/models.py`,
+  resolving genuinely self-referential JSON-Schema-shaped forward refs — `SchemaOrBool = Union[Schema,
+  bool]`, referenced as the *string* `"SchemaOrBool"` throughout `Schema`'s own field annotations,
+  defined only *after* the class body). Real CPython's forward-ref resolution fundamentally needs to
+  `eval()` the annotation string against the defining module's namespace — and real `eval()`/`exec()`
+  are a *documented, existing* Axis A gap (ROADMAP.md), previously never hit by any real scenario.
+  PySharp's own `typing._eval_type`/`get_type_hints` were built as honest passthroughs specifically
+  *because* nothing had exercised real deferred/string annotations yet — this is now that real
+  exercise. Implementing real `eval()` (even scoped to expression-evaluation, which is genuinely all
+  `eval()` itself ever does — unlike `exec()`, which also handles statements) is a new language
+  capability, not a quick fix — the same class of decision as the async-generator round: a natural
+  point to check in with the author before investing, rather than starting unprompted.
+- 3 tests added (`M6_Stdlib/StdlibTests.cs`: `Parameter_replace_returns_a_new_Parameter_with_the
+  _given_fields_overridden`, new `TypingIdentityTests` with 2 tests). Full suite green throughout:
+  914/914 by the end of this round, up from 911 at the start of it.
+- **A second real concurrency bug, found by the fix above making an existing latent one much more
+  likely to trigger**: `GenericAliasModule.OriginMap`/`ArgsTransform` were plain, non-thread-safe
+  `Dictionary`s — static/shared across every `Interp` instance, written on every `import typing`
+  (`MiscModules.CreateTyping`) and, after the `issubclass` fix above, read far more often (every
+  `issubclass` call, not just the narrower `Subscript` path that read them before). Under xUnit's
+  real concurrent test execution (parallelizing across test classes, each with its own `PyEngine`),
+  one thread's `import typing` writing to these dictionaries while another thread's `issubclass`
+  call read them could corrupt their internal bucket structure — which for .NET's plain `Dictionary`
+  can manifest as a genuine infinite loop, not just wrong results. Surfaced as the full test suite
+  hanging intermittently right after the `issubclass` fix landed (previously green; three repeat
+  runs made it obvious this was new, not flaky infrastructure). Fixed by switching both to
+  `ConcurrentDictionary` — thread-safe reads and writes, no lock needed given the access pattern
+  (rare writes at module-setup time, frequent reads). Confirmed with 4 consecutive clean full-suite
+  runs after the fix. No dedicated regression test (a genuine cross-thread race isn't reliably
+  reproducible in one deterministic test the way the import deadlock was); the fix itself is the
+  correctness fix, verified by the suite's now-consistent behavior under real parallel execution.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
@@ -1784,6 +1849,24 @@ this) could spawn a second real OS thread that blocked forever on that same lock
 import anything new — a real bug well beyond this one scenario, fixed by narrowing the lock to only
 the module-registry bookkeeping. Also fixed: `Morsel._reserved` needed to be a real class attribute
 (starlette 0.27.0 patches it directly), `email.message.Message` didn't exist, `typing.TypeGuard`
-didn't exist. 911/911 tests green (up from 910). **Current frontier**: real pydantic v1 field/
-validator internals — a `RuntimeError: no validator found for NoneType` deep in `ModelField.prepare`,
-not yet root-caused. Full blow-by-blow in 4.1.1.
+didn't exist. 911/911 tests green (up from 910).
+
+**Root-caused and fixed (4.1.2)**: the `NoneType` `RuntimeError` was two different objects both
+claiming to be `type(None)` — `typing.NoneType`/`Optional[X]`'s implicit member vs. what
+`None.__class__` actually returns — unified onto one canonical object. Also found and fixed
+`issubclass(list, typing.List)` returning `False` (typing generics now delegate `issubclass` to
+their real origin, matching CPython's `_SpecialGenericAlias.__subclasscheck__`), and added
+`inspect.Parameter.replace(**changes)`. Also found and fixed **a second real concurrency bug** the
+`issubclass` fix itself exposed: `GenericAliasModule.OriginMap`/`ArgsTransform` were plain,
+non-thread-safe `Dictionary`s, now read far more often — under xUnit's real parallel test execution
+this could corrupt their internal state (surfacing as the suite hanging intermittently), fixed by
+switching to `ConcurrentDictionary`. 914/914 tests green (up from 911), confirmed stable across
+multiple consecutive full-suite runs.
+
+**Current frontier: a real language-feature wall, not a gap-fill.** `import fastapi` now reaches
+`Schema.update_forward_refs()` resolving genuinely self-referential forward-ref strings
+(`"SchemaOrBool"`), which fundamentally needs real `eval()` — a documented, existing Axis A gap,
+never previously exercised by any real scenario. Implementing it (even scoped to expression
+evaluation, all `eval()` itself ever does) is a new language capability, the same class of decision
+as the async-generator round — a natural point to check in with the author. Full blow-by-blow in
+4.1.2.

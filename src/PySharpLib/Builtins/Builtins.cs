@@ -738,6 +738,16 @@ public static class BuiltinsFactory
     internal static object TypeNamePseudoClass(Interp interp, object o)
     {
         string name = PyOps.TypeName(o);
+        // Real CPython: type(None) is typing.NoneType is the exact same object Optional[X]/Union[X,
+        // None] normalize their implicit None member to. Must return the SAME canonical PyClass
+        // Modules.MiscModules.NoneTypeClass uses (not a second, independently-created pseudo-class),
+        // or `x in (None, NoneType)`-style identity/equality checks on a value pulled out of a real
+        // Optional[...]/Union[...] annotation silently fail. Found via real pydantic v1's own
+        // `is_none_type` (`type_ in NONE_TYPES`, pydantic/typing.py) during ModelField validator
+        // resolution — `RuntimeError: no validator found for NoneType` even though it visibly *is*
+        // NoneType, because it wasn't the same NoneType.
+        if (name == "NoneType")
+            return Modules.MiscModules.NoneTypeClass;
         if (interp.BuiltinsModule.Dict.TryGet(name, out var real) && real is PyBuiltinFunction)
             return real;
         lock (PseudoClasses)
@@ -786,7 +796,15 @@ public static class BuiltinsFactory
             case PyTuple t:
                 return t.Items.Any(x => IsSubclass(cls, x));
             case PyClass other:
-                return cls.IsSubclassOf(other);
+                // Real CPython: typing.List/Set/FrozenSet/etc. delegate their own __subclasscheck__
+                // to the real origin (list/set/frozenset/...) rather than behaving like an ordinary
+                // unrelated class — found via real pydantic v1's own schema.py doing exactly
+                // `issubclass(get_origin(List[str]), List)` while resolving a real Field(min_items=)
+                // constraint (fastapi's own openapi/models.py: `Annotated[Optional[List[str]],
+                // Field(min_items=1)]`), which otherwise silently came back False and made pydantic
+                // think the constraint was unenforced.
+                return cls.IsSubclassOf(other)
+                    || (Modules.GenericAliasModule.TryGetOrigin(other, out var mappedOrigin) && IsSubclass(cls, mappedOrigin));
             case PyBuiltinFunction bf:
                 // issubclass(cls, dict) where dict is the builtin conversion function: true if cls
                 // (or an ancestor) IS the pseudo-base-class a builtin base produces (see
