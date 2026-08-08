@@ -60,10 +60,10 @@ public static class ConcurrentModule
         }),
         ["set_exception"] = new PyBuiltinFunction("Future.set_exception", (interp, a, _) =>
         {
-            var exc = a[1] is PyNone ? null : new PyRaise((PyInstance)a[1]);
-            if (exc is null)
+            if (a[1] is PyNone)
                 throw PyErr.TypeError("exception must be an exception instance or None");
-            ((ConcurrentFuture)a[0]).SetException(interp, exc.Value);
+            var exc = new PyRaise((PyInstance)a[1]);
+            ((ConcurrentFuture)a[0]).SetException(interp, exc);
             return PyNone.Instance;
         }),
         ["add_done_callback"] = new PyBuiltinFunction("Future.add_done_callback", (interp, a, _) =>

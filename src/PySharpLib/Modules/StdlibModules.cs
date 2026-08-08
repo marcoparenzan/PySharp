@@ -70,6 +70,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("signal", interp => SignalModule.Create(interp));
         importer.RegisterBuiltin("concurrent", _ => ConcurrentModule.Create());
         importer.RegisterBuiltin("concurrent.futures", _ => ConcurrentModule.CreateFutures());
+        importer.RegisterBuiltin("stat", _ => StatModule.Create());
         importer.RegisterBuiltin("pickle", _ => PickleModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());

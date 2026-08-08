@@ -26,6 +26,26 @@ public static class GenericAliasModule
 
     public static void MapOrigin(PyClass typingClass, object realOrigin) => OriginMap[typingClass] = realOrigin;
 
+    /// <summary>The `typing.Generic` placeholder class, set once by MiscModules.CreateTyping —
+    /// __mro_entries__ needs to recognize it by identity to de-duplicate redundant `Generic[T]`
+    /// bases (see below).</summary>
+    public static PyClass? GenericPlaceholder { get; set; }
+
+    /// <summary>Does resolving base <paramref name="b"/> bring `Generic` into the MRO on its own
+    /// (a real class that already derives Generic, or a generic alias over one)?</summary>
+    private static bool OriginBringsInGeneric(object b)
+    {
+        if (GenericPlaceholder is null)
+            return false;
+        var cls = b switch
+        {
+            PyClass c => c,
+            PyInstance i when i.Class == GenericAliasClass && i.Dict.TryGet("__origin__", out var o) && o is PyClass oc => oc,
+            _ => null,
+        };
+        return cls is not null && cls.Mro.Contains(GenericPlaceholder);
+    }
+
     /// <summary>Rewrites the args tuple after subscripting, for aliases whose args aren't just
     /// "what was between the brackets" — e.g. `Optional[int]` is really `Union[int, NoneType]`.</summary>
     public static void MapArgsTransform(PyClass typingClass, Func<object[], object[]> transform)
@@ -92,7 +112,22 @@ public static class GenericAliasModule
         Add("__mro_entries__", (_, a, _) =>
         {
             var inst = (PyInstance)a[0];
-            return new PyTuple(new object[] { inst.Dict["__origin__"] });
+            var origin = inst.Dict["__origin__"];
+            // `Generic[T]` specifically contributes NOTHING when another base in the same class
+            // statement already brings `Generic` into the MRO transitively (e.g. `class Foo(
+            // Generic[T], SomeOtherGeneric[T])`, where SomeOtherGeneric already derives Generic) —
+            // otherwise bare `Generic` would appear twice in the resolved bases, an inconsistent
+            // MRO. Matches real CPython's typing.py de-duplication. Found via anyio's real
+            // `class StapledObjectStream(Generic[T_Item], ObjectStream[T_Item])` and the identical
+            // pattern throughout anyio/abc/_streams.py's whole stream-class hierarchy.
+            if (ReferenceEquals(origin, GenericPlaceholder) && a[1] is PyTuple rawBases)
+            {
+                bool impliedElsewhere = rawBases.Items.Any(b =>
+                    !ReferenceEquals(b, inst) && OriginBringsInGeneric(b));
+                if (impliedElsewhere)
+                    return new PyTuple(Array.Empty<object>());
+            }
+            return new PyTuple(new object[] { origin });
         });
 
         return cls;

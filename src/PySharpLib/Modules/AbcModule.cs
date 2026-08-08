@@ -20,6 +20,23 @@ public static class AbcModule
     public static readonly PyClass AbcMetaClass = new("ABCMeta", new List<PyClass>());
     public static readonly PyClass AbcClass = new("ABC", new List<PyClass>());
 
+    static AbcModule()
+    {
+        // Real ABCMeta.register(subclass): marks `subclass` a virtual subclass — isinstance/
+        // issubclass then recognize it without it appearing in the class's actual MRO. Both ABC
+        // and ABCMeta get it (real CPython: ABC.register is inherited from its metaclass, ABCMeta;
+        // PySharp doesn't run custom metaclasses for plain `class X(ABC):` subclasses, so it's
+        // simplest to give ABC itself the method directly). Found via os.PathLike's real
+        // `PathLike.register(pathlib.Path)` (anyio's `_core/_fileio.py`).
+        var register = new PyClassMethod(new PyBuiltinFunction("register", (_, a, _) =>
+        {
+            ((PyClass)a[0]).RegisterVirtualSubclass((PyClass)a[1]);
+            return a[1];
+        }));
+        AbcClass.Dict["register"] = register;
+        AbcMetaClass.Dict["register"] = register;
+    }
+
     public static PyModule Create()
     {
         var m = new PyModule("abc");

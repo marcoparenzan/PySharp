@@ -357,18 +357,18 @@ in scenario 1).
 
 - Scenarios: **1, 1b, 5, 9 complete**; **2** well underway (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic v1
   `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); **3** 🟡 in progress (starlette
-  import chain — ~20 stdlib/interpreter gaps closed plus `match`/`case`, current frontier
-  `concurrent.futures`); 4/6/7/8 to do; native cross-cutting partial.
+  import chain — ~28 stdlib/interpreter gaps closed plus `match`/`case`, current frontier
+  `subprocess`); 4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~50 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
-  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`; `typing`/`dataclasses` upgraded from stubs
-  to real implementations).
+  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`; `typing`/
+  `dataclasses` upgraded from stubs to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅; **`match`/`case`
-  (PEP 634)** ✅; `exec`/`eval` still missing (Axis A); real `__slots__` (separate per-slot storage)
-  still missing.
-- Tests: **825 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  (PEP 634)** ✅; real `abc.ABC.register()` virtual-subclass support ✅; `exec`/`eval` still missing
+  (Axis A); real `__slots__` (separate per-slot storage) still missing.
+- Tests: **836 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

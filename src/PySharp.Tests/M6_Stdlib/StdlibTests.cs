@@ -1300,3 +1300,236 @@ public class IoBaseTests
             print(isinstance(io.BytesIO(), io.IOBase))
             """));
 }
+
+/// <summary>concurrent.futures.Future: a real thread-safe future (distinct from asyncio's
+/// cooperative PyFuture), backed by a real .NET Monitor. Found via anyio's real `from
+/// concurrent.futures import Future` (from_thread.py/_backends/_asyncio.py), used to bridge a
+/// worker OS thread and the event-loop thread. See FASTAPI_PLAN.md Phase 3.</summary>
+public class ConcurrentFuturesTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Result_and_exception_resolve_after_set_result_set_exception()
+        => Assert.Equal(
+            "False False False\nTrue\nTrue 42\nNone\nTrue\ncaught boom",
+            Run("""
+                from concurrent.futures import Future
+
+                f = Future()
+                print(f.done(), f.running(), f.cancelled())
+                print(f.set_running_or_notify_cancel())
+                f.set_result(42)
+                print(f.done(), f.result())
+                print(f.exception())
+
+                f2 = Future()
+                f2.set_exception(ValueError("boom"))
+                print(f2.done())
+                try:
+                    f2.result()
+                except ValueError as e:
+                    print("caught", e)
+                """));
+
+    [Fact]
+    public void Cancel_makes_result_raise_CancelledError()
+        => Assert.Equal("True\nTrue True\ncancelled as expected", Run("""
+            from concurrent.futures import Future, CancelledError
+
+            f = Future()
+            print(f.cancel())
+            print(f.cancelled(), f.done())
+            try:
+                f.result()
+            except CancelledError:
+                print("cancelled as expected")
+            """));
+
+    [Fact]
+    public void Add_done_callback_runs_immediately_when_already_done_and_later_otherwise()
+        => Assert.Equal("[7]", Run("""
+            from concurrent.futures import Future
+
+            f = Future()
+            results = []
+            f.add_done_callback(lambda fut: results.append(fut.result()))
+            f.set_result(7)
+            print(results)
+            """));
+
+    [Fact]
+    public void Setting_result_twice_raises_InvalidStateError()
+        => Assert.Equal("invalid state: InvalidStateError", Run("""
+            from concurrent.futures import Future
+
+            f = Future()
+            f.set_result(1)
+            try:
+                f.set_result(2)
+            except Exception as e:
+                print("invalid state:", type(e).__name__)
+            """));
+}
+
+/// <summary>stat: S_IF*/S_IS* file-mode bitmask constants and predicates, ported from CPython's
+/// own Lib/stat.py. Found via starlette's real `stat.S_ISREG`/`S_ISDIR`/`S_ISLNK`/`S_ISSOCK`
+/// (responses.py/staticfiles.py). See FASTAPI_PLAN.md Phase 3.</summary>
+public class StatModuleTests
+{
+    [Fact]
+    public void S_IS_predicates_and_S_IMODE_match_real_bit_arithmetic()
+        => Assert.Equal("True False\nTrue False\nTrue\nTrue\n420\n", Py.Run("""
+            import stat
+            print(stat.S_ISREG(0o100644), stat.S_ISDIR(0o100644))
+            print(stat.S_ISDIR(0o040755), stat.S_ISREG(0o040755))
+            print(stat.S_ISLNK(0o120777))
+            print(stat.S_ISSOCK(0o140000))
+            print(stat.S_IMODE(0o100644))
+            """));
+}
+
+/// <summary>os.chmod: found via anyio's real `from os import PathLike, chmod` (_core/_sockets.py).
+/// On Windows (where this suite runs) real CPython itself only honors the user-write bit, toggling
+/// the read-only attribute — verified end to end against a real file, not just that it doesn't
+/// throw. See FASTAPI_PLAN.md Phase 3.</summary>
+public class OsChmodTests
+{
+    [Fact]
+    public void Chmod_toggles_the_real_files_read_only_attribute()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"pysharp_chmod_test_{Guid.NewGuid():N}.txt");
+        try
+        {
+            Py.Run($$"""
+                import os
+                with open(r"{{path}}", "w") as f:
+                    f.write("hi")
+                os.chmod(r"{{path}}", 0o400)
+                """);
+            Assert.True((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0);
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+            File.Delete(path);
+        }
+    }
+}
+
+/// <summary>abc.ABC/ABCMeta.register: real virtual-subclass registration — isinstance/issubclass
+/// recognize a registered class without it appearing in the actual MRO, matching real ABCMeta
+/// semantics. Found via anyio's real `os.PathLike.register(pathlib.Path)`-style usage chain
+/// (`_core/_fileio.py`). See FASTAPI_PLAN.md Phase 3.</summary>
+public class AbcRegisterTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Registered_class_and_its_subclasses_are_recognized_without_joining_the_MRO()
+        => Assert.Equal("True\nTrue\nTrue\nFalse", Run("""
+            import abc
+
+            class MyABC(abc.ABC):
+                pass
+
+            class Foo:
+                pass
+
+            MyABC.register(Foo)
+            print(isinstance(Foo(), MyABC))
+            print(issubclass(Foo, MyABC))
+
+            class Bar(Foo):
+                pass
+
+            print(issubclass(Bar, MyABC))
+            print(isinstance(3, MyABC))
+            """));
+
+    [Fact]
+    public void Os_PathLike_register_works_for_real()
+        => Assert.Equal("True", Run("""
+            import os
+
+            class PathishThing:
+                def __fspath__(self):
+                    return "x"
+
+            os.PathLike.register(PathishThing)
+            print(isinstance(PathishThing(), os.PathLike))
+            """));
+}
+
+/// <summary>typing.Generic[T]'s real __mro_entries__ de-duplication: a redundant `Generic[T]` base
+/// (already implied by another generic base) must contribute nothing, or the resolved bases list
+/// ends up with `Generic` twice and MRO computation fails outright. Found via anyio's real
+/// `class StapledObjectStream(Generic[T_Item], ObjectStream[T_Item])` and the same recurring
+/// pattern throughout anyio/abc/_streams.py's stream-class hierarchy. See FASTAPI_PLAN.md Phase 3.</summary>
+public class GenericMroDedupTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Redundant_Generic_base_does_not_break_MRO_computation()
+        => Assert.Equal("base\ntrue isinstance checks: True True", Run("""
+            from typing import Generic, TypeVar
+
+            T = TypeVar("T")
+
+            class Base(Generic[T]):
+                def hello(self):
+                    return "base"
+
+            class Sub(Generic[T], Base[T]):
+                pass
+
+            s = Sub()
+            print(s.hello())
+            print("true isinstance checks:", isinstance(s, Base), isinstance(s, Generic))
+            """));
+
+    [Fact]
+    public void Two_independent_generic_bases_both_remain_recognized()
+        => Assert.Equal("True True", Run("""
+            from typing import Generic, TypeVar
+
+            T = TypeVar("T")
+
+            class Left(Generic[T]):
+                pass
+
+            class Right(Generic[T]):
+                pass
+
+            class Both(Left[T], Right[T]):
+                pass
+
+            b = Both()
+            print(isinstance(b, Left), isinstance(b, Right))
+            """));
+}
+
+/// <summary>typing.override (PEP 698): found via anyio's real `from typing import override`. A
+/// static-checker marker with one real runtime side effect (`__override__ = True`), not a no-op.
+/// See FASTAPI_PLAN.md Phase 3.</summary>
+public class TypingOverrideTests
+{
+    [Fact]
+    public void Override_sets_the_marker_attribute_and_returns_the_function_unchanged()
+        => Assert.Equal("5\nTrue", Py.Run("""
+            from typing import override
+
+            class Base:
+                def f(self):
+                    return 0
+
+            class Sub(Base):
+                @override
+                def f(self):
+                    return 5
+
+            print(Sub().f())
+            print(Sub.f.__override__)
+            """).TrimEnd('\n'));
+}

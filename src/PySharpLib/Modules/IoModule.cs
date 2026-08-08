@@ -24,6 +24,9 @@ public static class IoModule
         m.Dict["IOBase"] = IOBaseClass;
         m.Dict["StringIO"] = BuildStringIo();
         m.Dict["BytesIO"] = BuildBytesIo();
+        m.Dict["SEEK_SET"] = (BigInteger)0;
+        m.Dict["SEEK_CUR"] = (BigInteger)1;
+        m.Dict["SEEK_END"] = (BigInteger)2;
         return m;
     }
 

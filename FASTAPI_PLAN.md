@@ -608,10 +608,14 @@ long session once the author said "procedi" to continue past Phase 1's completio
   author's "puoi proseguire" after Phase 2's BaseModel milestone), closing ~20 real gaps: full
   blow-by-blow in 3.1.1 below. That round's frontier — `match`/`case` structural pattern matching
   (PEP 634) — is now **done**: real parser + interpreter support landed (3.1.2 below), verified
-  directly against the anyio statement that originally blocked this phase. **Current frontier**:
-  `concurrent.futures` (no module named `concurrent` at all yet) — used by anyio's real
-  `from_thread.py`/`_backends/_asyncio.py` for its blocking-portal/worker-thread machinery. Found by
-  re-running the starlette+anyio probe past the fixed `match` statement.
+  directly against the anyio statement that originally blocked this phase. A further probe-driven
+  round past that (3.1.3 below) closed 6 more real gaps — `concurrent.futures`, `stat`, `os.chmod`,
+  real `abc.ABC.register()` virtual-subclass support, a `typing.Generic[T]` MRO-deduplication bug,
+  and `typing.override`. **Current frontier**: `subprocess` (no module named `subprocess` at all) —
+  used by anyio's real `_core/_subprocesses.py`. A real implementation (process spawning, pipes,
+  `Popen`, real async subprocess support integrated with PySharp's event loop) is comparable in
+  scope to `threading`/`asyncio` themselves — deliberately left for a dedicated round rather than
+  attempted inline, same reasoning as `match`/`case` before it.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
@@ -743,6 +747,64 @@ author's direct "match/case" follow-up request once this was identified as Phase
   including a test reproducing the exact real anyio `TaskHandle.Status.PENDING` scenario). Full suite
   green throughout: 825/825 by the end of this round, up from 799 at the start of it.
 
+### 3.1.3 — past `match`/`case`: 6 more real gaps (concurrent.futures, stat, chmod, ABC.register, Generic MRO, typing.override)
+
+Continuing the same starlette+anyio probe past the now-fixed `match` statement, same discipline as
+every round before it: run the real, unmodified packages, fix the next real error, verify manually
+against known-correct behavior, write a regression test, keep the suite green.
+
+- **`concurrent.futures.Future`**: a genuinely new kind of Future, distinct from asyncio's
+  `PyFuture` — that one is cooperative and single-threaded, driven by PySharp's own event loop, but
+  `concurrent.futures.Future` is meant to be set from one real OS thread and awaited from another
+  (anyio's `BlockingPortal` bridges a worker thread into the event-loop thread with exactly this).
+  Implemented for real with a new native `ConcurrentFuture` class backed by a real .NET `Monitor`
+  (matching CPython's own `threading.Condition`-based implementation): `result()`/`exception()`
+  genuinely block the calling OS thread until resolved (with real timeout support), `cancel()`/
+  `set_running_or_notify_cancel()`/`done()`/`running()`/`cancelled()` follow real CPython's state
+  machine, `add_done_callback` invokes immediately if already done, exceptions raised by a callback
+  are swallowed rather than propagating (matching real CPython), and calling `set_result`/
+  `set_exception` twice raises a real `InvalidStateError`. Verified against 4 hand-written probe
+  scenarios (normal resolution, exception, cancellation, double-set) before writing tests — every
+  result matched real CPython's documented behavior. Found via anyio's real `from concurrent.futures
+  import Future` (`from_thread.py`/`_backends/_asyncio.py`).
+- **`stat`**: the `S_IF*`/`S_IS*` file-mode bitmask constants and predicates (`S_ISREG`/`S_ISDIR`/
+  `S_ISLNK`/`S_ISSOCK`/`S_IMODE`/`S_IFMT`), ported faithfully from CPython's own `Lib/stat.py` (pure
+  bit arithmetic, so a straightforward direct port, not a guess). Found via starlette's real
+  `stat.S_ISREG(mode)`/`S_ISDIR`/`S_ISLNK` (`responses.py`/`staticfiles.py`) and anyio's `S_ISSOCK`.
+- **`os.chmod`**: real file-permission changes, not a no-op — `File.SetUnixFileMode` on non-Windows,
+  and on Windows (where this whole suite runs) the read-only-attribute toggle real CPython itself
+  falls back to there (Windows has no POSIX permission bits at all; CPython's own `os.chmod` on
+  Windows only honors the user-write bit for exactly this reason — a real, documented CPython
+  platform limitation, not a PySharp shortcut). Verified end to end against a real file (not just
+  "doesn't throw"). Found via anyio's real `from os import PathLike, chmod` (`_core/_sockets.py`).
+- **Real `abc.ABC`/`ABCMeta.register()`**: virtual-subclass registration, not previously implemented
+  at all. `PyClass` gained a `VirtualSubclasses` registry (`RegisterVirtualSubclass`), consulted by
+  `IsSubclassOf` alongside the real MRO — so `isinstance`/`issubclass` recognize a registered class
+  (and its own subclasses, transitively, exactly like real CPython) without it ever joining the
+  registering class's actual MRO. `os.PathLike` now derives from `abc.ABC` (matching real CPython's
+  `class PathLike(abc.ABC)`) purely to inherit `register` for free. Found via anyio's real
+  `PathLike.register(...)`-style usage reachable from `_core/_fileio.py`.
+- **`typing.Generic[T]` MRO-entries de-duplication — a real, previously-latent bug**: a class with
+  *two* generic bases where one already implies the other (`class Foo(Generic[T], SomeGeneric[T])`,
+  where `SomeGeneric` already derives `Generic`) raised `TypeError: Cannot create a consistent MRO`,
+  since the existing `__mro_entries__` implementation always contributed bare `Generic` for every
+  generic-alias base, producing a resolved bases list with `Generic` appearing twice at incompatible
+  positions. Real CPython's `typing.py` avoids exactly this by having a redundant `Generic[T]`
+  contribute nothing when another base already brings `Generic` in transitively; `GenericAliasModule`
+  now does the same (`GenericPlaceholder`, set once by `MiscModules.CreateTyping`, plus an
+  `OriginBringsInGeneric` check in `__mro_entries__`). Verified against 3 hand-written probe patterns
+  (redundant pair, three-level chain, two independent generic bases that must both stay recognized)
+  before writing tests. Found via anyio's real `class StapledObjectStream(Generic[T_Item],
+  ObjectStream[T_Item])` — and the identical pattern recurs throughout `anyio/abc/_streams.py`'s
+  whole stream-class hierarchy, so this wasn't a one-off.
+- **`typing.override`** (PEP 698, Python 3.12+): a real, if small, runtime side effect — sets
+  `__override__ = True` on the decorated function and returns it unchanged (a static-checker marker
+  CPython itself still executes for real), not a bare passthrough. Found via anyio's real `from
+  typing import override`.
+- 11 tests added (`M6_Stdlib/StdlibTests.cs`: `ConcurrentFuturesTests`, `StatModuleTests`,
+  `OsChmodTests`, `AbcRegisterTests`, `GenericMroDedupTests`, `TypingOverrideTests`). Full suite green
+  throughout: 836/836 by the end of this round, up from 825 at the start of it.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -848,10 +910,21 @@ blocked this phase (`match self.status: case TaskHandle.Status.PENDING: ...`), p
 `typing.Never` fix found immediately after. Full blow-by-blow in 3.1.2. 825/825 tests green (up from
 799 at the start of this round).
 
-**Current frontier for Phase 3**: `concurrent.futures` — no module named `concurrent` exists yet.
-Found by re-running the starlette+anyio probe past the now-fixed `match` statement; anyio's real
-`from_thread.py`/`_backends/_asyncio.py` use it for blocking-portal/worker-thread machinery. Not yet
-started.
+**6 more real gaps closed past `match`/`case`** (same session, continued probing): real
+`concurrent.futures.Future` (a genuinely new thread-safe future distinct from asyncio's cooperative
+one, backed by a real .NET `Monitor` — not a stub), `stat` (`S_IF*`/`S_IS*`, ported from CPython's
+own `Lib/stat.py`), real `os.chmod` (verified end to end against an actual file), real
+`abc.ABC.register()` virtual-subclass support (`PyClass` gained a `VirtualSubclasses` registry
+consulted by `IsSubclassOf`), a `typing.Generic[T]` MRO-entries de-duplication fix (a real,
+previously-latent bug: `class Foo(Generic[T], SomeGeneric[T])` raised "Cannot create a consistent
+MRO" whenever `SomeGeneric` already derived `Generic` — recurs throughout anyio's own
+`abc/_streams.py` hierarchy, not a one-off), and `typing.override` (PEP 698, a real `__override__`
+side effect, not a bare passthrough). Full blow-by-blow in 3.1.3. 836/836 tests green (up from 825).
+
+**Current frontier for Phase 3**: `subprocess` — no module named `subprocess` at all. Found via
+anyio's real `_core/_subprocesses.py`. A real implementation (process spawning, pipes, `Popen`, real
+async subprocess support integrated with PySharp's own event loop) is comparable in scope to
+`threading`/`asyncio` themselves — deliberately left for a dedicated round, not started here.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

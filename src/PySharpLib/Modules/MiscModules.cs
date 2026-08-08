@@ -172,6 +172,9 @@ public static class MiscModules
         // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a
         // bare placeholder, so isinstance(List[int], typing._GenericAlias) is correct too.
         d["_GenericAlias"] = GenericAliasModule.GenericAliasClass;
+        // So __mro_entries__ can recognize `Generic[T]` by identity and de-duplicate it when
+        // redundant (see GenericAliasModule.OriginBringsInGeneric).
+        GenericAliasModule.GenericPlaceholder = (PyClass)d["Generic"];
         // Real CPython's ForwardRef declares __slots__ (typing_extensions checks for the presence
         // of '__forward_is_class__' in it at import time, e.g. `typing.ForwardRef.__slots__`) —
         // give our stub the same shape so that check doesn't crash.
@@ -186,6 +189,15 @@ public static class MiscModules
         d["cast"] = new PyBuiltinFunction("cast", (_, a, _) => a[1]);
         d["overload"] = new PyBuiltinFunction("overload", (_, a, _) => a[0]);
         d["final"] = new PyBuiltinFunction("final", (_, a, _) => a[0]);
+        // override (PEP 698, 3.12+): real CPython sets __override__ = True and returns the function
+        // unchanged — a static-checker marker with one real runtime side effect. Found via anyio's
+        // real `from typing import override`.
+        d["override"] = new PyBuiltinFunction("override", (_, a, _) =>
+        {
+            if (a[0] is PyFunction fn)
+                fn.Attributes["__override__"] = true;
+            return a[0];
+        });
         d["runtime_checkable"] = new PyBuiltinFunction("runtime_checkable", (_, a, _) => a[0]);
         d["no_type_check"] = new PyBuiltinFunction("no_type_check", (_, a, _) => a[0]);
         // Type-checker-only marker (no runtime effect): a decorator *factory* — the call itself

@@ -11,10 +11,11 @@ namespace PySharpLib.Modules;
 
 public static class OsModule
 {
-    /// <summary>os.PathLike: the "has __fspath__" ABC. Plain base class — pathlib's Path/PurePath
-    /// subclass it (they already implement __fspath__), matching CPython's real inheritance shape,
-    /// but no structural isinstance-by-duck-typing beyond that.</summary>
-    public static readonly PyClass PathLikeClass = new("PathLike", new List<PyClass>());
+    /// <summary>os.PathLike: the "has __fspath__" ABC. Real CPython's `class PathLike(abc.ABC)`,
+    /// so it derives from `abc.ABC` here too — pathlib's Path/PurePath subclass it directly
+    /// (they already implement __fspath__); other path-like types register as virtual subclasses
+    /// via the real `PathLike.register(...)` (inherited from ABC), not structural duck-typing.</summary>
+    public static readonly PyClass PathLikeClass = new("PathLike", new List<PyClass> { AbcModule.AbcClass });
 
     public static PyModule Create()
     {
@@ -27,6 +28,9 @@ public static class OsModule
         d["linesep"] = Environment.NewLine;
         d["curdir"] = ".";
         d["pardir"] = "..";
+        d["SEEK_SET"] = (BigInteger)0;
+        d["SEEK_CUR"] = (BigInteger)1;
+        d["SEEK_END"] = (BigInteger)2;
 
         var environ = new PyDict();
         foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
@@ -58,6 +62,25 @@ public static class OsModule
         d["remove"] = new PyBuiltinFunction("remove", (_, a, _) =>
         {
             File.Delete((string)a[0]);
+            return PyNone.Instance;
+        });
+        d["chmod"] = new PyBuiltinFunction("chmod", (_, a, _) =>
+        {
+            string path = (string)a[0];
+            int mode = (int)PyOps.AsBigInt(a[1], "mode");
+            if (OperatingSystem.IsWindows())
+            {
+                // Real CPython on Windows only honors the user-write bit (toggling the read-only
+                // attribute) — POSIX group/other/exec permission bits have no Windows equivalent.
+                const int S_IWUSR = 0x80;
+                var attrs = File.GetAttributes(path);
+                attrs = (mode & S_IWUSR) != 0 ? attrs & ~FileAttributes.ReadOnly : attrs | FileAttributes.ReadOnly;
+                File.SetAttributes(path, attrs);
+            }
+            else
+            {
+                File.SetUnixFileMode(path, (UnixFileMode)mode);
+            }
             return PyNone.Instance;
         });
 

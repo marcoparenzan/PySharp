@@ -22,6 +22,17 @@ public sealed class PyClass
     /// </summary>
     public PyClass? Metaclass { get; set; }
 
+    /// <summary>
+    /// Classes registered as virtual subclasses via real <c>abc.ABC.register()</c> (e.g.
+    /// <c>os.PathLike.register(pathlib.Path)</c>) — recognized by isinstance/issubclass without
+    /// appearing in the registered class's actual MRO, matching real ABCMeta.register semantics.
+    /// Null until first used (the overwhelming majority of classes never register anything).
+    /// </summary>
+    public HashSet<PyClass>? VirtualSubclasses { get; private set; }
+
+    public void RegisterVirtualSubclass(PyClass subclass)
+        => (VirtualSubclasses ??= new HashSet<PyClass>()).Add(subclass);
+
     public PyClass(string name, List<PyClass> bases)
     {
         Name = name;
@@ -76,7 +87,8 @@ public sealed class PyClass
         return false;
     }
 
-    public bool IsSubclassOf(PyClass other) => Mro.Contains(other);
+    public bool IsSubclassOf(PyClass other)
+        => Mro.Contains(other) || (other.VirtualSubclasses is { } vs && Mro.Any(vs.Contains));
 
     public override string ToString() => $"<class '{Name}'>";
 }
