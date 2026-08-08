@@ -2168,4 +2168,137 @@ public class AsyncioAdditionsTests
                 print(await t2)
             asyncio.run(main())
             """));
+
+    [Fact]
+    public void Current_task_reflects_the_real_owning_task_across_nested_awaits()
+        // Regression: asyncio.current_task() always returned None (a "documented honest
+        // limitation" from an earlier round) — real anyio cancel-scope code asserts on it. Fixed
+        // via PyCoroutine.CurrentTask/OwningTask, propagated down through every nested `await`
+        // level (each of which runs on its own dedicated OS thread — see Async.cs) by DelegateTo.
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\nTrue", Run("""
+            import asyncio
+            async def inner():
+                return asyncio.current_task()
+            async def outer():
+                t1 = asyncio.current_task()
+                t2 = await inner()
+                return t1 is t2
+            async def main():
+                print(asyncio.current_task() is not None)
+                print(await outer())
+                async def sub():
+                    return asyncio.current_task()
+                sub_task = asyncio.create_task(sub())
+                result = await sub_task
+                print(result is sub_task)
+                print(result is not asyncio.current_task())
+            print(asyncio.current_task() is None)
+            asyncio.run(main())
+            print(True)
+            """));
+
+    [Fact]
+    public void Future_supports_PEP585_subscript_then_call()
+        // Regression: `asyncio.Future[T]()` (real runtime usage in anyio's real
+        // _backends/_asyncio.py: `future = asyncio.Future[T_Retval]()`) raised
+        // "'function' object is not subscriptable" — "Future" wasn't in Builtins.BuiltinTypeNames,
+        // the allowlist gating PEP 585 subscripting for a raw PyBuiltinFunction. Once subscripted,
+        // the resulting generic alias also needs to be callable (forwarding to __origin__) for the
+        // `()` to construct a real Future — see GenericAliasModule's __call__.
+        => Assert.Equal("True\nFalse", Run("""
+            import asyncio
+            async def main():
+                fut = asyncio.Future[int]()
+                print(isinstance(fut, asyncio.Future))
+                print(fut.done())
+            asyncio.run(main())
+            """));
+
+    [Fact]
+    public void Future_and_Task_expose_a_private_loop_attribute()
+        // Regression: real CPython's Future/Task keep the owning loop in a private `_loop`
+        // attribute, read directly (bypassing get_loop()) by real library code for perf — found
+        // via anyio's real WorkerThread.__init__: `self.loop = root_task._loop`.
+        => Assert.Equal("True", Run("""
+            import asyncio
+            async def main():
+                t = asyncio.current_task()
+                return t._loop is asyncio.get_running_loop()
+            print(asyncio.run(main()))
+            """));
+}
+
+public class ThreadingLocalContextManagerTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Threading_local_set_before_yield_is_visible_in_the_with_body()
+        // Regression: PyGenerator (like PyCoroutine) runs its body on a dedicated internal CLR
+        // thread, so a @contextmanager generator's pre-yield code ran on a DIFFERENT real thread
+        // than the `with`-body it's meant to wrap — threading.local state set there (a common
+        // "claim this thread" pattern, e.g. anyio's real claim_worker_thread) was invisible to the
+        // with-body. Fixed via LogicalThread: a stable identity explicitly propagated across
+        // PyGenerator/PyCoroutine's dedicated threads (but NOT across genuine
+        // threading.Thread.start() calls, which must still get fresh, isolated storage), and
+        // threading.local's storage now keyed by that identity instead of the raw CLR thread.
+        => Assert.Equal("hello", Run("""
+            import threading
+            from contextlib import contextmanager
+            tl = threading.local()
+            @contextmanager
+            def claim():
+                tl.token = "hello"
+                try:
+                    yield
+                finally:
+                    del tl.token
+            with claim():
+                print(tl.token)
+            """));
+
+    [Fact]
+    public void Threading_local_del_inside_contextmanager_finally_works()
+        // Regression: `del tl.token` inside the generator's post-yield `finally` raised
+        // AttributeError — Interp.DelAttr never consulted a class's __delattr__ (unlike SetAttr,
+        // which already checked __setattr__), so threading.local's per-thread storage (routed
+        // through __delattr__, not the instance dict) was unreachable for deletion.
+        => Assert.Equal("gone", Run("""
+            import threading
+            from contextlib import contextmanager
+            tl = threading.local()
+            @contextmanager
+            def claim():
+                tl.token = "hello"
+                try:
+                    yield
+                finally:
+                    del tl.token
+            with claim():
+                pass
+            try:
+                tl.token
+            except AttributeError:
+                print("gone")
+            """));
+
+    [Fact]
+    public void Independent_threading_Thread_still_gets_isolated_local_storage()
+        // Real CPython: threading.local() gives each real OS thread entirely separate storage —
+        // LogicalThread must not propagate across genuine threading.Thread.start() calls (only
+        // across PyGenerator/PyCoroutine's own internal dedicated threads), or independently
+        // created threads would wrongly share state.
+        => Assert.Equal("worker\nmain", Run("""
+            import threading
+            tl = threading.local()
+            tl.value = "main"
+            seen = []
+            def worker():
+                seen.append(getattr(tl, "value", "worker"))
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join()
+            print(seen[0])
+            print(tl.value)
+            """));
 }

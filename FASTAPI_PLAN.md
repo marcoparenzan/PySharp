@@ -1091,6 +1091,75 @@ advancing through anyio's real `_backends/_asyncio.py` module-level imports.
 - 9 tests added (`M6_Stdlib/StdlibTests.cs`: `QueueModuleTests`, `AsyncioAdditionsTests`). Full
   suite green throughout: 877/877 by the end of this round, up from 868 at the start of it.
 
+### 3.1.8 — the 404 path: 5 more real bugs, two of them structural, chased down to a new unknown
+
+Picking up the exact 3.1.7 frontier (the bare `AssertionError` on the 404-not-found fallback path).
+Root-caused via the project's usual debug-print-then-remove bisection on `AssertStmt`/`GetItem`/
+`AttributeExpr` evaluation (each print removed once its diagnosis was confirmed).
+
+- **`asyncio.current_task()` always returned `None`**: the 3.1.6-era "honest limitation" finally hit
+  by real code — anyio's `CancelScope` exit path does
+  `assert self._host_task is not None` after remembering `current_task()` on entry, and both were
+  `None`. Fixed for real: `PyCoroutine.CurrentTask`, a thread-static explicitly propagated down
+  through every nested `await` (`DelegateTo`) and set once per `PyTask` (`OwningTask`) — needed
+  because, unlike CPython's single-threaded generator-style coroutines, PySharp runs each nested
+  `await` level on its own dedicated OS thread, so nothing propagates for free the way it would with
+  real thread-locality.
+- **`asyncio.Future[T]()` — real runtime PEP 585 subscript-then-call — raised `TypeError: 'function'
+  object is not subscriptable`**: found in anyio's real `_backends/_asyncio.py`
+  (`future = asyncio.Future[T_Retval]()`, a genuine executed expression, not just a type annotation
+  PySharp's deferred-annotation handling could shrug off). `"Future"` (plus `"OrderedDict"`,
+  `"WeakKeyDictionary"`, hit by the same code path) were missing from
+  `Builtins.BuiltinTypeNames`, the allowlist gating PEP 585 subscripting for a raw
+  `PyBuiltinFunction`. Fixing the allowlist alone wasn't enough: the resulting generic alias also
+  needed to be *callable* for the trailing `()` to actually construct something, so
+  `GenericAliasModule`'s alias class gained a real `__call__` forwarding to `__origin__` (matching
+  real CPython's `_GenericAlias.__call__`).
+- **`'Task' object has no attribute '_loop'`**: anyio's real `WorkerThread.__init__` reads a Task's
+  private `_loop` directly (`self.loop = root_task._loop`), bypassing the public `get_loop()` for
+  perf — a real CPython `Future`/`Task` attribute PySharp's `PyFuture` never exposed as plain data
+  (only as methods, via `FutureTable`). Added alongside `PyRange`'s existing data-attribute pattern
+  in `TypeMethods.cs`.
+- **A genuinely structural bug: `threading.local` state set inside a `@contextmanager` generator,
+  before its `yield`, was invisible in the `with`-body** — surfaced when the fix above let anyio's
+  real `run_sync_in_worker_thread` actually spawn a worker thread and hit
+  `claim_worker_thread` (`with claim_worker_thread(...): threadlocals.current_token = ...; yield`).
+  Root cause: `PyGenerator`, like `PyCoroutine`, runs its body on its own dedicated OS thread (a
+  producer/consumer handshake, not CPython's single-threaded suspension) — so the pre-`yield` code
+  of a `@contextmanager` generator executes on a *different real CLR thread* than the `with`-body it
+  logically wraps, and `threading.local`'s old `ThreadLocal<PyDict>` storage (keyed by raw CLR
+  thread) split what should have been one logical Python thread into two. Fixed with a new
+  `LogicalThread` (`Runtime/LogicalThread.cs`): a stable per-Python-thread identity, explicitly
+  propagated into `PyGenerator.Resume`'s and `PyCoroutine.Resume`'s dedicated threads at spawn time
+  (mirroring the `current_task`/`OwningTask` propagation above) — but deliberately *not* propagated
+  by `threading.Thread.start()` (`ThreadingModule.cs`), so genuinely independent Python threads still
+  get their own fresh, isolated storage, matching real CPython. `threading.local`'s storage switched
+  from `ThreadLocal<PyDict>` to a `ConcurrentDictionary<object, PyDict>` keyed by `LogicalThread.Current`.
+- **Two more bugs found underneath, both real correctness gaps beyond this one scenario**:
+  - `Interp.DelAttr` never checked a class's `__delattr__` (unlike `SetAttr`, which already checked
+    `__setattr__`) — `del tl.token` inside `claim_worker_thread`'s `finally` raised `AttributeError`
+    even though `threading.local` defines a real `__delattr__`. Fixed by mirroring `SetAttr`'s
+    dispatch.
+  - `TryGetAttr`'s `__getattr__` fallback always returned `true` after calling `__getattr__`, even if
+    the call itself raised `AttributeError` — the exact contract real `__getattr__` implementations
+    rely on to signal "not found either" so `getattr(obj, name, default)`/`hasattr` can catch it and
+    fall through. Found via `getattr(threadlocal_obj, name, default)` on a missing per-thread key
+    inside a background-thread test. Fixed by catching `PyRaise` where the raised value
+    `IsSubclassOf(AttributeErrorClass)` and returning `false` (any other exception from
+    `__getattr__` still propagates, correctly).
+- **New frontier**: past all of the above, the 404 path now reaches a `TypeError: 'coroutine' object
+  is not callable` — some code in the same `<string>`/`<string>` two-frame chain calls an
+  already-produced coroutine object a second time as if it were still the callable that produced it.
+  Not yet root-caused (the traceback's `<string>` labels don't reveal the real file — a known,
+  pre-existing limitation of PySharp's traceback formatting worth revisiting separately). Good next
+  target.
+- 6 tests added (`M6_Stdlib/StdlibTests.cs`: `AsyncioAdditionsTests` gained
+  `Current_task_reflects_the_real_owning_task_across_nested_awaits`,
+  `Future_supports_PEP585_subscript_then_call`, `Future_and_Task_expose_a_private_loop_attribute`;
+  new `ThreadingLocalContextManagerTests` with 3 tests covering the `LogicalThread` propagation,
+  the `__delattr__` dispatch fix, and independent-thread isolation still holding). Full suite green
+  throughout: 883/883 by the end of this round, up from 877 at the start of it.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1267,11 +1336,27 @@ import, unlike real CPython's), and `asyncio.Task` itself (uncovering a second s
 to end** (`/boom` → `ValueError` → correctly re-raised through starlette's real exception-handling
 middleware). Full blow-by-blow in 3.1.7. 877/877 tests green (up from 868).
 
-**Current frontier for Phase 3**: narrowed significantly — just the 404-not-found fallback path,
-which now hits a bare, un-root-caused `AssertionError`. A plausible candidate (real starlette's own
-`assert scope["type"] in ("http", "websocket", "lifespan")` in `Router.app`) was identified but not
-confirmed; genuinely unclear why it would fail given the scope's `"type"` should be `"http"`
-throughout. `staticfiles.py`/WebSockets also remain unexercised. Not started.
+**5 more real gaps closed on the 404-not-found fallback path, two of them structural fixes with
+effects well beyond this one scenario**: the previous round's bare `AssertionError` was
+`asyncio.current_task()` always returning `None` (fixed for real: propagated as a thread-static
+across every nested `await`'s dedicated OS thread). Past it: real runtime PEP 585 subscript-then-call
+(`asyncio.Future[T]()`, plus making the resulting generic alias itself callable), a `Future`/`Task`
+private `_loop` attribute anyio reads directly, and — the two structural ones — `threading.local`
+state set inside a `@contextmanager` generator (before its `yield`) was invisible in the `with`-body,
+because `PyGenerator` (like `PyCoroutine`) runs its body on its own dedicated OS thread; fixed with a
+new `LogicalThread` identity explicitly propagated across `PyGenerator`/`PyCoroutine`'s internal
+thread hops but *not* across genuine `threading.Thread.start()` calls. Found underneath that:
+`Interp.DelAttr` never checked a class's `__delattr__` (only `SetAttr` did), and `TryGetAttr`'s
+`__getattr__` fallback didn't catch a raised `AttributeError`, breaking `getattr(obj, name, default)`/
+`hasattr` for any type relying on that standard contract — both fixed generally, not just for
+`threading.local`. Full blow-by-blow in 3.1.8. 883/883 tests green (up from 877).
+
+**Current frontier for Phase 3**: past all of the above, the 404 path now hits
+`TypeError: 'coroutine' object is not callable` — some code in the dispatch chain calls an
+already-produced coroutine object a second time. Not yet root-caused; PySharp's traceback formatting
+still doesn't reveal real file/line for imported modules (shows `<string>` — a known, pre-existing
+limitation, separately worth revisiting). `staticfiles.py`/WebSockets also remain unexercised. Not
+started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

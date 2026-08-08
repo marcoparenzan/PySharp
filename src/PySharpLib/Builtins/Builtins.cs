@@ -849,6 +849,7 @@ public static class BuiltinsFactory
     {
         "int", "float", "bool", "str", "bytes", "bytearray", "list", "tuple",
         "dict", "set", "frozenset", "range", "slice", "type",
+        "Future", "OrderedDict", "WeakKeyDictionary",
     };
 
     private static IEnumerable<object> CallableIter(Interp interp, object callable, object sentinel)

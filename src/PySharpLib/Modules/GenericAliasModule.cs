@@ -183,6 +183,15 @@ public static class GenericAliasModule
         // called on it (with the full original bases tuple) to find its real substitute(s) — this
         // is what makes `class Foo(Generic[T]):` work at all, since Generic[T] is this exact alias
         // object, never meant to end up in the MRO itself. See Interp.cs's ExecClassDef.
+        // Real CPython: calling a subscripted generic (`asyncio.Future[int]()`) just constructs
+        // the origin, same as calling the bare class — `_GenericAlias.__call__` forwards straight
+        // through. Found via anyio's real `_backends/_asyncio.py`: `asyncio.Future[T_Retval]()`.
+        Add("__call__", (interp, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            var origin = inst.Dict["__origin__"];
+            return interp.Call(origin, a.Skip(1).ToArray(), kwargs);
+        });
         Add("__mro_entries__", (_, a, _) =>
         {
             var inst = (PyInstance)a[0];

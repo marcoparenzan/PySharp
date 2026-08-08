@@ -296,11 +296,19 @@ public static class AsyncioModule
         // a no-op over an empty set). Found via anyio's real `from asyncio import ... all_tasks,
         // ...` (_backends/_asyncio.py), reachable from `import starlette`.
         d["all_tasks"] = new PyBuiltinFunction("all_tasks", (_, _, _) => new PySet(Array.Empty<object>()));
-        // Same honest limitation as all_tasks above: PySharp doesn't track "the currently running
-        // task" per thread, so this always reports None rather than the real running PyTask.
-        // Found via anyio's real `from asyncio import ... current_task, ...`
-        // (_backends/_asyncio.py), reachable from `import starlette`.
-        d["current_task"] = new PyBuiltinFunction("current_task", (_, _, _) => PyNone.Instance);
+        // Real CPython's asyncio.current_task(): the Task the currently-running coroutine chain
+        // belongs to, or None outside of one. Backed by PyCoroutine.CurrentTask, a real
+        // thread-static propagated down through every nested `await` level (see
+        // PyCoroutine.DelegateTo) even though each level runs on its own dedicated OS thread here.
+        // Found the hard way: initially stubbed as "always None" (an honest, seemingly-safe
+        // limitation — PySharp has no live-task registry for all_tasks either), but real anyio
+        // task-group/cancel-scope code (_backends/_asyncio.py) uses current_task() to remember
+        // which task entered a cancel scope, then asserts on exit that it's still that same task —
+        // `assert self._host_task is not None` failed for real once actually exercised (starlette's
+        // real 404-handling path, reachable from `import starlette`), since a real Task's identity
+        // was needed, not just "no other tasks" as with all_tasks above.
+        d["current_task"] = new PyBuiltinFunction("current_task", (_, _, _) =>
+            (object?)PyCoroutine.CurrentTask ?? PyNone.Instance);
 
         d["Future"] = new PyBuiltinFunction("Future", (interp, _, _) =>
             new PyFuture { Loop = PyEventLoop.Running ?? new PyEventLoop(interp) });

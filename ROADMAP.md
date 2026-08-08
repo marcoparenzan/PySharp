@@ -364,10 +364,13 @@ in scenario 1).
   `requests`), and a real `Starlette(routes=[Route(...)])` app constructs end to end (~51
   stdlib/interpreter gaps closed plus `match`/`case` across 5 probe-driven rounds); **3.1b under
   way**: real ASGI request dispatch verified end to end (index route + a path-parameter route + real
-  exception propagation for an app-level error), surfacing and fixing three significant, previously-
-  silent correctness bugs (see below) — current frontier narrowed to just the 404-not-found fallback
-  path, which hits an un-root-caused `AssertionError`; 3.2 (ASGI server) not started; 4/6/7/8 to do;
-  native cross-cutting partial.
+  exception propagation for an app-level error), surfacing and fixing several significant,
+  previously-silent correctness bugs (see below) — the 404-not-found fallback path's
+  `AssertionError` was root-caused and fixed (`asyncio.current_task()`), along with `Future[T]()`
+  PEP 585 subscript-then-call, a `Future`/`Task` private `_loop` attribute, and a structural
+  `threading.local`-across-`@contextmanager` bug; current frontier narrowed further to a
+  `TypeError: 'coroutine' object is not callable` on the same path; 3.2 (ASGI server) not started;
+  4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -395,8 +398,18 @@ in scenario 1).
   (separate per-slot storage) still missing; async generators still missing (blocks *entering*
   `contextlib.asynccontextmanager`-wrapped functions, though defining/decorating them works); real
   `class X(dict):` subclass storage still missing (instances aren't backed by real dict storage
-  unless the subclass defines its own `__getitem__`/`__setitem__`).
-- Tests: **877 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  unless the subclass defines its own `__getitem__`/`__setitem__`); **real `asyncio.current_task()`**
+  ✅ (previously always `None`; now a thread-static explicitly propagated across every nested
+  `await`'s dedicated OS thread — needed by real anyio cancel-scope code); **`LogicalThread`** ✅, a
+  new propagated per-Python-thread identity fixing a structural bug where `threading.local` state set
+  inside a `@contextmanager` generator (before its `yield`) was invisible in the `with`-body (`
+  PyGenerator`, like `PyCoroutine`, runs its body on its own dedicated OS thread); **`Interp.DelAttr`
+  now dispatches a class's `__delattr__`** ✅ (previously only `SetAttr` checked `__setattr__` —
+  asymmetric and a real gap for any type routing attribute deletion through `__delattr__`);
+  **`TryGetAttr`'s `__getattr__` fallback now catches a raised `AttributeError`** ✅ (previously
+  always returned found, even when `__getattr__` itself raised — broke `getattr(obj, name,
+  default)`/`hasattr` for any type relying on that standard contract).
+- Tests: **883 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

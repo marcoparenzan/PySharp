@@ -89,8 +89,10 @@ public sealed class PyGenerator
                 throw throwValue;
             }
 
+            var callerLogicalThread = LogicalThread.Current;
             _thread = new Thread(() =>
             {
+                LogicalThread.Adopt(callerLogicalThread);
                 _current = this;
                 _resume.Wait();
                 try

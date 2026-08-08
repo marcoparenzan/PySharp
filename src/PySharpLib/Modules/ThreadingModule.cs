@@ -405,11 +405,17 @@ public static class ThreadingModule
     private const string ThreadLocalStorageKey = "__native_threadlocal__";
 
     /// <summary>
-    /// threading.local: real per-OS-thread attribute storage (backed by System.Threading.ThreadLocal),
-    /// not a single shared dict. Attribute get/set are routed here via the interpreter's real
-    /// __getattr__/__setattr__ dispatch (SetAttr already calls a class's __setattr__ before falling
-    /// back to a plain instance-dict write); the ThreadLocal itself lives in the instance's own dict
-    /// under a key Python code never asks for, so there's no recursion back through that dispatch.
+    /// threading.local: real per-logical-thread attribute storage, not a single shared dict.
+    /// Attribute get/set are routed here via the interpreter's real __getattr__/__setattr__
+    /// dispatch (SetAttr already calls a class's __setattr__ before falling back to a plain
+    /// instance-dict write); the storage table itself lives in the instance's own dict under a key
+    /// Python code never asks for, so there's no recursion back through that dispatch.
+    /// Keyed by LogicalThread.Current rather than the raw CLR thread: PyGenerator/PyCoroutine run
+    /// their bodies on dedicated internal CLR threads, so a real Python thread driving a
+    /// `@contextmanager`-wrapped generator (or a coroutine) through a suspend point actually hops
+    /// across several real CLR threads — LogicalThread propagates one stable identity across that
+    /// hop so this storage isn't wrongly split by it, while a genuine `threading.Thread.start()`
+    /// still gets its own fresh identity (see LogicalThread's doc comment).
     /// v1 scope: the plain `threading.local()` shape only — no support for a subclass's own
     /// per-thread-initializing __init__ override. Found via anyio's real `threading.local()` usage
     /// (_core/_eventloop.py), itself a real dependency of starlette. See FASTAPI_PLAN.md.
@@ -421,12 +427,13 @@ public static class ThreadingModule
 
         static PyDict Storage(PyInstance inst)
         {
-            if (!inst.Dict.TryGet(ThreadLocalStorageKey, out var tlObj))
+            if (!inst.Dict.TryGet(ThreadLocalStorageKey, out var tableObj))
             {
-                tlObj = new ThreadLocal<PyDict>(() => new PyDict());
-                inst.Dict[ThreadLocalStorageKey] = tlObj;
+                tableObj = new System.Collections.Concurrent.ConcurrentDictionary<object, PyDict>();
+                inst.Dict[ThreadLocalStorageKey] = tableObj;
             }
-            return ((ThreadLocal<PyDict>)tlObj).Value!;
+            var table = (System.Collections.Concurrent.ConcurrentDictionary<object, PyDict>)tableObj;
+            return table.GetOrAdd(LogicalThread.Current, static _ => new PyDict());
         }
 
         Add("__init__", (_, a, _) =>
@@ -445,6 +452,13 @@ public static class ThreadingModule
         Add("__setattr__", (_, a, _) =>
         {
             Storage((PyInstance)a[0])[(string)a[1]] = a[2];
+            return PyNone.Instance;
+        });
+        Add("__delattr__", (_, a, _) =>
+        {
+            string name = (string)a[1];
+            if (!Storage((PyInstance)a[0]).Remove(name))
+                throw PyErr.AttributeError($"'local' object has no attribute '{name}'");
             return PyNone.Instance;
         });
 

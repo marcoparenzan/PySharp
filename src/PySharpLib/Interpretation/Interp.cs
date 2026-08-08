@@ -2530,8 +2530,21 @@ public sealed class Interp
                 }
                 if (inst.Class.TryLookup("__getattr__", out var getattr))
                 {
-                    value = Call(new PyBoundMethod(inst, getattr), new object[] { name });
-                    return true;
+                    // Real CPython contract: __getattr__ is the final fallback, and is itself
+                    // allowed to raise AttributeError to mean "not found either" — getattr(...,
+                    // default)/hasattr rely on that to fall through instead of the exception
+                    // propagating. Found via threading.local's real __getattr__ (ThreadingModule.cs)
+                    // combined with getattr(tl, name, default) on a missing per-thread key.
+                    try
+                    {
+                        value = Call(new PyBoundMethod(inst, getattr), new object[] { name });
+                        return true;
+                    }
+                    catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.AttributeErrorClass))
+                    {
+                        value = PyNone.Instance;
+                        return false;
+                    }
                 }
                 // standard exception attributes, None by default
                 if (name is "__cause__" or "__context__" or "__traceback__"
@@ -2933,6 +2946,12 @@ public sealed class Interp
         switch (obj)
         {
             case PyInstance inst:
+                if (inst.Class.TryLookup("__delattr__", out var delattr)
+                    && delattr is PyFunction or PyBuiltinFunction)
+                {
+                    Call(new PyBoundMethod(inst, delattr), new object[] { name });
+                    return;
+                }
                 if (!inst.Dict.Remove(name))
                     throw PyErr.AttributeError($"'{inst.Class.Name}' object has no attribute '{name}'");
                 return;

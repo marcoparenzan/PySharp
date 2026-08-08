@@ -82,6 +82,14 @@ public static class TypeMethods
                 case "step": value = r.Step; return true;
             }
         }
+        // Real CPython's Future/Task keep the owning loop in a private `_loop` attribute, read
+        // directly (bypassing get_loop()) by real library code for perf. Found via anyio's real
+        // `_backends/_asyncio.py` WorkerThread.__init__: `self.loop = root_task._loop`.
+        if (obj is PyFuture fut && name == "_loop")
+        {
+            value = (object?)fut.Loop ?? PyNone.Instance;
+            return true;
+        }
         // Universal fallback: `x.__class__` for any builtin value (PyInstance has its own, correct,
         // earlier in Interp.GetAttr's switch — this only runs for everything else: None, str, int,
         // list, ...). Found via a real `NoneType = None.__class__` idiom (pydantic/typing.py).

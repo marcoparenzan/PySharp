@@ -45,8 +45,28 @@ public sealed class PyCoroutine
     [ThreadStatic]
     private static PyCoroutine? _current;
 
+    [ThreadStatic]
+    private static PyTask? _currentTask;
+
     /// <summary>The coroutine currently running on this thread (used to evaluate <c>await</c>).</summary>
     public static PyCoroutine? Current => _current;
+
+    /// <summary>
+    /// The real Task this coroutine's execution chain belongs to (real CPython's
+    /// <c>asyncio.current_task()</c>) — propagated down through every nested <c>await</c> level
+    /// (see DelegateTo), even though each level of coroutine delegation runs on its own dedicated
+    /// OS thread here (unlike CPython's single-threaded generator-style suspension, where "the
+    /// current task" is simply whichever task's frame is on the one call stack). Found the hard
+    /// way: real anyio task-group/cancel-scope code (`_backends/_asyncio.py`) relies on
+    /// `current_task()` to remember which task entered a cancel scope, then asserts on exit that
+    /// it's still that same task — previously always returning None (a documented, "nothing
+    /// asserts on this" limitation) turned out to be exactly what a real `assert self._host_task is
+    /// not None` was asserting on, once real code actually exercised it.
+    /// </summary>
+    public static PyTask? CurrentTask => _currentTask;
+
+    /// <summary>Set once by the owning PyTask; propagated to nested coroutines by DelegateTo.</summary>
+    public PyTask? OwningTask { get; set; }
 
     public bool Finished { get; private set; }
     public object ReturnValue { get; private set; } = PyNone.Instance;
@@ -93,9 +113,12 @@ public sealed class PyCoroutine
 
         if (_thread is null)
         {
+            var callerLogicalThread = LogicalThread.Current;
             _thread = new Thread(() =>
             {
+                LogicalThread.Adopt(callerLogicalThread);
                 _current = this;
+                _currentTask = OwningTask;
                 _resume.Wait();
                 try
                 {
@@ -165,6 +188,7 @@ public sealed class PyCoroutine
     /// <summary>Drive an inner coroutine to completion, forwarding its suspensions upward.</summary>
     private object DelegateTo(Interp interp, PyCoroutine inner)
     {
+        inner.OwningTask = OwningTask;
         object send = PyNone.Instance;
         PyRaise? err = null;
         while (true)
@@ -341,6 +365,7 @@ public sealed class PyTask : PyFuture
         : base(loop)
     {
         _coro = coro;
+        _coro.OwningTask = this;
         _interp = interp;
         loop.CallSoon(() => Step(PyNone.Instance, null));
     }
