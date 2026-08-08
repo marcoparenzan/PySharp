@@ -17,9 +17,28 @@ namespace PySharpLib.Modules;
 /// </summary>
 public static class AsyncioModule
 {
-    public static PyModule Create()
+    // Real CPython's private (underscore-prefixed) sentinel callback that `loop.run_until_complete`
+    // attaches to the root task, used internally to identify "am I the root task" by identity
+    // comparison (`cb is _run_until_complete_cb`) — not something PySharp's own run_until_complete
+    // ever actually attaches (a real, deliberately-scoped limitation: real task-completion
+    // detection here doesn't need this internal machinery), so this exists purely so the name is
+    // importable and identity-comparable to itself. Found via anyio's real `from asyncio
+    // .base_events import _run_until_complete_cb` (_backends/_asyncio.py), reachable from `import
+    // starlette`.
+    private static readonly PyBuiltinFunction RunUntilCompleteCb =
+        new("_run_until_complete_cb", (_, _, _) => PyNone.Instance);
+
+    public static PyModule CreateBaseEvents()
     {
-        var m = new PyModule("asyncio");
+        var m = new PyModule("asyncio.base_events");
+        m.Dict["_run_until_complete_cb"] = RunUntilCompleteCb;
+        return m;
+    }
+
+
+    public static PyModule Create(Interpretation.Interp interp)
+    {
+        var m = new PyModule("asyncio") { Builtins = interp.BuiltinsModule };
         var d = m.Dict;
 
         d["CancelledError"] = AsyncRuntime.CancelledErrorClass;
@@ -47,6 +66,77 @@ public static class AsyncioModule
                 loop.Close();
             }
         });
+        d["Runner"] = RunnerClass;
+
+        // Real CPython's asyncio.protocols hierarchy (BaseProtocol/Protocol/BufferedProtocol/
+        // DatagramProtocol/SubprocessProtocol) — real base classes with the real no-op-by-default
+        // callback methods (connection_made/data_received/etc.) meant for subclassing, matching
+        // CPython's own Lib/asyncio/protocols.py exactly. PySharp's own event loop doesn't drive
+        // these callbacks from real socket I/O (a separate, larger feature — nothing in scope
+        // needs it yet), so this covers real subclassability, not a wired-up transport layer.
+        // Found via anyio's real `class StreamProtocol(asyncio.Protocol)`/`class DatagramProtocol
+        // (asyncio.DatagramProtocol)` (_backends/_asyncio.py), reachable from `import starlette`.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "class BaseProtocol:\n"
+                + "    def connection_made(self, transport): pass\n"
+                + "    def connection_lost(self, exc): pass\n"
+                + "    def pause_writing(self): pass\n"
+                + "    def resume_writing(self): pass\n"
+                + "class Protocol(BaseProtocol):\n"
+                + "    def data_received(self, data): pass\n"
+                + "    def eof_received(self): pass\n"
+                + "class BufferedProtocol(BaseProtocol):\n"
+                + "    def get_buffer(self, sizehint): raise NotImplementedError\n"
+                + "    def buffer_updated(self, nbytes): raise NotImplementedError\n"
+                + "    def eof_received(self): pass\n"
+                + "class DatagramProtocol(BaseProtocol):\n"
+                + "    def datagram_received(self, data, addr): pass\n"
+                + "    def error_received(self, exc): pass\n"
+                + "class SubprocessProtocol(BaseProtocol):\n"
+                + "    def pipe_data_received(self, fd, data): pass\n"
+                + "    def pipe_connection_lost(self, fd, exc): pass\n"
+                + "    def process_exited(self): pass\n"
+                // Real CPython's asyncio.subprocess.SubprocessStreamProtocol, simplified: the real
+                // one also mixes in streams.FlowControlMixin and wires up real StreamReader/Writer
+                // pipes — out of scope (PySharp's own real async subprocess integration is a
+                // separate, larger piece of work, deliberately not attempted here; see
+                // FASTAPI_PLAN.md Phase 3). This covers real subclassability with the real
+                // `__init__(limit=, loop=)` signature anyio's own `_ProcessStreamProtocol` calls via
+                // `super().__init__(...)`, not real pipe-backed stdin/stdout/stderr streams.
+                + "class SubprocessStreamProtocol(SubprocessProtocol):\n"
+                + "    def __init__(self, limit=65536, loop=None):\n"
+                + "        self._limit = limit\n"
+                + "        self._loop = loop\n"
+                + "        self.stdin = None\n"
+                + "        self.stdout = None\n"
+                + "        self.stderr = None\n"),
+            m);
+        // Real CPython's asyncio/__init__.py imports its submodules internally, so `.subprocess` is
+        // a real attribute of the `asyncio` module right after a plain `import asyncio` — no
+        // separate `import asyncio.subprocess` statement needed. anyio's real code relies on
+        // exactly this (`asyncio.subprocess.SubprocessStreamProtocol`, no explicit submodule
+        // import). Built inline (not via a separate Importer factory) to share the same
+        // SubprocessStreamProtocol class already built above.
+        var subprocessSubmodule = new PyModule("asyncio.subprocess") { Builtins = interp.BuiltinsModule };
+        subprocessSubmodule.Dict["SubprocessStreamProtocol"] = d["SubprocessStreamProtocol"];
+        d["subprocess"] = subprocessSubmodule;
+
+        // Real CPython 3.12+'s eager_task_factory (Lib/asyncio/tasks.py, real pure-Python source
+        // there too — hence its own real __code__, not a C-implemented builtin's absent one).
+        // Implemented as real parsed Python source (not a PyBuiltinFunction) specifically so
+        // `.__code__` resolves for real via the normal PyFunction attribute path, matching the
+        // real object shape anyio's own version check expects. Not actually eager here (starts the
+        // task via the normal scheduling path rather than synchronously up to the first suspension
+        // point) — a documented simplification; nothing in scope calls it as a real task factory,
+        // only accesses its `.__code__` for an identity comparison. Found via anyio's real
+        // `asyncio.eager_task_factory.__code__` (_backends/_asyncio.py, guarded by `sys.version_info
+        // >= (3, 12)`), reachable from `import starlette`.
+        interp.RunModule(
+            Parsing.Parser.Parse(
+                "def eager_task_factory(loop, coro, *, name=None, context=None):\n"
+                + "    return loop.create_task(coro, name=name)\n"),
+            m);
 
         d["sleep"] = new PyBuiltinFunction("sleep", (interp, a, kwargs) =>
         {
@@ -214,6 +304,14 @@ public static class AsyncioModule
 
         d["Future"] = new PyBuiltinFunction("Future", (interp, _, _) =>
             new PyFuture { Loop = PyEventLoop.Running ?? new PyEventLoop(interp) });
+        // Real CPython: asyncio.Task(coro, ...) directly constructs and schedules a task — the
+        // same real machinery create_task/ensure_future already use. Also makes
+        // isinstance(x, asyncio.Task) work for a real PyTask (PyOps.TypeName already reports
+        // "Task" for one; TypeMatchesBuiltinName's fallback compares against that name — this just
+        // needed the name itself to be importable). Found via anyio's real `cast(asyncio.Task,
+        // current_task())`-style usage (_backends/_asyncio.py), reachable from `import starlette`.
+        d["Task"] = new PyBuiltinFunction("Task", (interp, a, _) =>
+            AsyncRuntime.EnsureFuture(interp, Arg(a, 0, "Task"), RunningLoop()));
 
         d["iscoroutine"] = new PyBuiltinFunction("iscoroutine", (_, a, _) => a[0] is PyCoroutine);
         d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
@@ -269,6 +367,54 @@ public static class AsyncioModule
     public static readonly PyClass EventClass = BuildEventClass();
     public static readonly PyClass SemaphoreClass = BuildSemaphoreClass(bounded: false);
     public static readonly PyClass BoundedSemaphoreClass = BuildSemaphoreClass(bounded: true);
+    public static readonly PyClass RunnerClass = BuildRunnerClass();
+
+    /// <summary>asyncio.Runner (real CPython 3.11+ API, not a stub): a lazily-created event loop
+    /// wrapped for reuse across several `.run(coro)` calls, closed once via `.close()`/`__exit__`
+    /// — real CPython's own `asyncio.run()` is itself implemented on top of exactly this class.
+    /// Found via anyio's real `from asyncio import Runner` (_backends/_asyncio.py, taken since
+    /// PySharp reports Python >= 3.11), reachable from `import starlette`.</summary>
+    private static PyClass BuildRunnerClass()
+    {
+        var cls = new PyClass("Runner", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"Runner.{name}", fn);
+        const string LoopKey = "__loop__";
+
+        PyEventLoop? LoopOf(object self) =>
+            ((PyInstance)self).Dict.TryGet(LoopKey, out var l) && l is PyEventLoop loop ? loop : null;
+
+        Add("__init__", (_, a, _) => { ((PyInstance)a[0]).Dict[LoopKey] = PyNone.Instance; return PyNone.Instance; });
+
+        Add("get_loop", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var loop = LoopOf(inst);
+            if (loop is null)
+            {
+                loop = new PyEventLoop(interp);
+                inst.Dict[LoopKey] = loop;
+            }
+            return loop;
+        });
+
+        Add("run", (interp, a, _) =>
+        {
+            var loop = (PyEventLoop)interp.CallMethod(a[0], "get_loop", Array.Empty<object>());
+            return loop.RunUntilComplete(AsyncRuntime.EnsureFuture(interp, a[1], loop));
+        });
+
+        Add("close", (_, a, _) =>
+        {
+            LoopOf(a[0])?.Close();
+            ((PyInstance)a[0]).Dict[LoopKey] = PyNone.Instance;
+            return PyNone.Instance;
+        });
+
+        Add("__enter__", (_, a, _) => a[0]);
+        Add("__exit__", (interp, a, _) => { interp.CallMethod(a[0], "close", Array.Empty<object>()); return false; });
+
+        return cls;
+    }
 
     private static LockWrap LockOf(object self) => (LockWrap)((PyInstance)self).Dict[WrapKey];
     private static EventWrap EventOf(object self) => (EventWrap)((PyInstance)self).Dict[WrapKey];

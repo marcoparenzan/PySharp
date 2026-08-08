@@ -834,6 +834,14 @@ public static class BuiltinsFactory
         // being called with a builtin type itself as `cls`.
         "type" => obj is PyClass || (obj is PyBuiltinFunction btf && BuiltinTypeNames.Contains(btf.Name)),
         "NoneType" => obj is PyNone,
+        // Real CPython: `class Task(Future):` — a Task genuinely IS-A Future, so
+        // `isinstance(some_task, asyncio.Future)` must be True too, not just `isinstance(x,
+        // asyncio.Task)`. The generic fallback below is a flat name-equality check
+        // (PyOps.TypeName reports the *most specific* name, "Task", for a PyTask) and can't see
+        // through PyTask's real C# inheritance from PyFuture on its own. Found via anyio's real
+        // Task/Future interchangeable use in its own type checks (_backends/_asyncio.py), reachable
+        // from `import starlette`.
+        "Future" => obj is PyFuture,
         _ => PyOps.TypeName(obj) == name,
     };
 

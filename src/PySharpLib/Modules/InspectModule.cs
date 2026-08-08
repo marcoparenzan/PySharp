@@ -76,6 +76,26 @@ public static class InspectModule
             _ => false,
         });
 
+        // Real CPython's coroutine-state constants + getcoroutinestate. PySharp's PyCoroutine runs
+        // its body on its own dedicated OS thread rather than CPython's single-threaded generator-
+        // style suspension, so "RUNNING" (actively executing bytecode right now, observed from a
+        // different thread) isn't a state this can determine precisely the way CPython's `cr_running`
+        // flag can — a genuinely different question when coroutines are real OS threads, not just a
+        // scoping gap. Not started -> CREATED; finished -> CLOSED; anything in between is reported
+        // as SUSPENDED, which is correct for the only real use found: anyio's real `getcoroutinestate
+        // (coro) in (CORO_RUNNING, CORO_SUSPENDED)` (_backends/_asyncio.py) just needs "started and
+        // not finished", a distinction this preserves exactly. Found via anyio's real `from inspect
+        // import CORO_RUNNING, CORO_SUSPENDED, getcoroutinestate`, reachable from `import starlette`.
+        d["CORO_CREATED"] = "CORO_CREATED";
+        d["CORO_RUNNING"] = "CORO_RUNNING";
+        d["CORO_SUSPENDED"] = "CORO_SUSPENDED";
+        d["CORO_CLOSED"] = "CORO_CLOSED";
+        d["getcoroutinestate"] = new PyBuiltinFunction("getcoroutinestate", (_, a, _) =>
+        {
+            var coro = (PyCoroutine)a[0];
+            return coro.Finished ? "CORO_CLOSED" : coro.Started ? "CORO_SUSPENDED" : "CORO_CREATED";
+        });
+
         return m;
     }
 

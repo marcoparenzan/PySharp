@@ -1016,6 +1016,81 @@ missing module: both would have silently broken *any* real FastAPI/starlette app
   tests added to the existing `InspectTests`/`ReTests` classes for the two significant bugs). Full
   suite green throughout: 868/868 by the end of this round, up from 862 at the start of it.
 
+### 3.1.7 — past the private asyncio internal: 8 more real gaps, one more significant bug, then a genuine unknown
+
+Continuing past `asyncio.base_events._run_until_complete_cb` (the author's plain "procedi") by
+adding it as a real, importable, self-identity-comparable sentinel — it turned out to be a small,
+one-off addition, not the deep rabbit hole it looked like from the name alone. The probe then kept
+advancing through anyio's real `_backends/_asyncio.py` module-level imports.
+
+- **`inspect.CORO_CREATED`/`CORO_RUNNING`/`CORO_SUSPENDED`/`CORO_CLOSED` + `getcoroutinestate`**:
+  real constants, with `getcoroutinestate` derived from PyCoroutine's own real `Started`/`Finished`
+  state. PySharp's coroutines run on their own dedicated OS thread rather than CPython's single-
+  threaded generator-style suspension, so distinguishing "actively running right now" from
+  "suspended" as precisely as CPython's own `cr_running` flag genuinely isn't the same question here
+  — a documented simplification (both map to `CORO_SUSPENDED`), verified to still satisfy the one
+  real call site found (`getcoroutinestate(coro) in (CORO_RUNNING, CORO_SUSPENDED)`, which only
+  needs "started and not finished").
+- **`queue`**: a real, thread-safe FIFO queue for cross-*OS-thread* producer/consumer use — backed
+  by `System.Collections.Concurrent.BlockingCollection` (real blocking `put`/`get` with real
+  timeouts), a genuinely different primitive from PySharp's existing `asyncio.Queue` (cooperative,
+  single-threaded coroutines on one thread). Verified end to end including a real cross-thread
+  blocking handoff (`queue.get()` on the main thread's own worker thread, unblocked by a `put()`
+  from main) before writing tests. One bug found by my own manual probe before it ever reached a
+  test: `__init__` only read `maxsize` positionally, so `Queue(maxsize=1)` — the common keyword-arg
+  call shape — silently stayed unbounded.
+- **`asyncio.Runner`** (real CPython 3.11+ API): a lazily-created event loop wrapped for reuse
+  across several `.run(coro)` calls, closed once via `.close()`/`__exit__` — real CPython's own
+  `asyncio.run()` is itself built on top of exactly this class, so this is genuinely reusing the
+  same real machinery, not a parallel stub.
+- **`asyncio.eager_task_factory`**: implemented as real *parsed Python source* (not a
+  `PyBuiltinFunction`) specifically so `.__code__` resolves for real via the normal `PyFunction`
+  attribute path — matching the real object shape anyio's own version-gated code expects
+  (`asyncio.eager_task_factory.__code__`, only ever used for an identity comparison, never actually
+  invoked as a task factory in the reachable path). Not actually eager (schedules normally rather
+  than running synchronously to the first suspension point) — a documented simplification.
+- **Real `asyncio.protocols` hierarchy** (`BaseProtocol`/`Protocol`/`BufferedProtocol`/
+  `DatagramProtocol`/`SubprocessProtocol`/`SubprocessStreamProtocol`): real, subclassable base
+  classes with CPython's own real no-op-by-default callback methods
+  (`connection_made`/`data_received`/`datagram_received`/...), matching `Lib/asyncio/protocols.py`
+  exactly in shape. PySharp's own event loop doesn't drive these callbacks from real socket I/O — a
+  separate, larger feature nothing in scope needs yet — so this covers real subclassability, not a
+  wired-up transport layer.
+- **`asyncio.subprocess.SubprocessStreamProtocol` accessible as a real module attribute** — found a
+  second, more general gap while fixing this: real CPython's own `asyncio/__init__.py` imports its
+  submodules internally, so `.subprocess` (and others) become real attributes of the `asyncio`
+  module immediately after a plain `import asyncio`, with no separate `import asyncio.subprocess`
+  statement needed anywhere. PySharp's own submodules were only ever reachable via an explicit
+  dotted import. Fixed by building the submodule inline inside `AsyncioModule.Create()` and setting
+  it as a real dict entry, rather than relying solely on the Importer's separate dotted-registration
+  path (kept too, for explicit `import asyncio.subprocess` to also still work).
+- **`asyncio.Task`**: added as a real, directly-constructible, importable class (previously entirely
+  absent as a name, despite the underlying real `PyTask` machinery already existing and working via
+  `create_task`/`ensure_future`) — **and a second, more general bug found alongside it**:
+  `isinstance(a_real_task, asyncio.Future)` was `False`, when real CPython's `class Task(Future):`
+  means a Task genuinely *is* a Future. `TypeMatchesBuiltinName`'s generic fallback is a flat
+  type-name equality check (`PyOps.TypeName` reports the *most specific* name, `"Task"`, for a
+  `PyTask`), which can't see through `PyTask`'s real C# inheritance from `PyFuture` on its own —
+  fixed with an explicit `"Future" => obj is PyFuture` case ahead of the fallback.
+- **Verified real exception propagation end to end**: a genuine unhandled exception raised inside a
+  route handler (`/boom` → `ValueError`) now correctly propagates all the way back out through
+  starlette's real `wrap_app_handling_exceptions` middleware to the caller — confirming the core
+  exception-handling ASGI plumbing works for the common case (an application bug), not just the
+  happy path.
+- **New, narrower frontier found**: the specific 404-not-found fallback path (`Router.not_found` →
+  `raise HTTPException(status_code=404)` → re-raised uncaught by `wrap_app_handling_exceptions`
+  since no custom handler is registered) now hits a bare `AssertionError` with no message and a very
+  short 2-frame traceback, not yet root-caused. Real starlette's `Router.app` has exactly one bare
+  `assert scope["type"] in ("http", "websocket", "lifespan")`, a plausible but unconfirmed
+  candidate — the responding scope should genuinely satisfy it, so if that *is* the culprit, something
+  about how PySharp threads the scope dict through the not-found fallback is suspect, not the
+  assertion's own logic. Deliberately not chased further this round (see 3.1.6/3.1.7's shared
+  "procedi" mandate to keep making real progress, not to exhaustively solve every edge case in one
+  sitting) — a good target for the next round, now much more narrowly scoped than "the whole 404
+  path" was before this round started.
+- 9 tests added (`M6_Stdlib/StdlibTests.cs`: `QueueModuleTests`, `AsyncioAdditionsTests`). Full
+  suite green throughout: 877/877 by the end of this round, up from 868 at the start of it.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1178,10 +1253,25 @@ on every callable, and `asyncio.AbstractEventLoop`/`all_tasks`/`current_task`. *
 correct ASGI responses end to end** for the index route and a path-parameter route. Full blow-by-blow
 in 3.1.6. 868/868 tests green (up from 862).
 
-**Current frontier for Phase 3**: the 404/exception-handling ASGI path, which needs `from
-asyncio.base_events import _run_until_complete_cb` — a private, underscore-prefixed CPython-internal
-symbol, not real public API. A deliberate stopping point rather than chasing CPython internals;
-`staticfiles.py`/WebSockets also remain unexercised. Not started.
+**8 more real gaps closed past the private asyncio symbol, plus a second significant bug** (same
+continuation): the private `_run_until_complete_cb` turned out to be a small, one-off addition, not
+a deep rabbit hole. Past it: `inspect`'s coroutine-state constants + `getcoroutinestate`, a real
+`queue` module (thread-safe, backed by `BlockingCollection` — genuinely different from `asyncio
+.Queue`; also fixed a `maxsize=` keyword-argument bug found by manual probing before it ever hit a
+test), real `asyncio.Runner`/`eager_task_factory`, the real `asyncio.protocols` base-class hierarchy,
+`asyncio.subprocess.SubprocessStreamProtocol` made accessible as a real attribute (uncovering a more
+general gap: PySharp's own submodules were never auto-attached to their parent package after a plain
+import, unlike real CPython's), and `asyncio.Task` itself (uncovering a second significant bug:
+`isinstance(a_task, asyncio.Future)` was `False`, when real CPython's `Task` genuinely *is* a
+`Future` — fixed generally, not just for this one case). **Verified real exception propagation end
+to end** (`/boom` → `ValueError` → correctly re-raised through starlette's real exception-handling
+middleware). Full blow-by-blow in 3.1.7. 877/877 tests green (up from 868).
+
+**Current frontier for Phase 3**: narrowed significantly — just the 404-not-found fallback path,
+which now hits a bare, un-root-caused `AssertionError`. A plausible candidate (real starlette's own
+`assert scope["type"] in ("http", "websocket", "lifespan")` in `Router.app`) was identified but not
+confirmed; genuinely unclear why it would fail given the scope's `"type"` should be `"http"`
+throughout. `staticfiles.py`/WebSockets also remain unexercised. Not started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

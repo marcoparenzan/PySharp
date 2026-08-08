@@ -2011,3 +2011,161 @@ public class CallAttributeTests
             print(len.__call__([1, 2, 3]))
             """).TrimEnd('\n'));
 }
+
+/// <summary>queue: a real, thread-safe FIFO queue for cross-OS-thread producer/consumer use —
+/// backed by BlockingCollection (real blocking put/get, real timeouts), distinct from PySharp's
+/// asyncio.Queue (cooperative, single-threaded). Found via anyio's real `from queue import Queue`
+/// (_backends/_asyncio.py, worker-thread-pool result handoff), reachable from `import starlette`.
+/// See FASTAPI_PLAN.md Phase 3.</summary>
+public class QueueModuleTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Put_and_get_are_real_fifo_with_real_size_tracking()
+        => Assert.Equal("2\n1\n2\nTrue", Run("""
+            import queue
+            q = queue.Queue()
+            q.put(1)
+            q.put(2)
+            print(q.qsize())
+            print(q.get())
+            print(q.get())
+            print(q.empty())
+            """));
+
+    [Fact]
+    public void Maxsize_from_a_keyword_argument_makes_the_queue_real_bounded()
+        // Regression: __init__ only ever read maxsize from a[1] (positional), so
+        // Queue(maxsize=1) silently stayed unbounded — found via this same fix's own manual probe.
+        => Assert.Equal("True\nfull caught", Run("""
+            import queue
+            q = queue.Queue(maxsize=1)
+            q.put("x")
+            print(q.full())
+            try:
+                q.put_nowait("y")
+            except queue.Full:
+                print("full caught")
+            """));
+
+    [Fact]
+    public void Get_nowait_on_an_empty_queue_raises_Empty()
+        => Assert.Equal("empty caught", Run("""
+            import queue
+            q = queue.Queue()
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                print("empty caught")
+            """));
+
+    [Fact]
+    public void Real_cross_thread_blocking_get_unblocks_when_another_thread_puts()
+        => Assert.Equal("42", Run("""
+            import queue, threading
+            q = queue.Queue()
+            def worker():
+                q.put(q.get() * 2)
+            t = threading.Thread(target=worker)
+            t.start()
+            q.put(21)
+            t.join()
+            print(q.get())
+            """));
+}
+
+/// <summary>asyncio.Runner (real CPython 3.11+ API), eager_task_factory (real .__code__ via real
+/// parsed-source function), the real asyncio.protocols hierarchy, and asyncio.Task (plus the
+/// isinstance(task, Future) fix it uncovered — Task genuinely IS-A Future in real CPython, but the
+/// flat type-name comparison used for builtin-name isinstance checks couldn't see through PyTask's
+/// real C# inheritance from PyFuture on its own). All found via anyio's real dependency chain
+/// (_backends/_asyncio.py), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class AsyncioAdditionsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Runner_drives_multiple_coroutines_across_run_calls()
+        => Assert.Equal("42\n20\n10", Run("""
+            import asyncio
+            async def f(x):
+                return x * 2
+            with asyncio.Runner() as runner:
+                print(runner.run(f(21)))
+                print(runner.run(f(10)))
+            r2 = asyncio.Runner()
+            print(r2.run(f(5)))
+            r2.close()
+            """));
+
+    [Fact]
+    public void Eager_task_factory_has_a_real_code_object_and_still_works_if_called()
+        => Assert.Equal("True\nTrue\n5", Run("""
+            import asyncio
+            print(asyncio.eager_task_factory.__code__ is not None)
+            print(callable(asyncio.eager_task_factory))
+            async def f():
+                return 5
+            async def main():
+                loop = asyncio.get_event_loop()
+                t = asyncio.eager_task_factory(loop, f())
+                return await t
+            print(asyncio.run(main()))
+            """));
+
+    [Fact]
+    public void Protocol_hierarchy_is_real_and_subclassable()
+        => Assert.Equal("True\nTrue\nok", Run("""
+            import asyncio
+            class MyProto(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.made = True
+            p = MyProto()
+            p.connection_made(None)
+            print(p.made)
+            print(isinstance(p, asyncio.BaseProtocol))
+            class MyDgram(asyncio.DatagramProtocol):
+                pass
+            d = MyDgram()
+            d.datagram_received(b"x", ("a", 1))
+            print("ok")
+            """));
+
+    [Fact]
+    public void Asyncio_subprocess_SubprocessStreamProtocol_is_accessible_and_subclassable()
+        // Regression: `asyncio.subprocess.SubprocessStreamProtocol` raised AttributeError even
+        // after `import asyncio` — real CPython's asyncio/__init__.py imports its submodules
+        // internally so `.subprocess` is a real attribute right away, no separate
+        // `import asyncio.subprocess` statement needed; the fix builds it inline in Create().
+        => Assert.Equal("True", Run("""
+            import asyncio
+            class Custom(asyncio.subprocess.SubprocessStreamProtocol):
+                def process_exited(self):
+                    super().process_exited()
+                    self.exited = True
+            c = Custom()
+            c.process_exited()
+            print(c.exited)
+            """));
+
+    [Fact]
+    public void Task_is_a_real_importable_class_and_is_also_a_Future()
+        // Regression: isinstance(task, asyncio.Future) was False for a real PyTask — Task derives
+        // from Future in real CPython, but TypeMatchesBuiltinName's flat name-equality fallback
+        // (PyOps.TypeName reports the most-specific name, "Task") couldn't see through PyTask's
+        // real C# inheritance from PyFuture without an explicit case.
+        => Assert.Equal("True\nTrue\n5\n5", Run("""
+            import asyncio
+            async def f():
+                return 5
+            async def main():
+                t = asyncio.create_task(f())
+                print(isinstance(t, asyncio.Task))
+                print(isinstance(t, asyncio.Future))
+                print(await t)
+                t2 = asyncio.Task(f())
+                print(await t2)
+            asyncio.run(main())
+            """));
+}
