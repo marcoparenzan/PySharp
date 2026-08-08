@@ -404,20 +404,31 @@ in scenario 1).
   honestly scoped to ASCII), `netrc`, arbitrary attributes on builtin functions
   (`PyBuiltinFunction.Attributes`), and `sys.maxunicode` — plus 3 PyPI installs (`idna`, `sniffio`,
   `rfc3986`) and a real version-pin fix (`httpx==0.23.3`, since `starlette==0.27.0`'s `TestClient`
-  needs the old `Client(app=...)` convenience param modern httpx removed). **Current frontier**: a
-  genuine .NET-regex-engine limitation — real `rfc3986`'s validation regex uses character-class
-  ranges spanning astral-plane Unicode codepoints, which .NET's `System.Text.RegularExpressions`
-  parses as UTF-16 code-unit ranges (via surrogate pairs) rather than full codepoints, producing
-  `[x-y] range in reverse order` for ordinary, valid `re` syntax — a general limitation, not scoped
-  to this one package, needing either codepoint-aware preprocessing of character-class ranges or a
-  deeper `re` engine change. Phase 4.2 (a real target sample app) not started. 6/7/8 to do; native
-  cross-cutting partial.
+  needs the old `Client(app=...)` convenience param modern httpx removed). The astral-regex wall
+  from the previous round is now **solved for real**: character classes with astral (>U+FFFF)
+  Unicode ranges are decomposed into the standard UTF-16 surrogate-pair sub-range fragments before
+  reaching .NET's regex engine (the same technique JS's own `u`-flag polyfills use), handling the
+  general multi-high-surrogate case, not just a special case. Also fixed reaching this: a real,
+  callable `.__hash__` on every function/builtin (previously only the top-level `hash()` builtin
+  worked); real `atexit` (callbacks actually run in reverse order at script end, scoped per engine
+  instance, not a shared static); real `importlib.resources` (`files()`/`as_file()`, a real
+  `pathlib.Path` via the package's own tracked `__file__`); real `logging.addLevelName`/
+  `getLevelName`. Plus 3 more PyPI installs (`certifi`, `httpcore`, `h11`), all compatible with the
+  already-pinned `httpx==0.23.3`. **`import httpx` succeeds**, and constructing a real
+  `starlette.testclient.TestClient` gets substantially further into `httpcore`/`h11`'s own import
+  chain. **Current frontier**: real `h11` compiles several regexes from **bytes** patterns
+  (`re.compile(rb"[0-9]+")`) — real CPython's `re` supports both `str` and `bytes` patterns, but
+  PySharp's `re.compile()` only ever accepted `str`. A genuinely separate, substantial feature (every
+  `re` entry point needs bytes-vs-str mode awareness, matching via a byte-preserving encoding since
+  .NET's `Regex` only operates on `string`), not started this round. Phase 4.2 (a real target sample
+  app) not started. 6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~65 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
-  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
-  `subprocess`, `tempfile`, `http`, `http.cookies`, `http.cookiejar`, `email.utils`, `html`,
-  `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `codecs`, `zlib`, `bisect`, `unicodedata`,
-  `netrc`; `typing`/`dataclasses` upgraded from stubs to real implementations).
+  `shlex`, `contextvars`, `importlib`, `importlib.resources`, `textwrap`, `signal`,
+  `concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.cookies`, `http.cookiejar`,
+  `email.utils`, `html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `codecs`, `zlib`,
+  `bisect`, `unicodedata`, `netrc`, `atexit`; `typing`/`dataclasses` upgraded from stubs to real
+  implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅ (incl. real
@@ -527,12 +538,23 @@ in scenario 1).
   (`PyBuiltinFunction.Attributes`, matching real Python-level functions); `sys.maxunicode` ✅. Plus
   3 PyPI installs (`idna`, `sniffio`, `rfc3986`) and a real version-pin fix
   (`httpx==0.23.3`, since `starlette==0.27.0`'s `TestClient` needs the `Client(app=...)`
-  convenience param modern httpx removed). **New frontier**: a genuine .NET-regex-engine limitation
-  — real `rfc3986`'s validation regex has character-class ranges spanning astral-plane Unicode
-  codepoints, which .NET's regex engine parses as UTF-16 code-unit ranges (surrogate pairs) rather
-  than full codepoints, producing a spurious "range in reverse order" error for ordinary, valid `re`
-  syntax — a general limitation worth its own dedicated round, not a quick fix.
-- Tests: **956 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  convenience param modern httpx removed). **The astral-regex wall is now solved for real** ✅: a
+  non-negated character class containing an astral (>U+FFFF) Unicode range is rewritten into an
+  alternation of the standard UTF-16 surrogate-pair sub-range fragments before reaching .NET's regex
+  engine — the same technique JS's own Unicode-aware (`u`-flag) regex mode uses — handling the
+  general multi-high-surrogate decomposition, not just a narrow special case; verified against 16
+  hand-derived cases (range boundaries, gaps, quantifiers, `findall`). Also: a real, callable
+  `.__hash__` on every function/builtin ✅ (`fn.__hash__()` previously raised `AttributeError` even
+  though `hash(fn)` already worked); real `atexit` ✅ (callbacks actually run at script end, in
+  reverse order, scoped per engine instance); real `importlib.resources` ✅ (`files()`/`as_file()`,
+  a real `pathlib.Path`); real `logging.addLevelName`/`getLevelName` ✅. Plus 3 more PyPI installs
+  (`certifi`, `httpcore`, `h11`). **`import httpx` succeeds**, and building a real `TestClient`
+  against a real `FastAPI()` app now gets deep into `httpcore`/`h11`'s own import chain. **New
+  frontier**: real `h11` compiles regexes from **bytes** patterns (`re.compile(rb"...")`) — real
+  CPython's `re` supports both `str` and `bytes`, but PySharp's `re.compile()` only ever accepted
+  `str`. A separate, substantial feature (every `re` entry point needs bytes-vs-str mode awareness),
+  not started this round.
+- Tests: **963 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

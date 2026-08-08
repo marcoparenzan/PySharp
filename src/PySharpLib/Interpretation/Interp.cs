@@ -2737,6 +2737,12 @@ public sealed class Interp
                             return inst;
                         });
                         return true;
+                    // Real CPython: every function/builtin is hashable by identity — see the same
+                    // case for PyFunction below for the full doc comment.
+                    case "__hash__":
+                        value = new PyBuiltinFunction("builtin_function_or_method.__hash__", (_, _, _) =>
+                            new BigInteger(PyOps.PyHash(obj)));
+                        return true;
                 }
                 // other attributes (e.g. builtin type methods like str.upper): normal path
                 return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
@@ -2825,6 +2831,16 @@ public sealed class Interp
                     // 'cython_function_or_method'` idiom (ModelMetaclass.__new__'s is_untouched()).
                     case "__class__":
                         value = Builtins.BuiltinsFactory.TypeNamePseudoClass(this, obj);
+                        return true;
+                    // Real CPython: every function is hashable by identity (object.__hash__'s
+                    // default) — `f.__hash__` itself must resolve to a callable, not just work
+                    // through the top-level `hash()` builtin (which already did via PyOps.PyHash's
+                    // identity fallback). Found via real rfc3986's own dependency chain: some code
+                    // checks `func.__hash__` directly (e.g. a hashability probe) rather than calling
+                    // `hash(func)`.
+                    case "__hash__":
+                        value = new PyBuiltinFunction("function.__hash__", (_, _, _) =>
+                            new BigInteger(PyOps.PyHash(obj)));
                         return true;
                     default:
                         if (fn.Attributes.TryGet(name, out value!))

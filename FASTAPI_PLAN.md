@@ -1942,6 +1942,84 @@ dependency installs — reaching **`import httpx` succeeds** before hitting a ge
   `Parse_qs_...` case added to `UrlSplitTests` (1). Full suite green throughout, confirmed stable
   across repeated runs: 956/956 by the end of this round, up from 938 at the start.
 
+### 4.1.7 — the astral-regex wall solved for real, `import httpx` succeeds, `TestClient` construction gets much further
+
+The author's go-ahead ("procedi") to tackle 4.1.6's regex-engine wall head-on rather than deferring
+it further.
+
+- **Real per-codepoint character-class handling for astral Unicode ranges** (`ReModule.cs`,
+  `RewriteAstralCharClasses` + helpers, called from `TranslatePattern` before handing a pattern to
+  .NET's `Regex`): implements the standard UTF-16 surrogate-pair range-decomposition algorithm (the
+  same technique other UTF-16-based regex engines — e.g. JavaScript's own `u`-flag polyfills — use).
+  A non-negated `[...]` class containing an astral member/range is rewritten into an alternation:
+  any BMP-only members stay a plain `[...]`, and each astral range is split into the minimal set of
+  `[high-surrogate-range][low-surrogate-range]` two-code-unit fragments whose union covers exactly
+  that codepoint range — handling the general case (a range spanning many high-surrogate values,
+  needing a partial-first/partial-last/full-middle-cross-product split), not just the single-high-
+  surrogate special case. Negated classes (`[^...]`) and a class where an escape sequence forms a
+  range endpoint are left unchanged (a documented, safe fallback — nothing reachable needs either).
+  Verified by hand against 16 cases (range boundaries, a value just past the end, a different astral
+  plane, plain BMP text, a mixed BMP+astral class matching correctly at every sub-range boundary and
+  correctly rejecting the gaps between them, a quantifier applied to the rewritten group, and
+  `findall` returning the right matches) before trusting it — no local Python interpreter is
+  available in this environment, so every expected value was hand-derived by reasoning through the
+  actual codepoints/surrogate-pair math. Found via real rfc3986's own `abnf_regexp.py` (RFC 3987
+  IUNRESERVED/IPRIVATE ranges), confirmed by re-running the exact real pattern that originally
+  failed.
+- **A function/builtin's `.__hash__` is now a real, callable attribute** (`Interp.cs`'s
+  `TryGetAttr`, both the `PyFunction` and `PyBuiltinFunction` cases): real CPython — every function
+  is hashable by identity (`object.__hash__`'s default) — but `fn.__hash__` itself raised
+  `AttributeError` even though the top-level `hash(fn)` builtin already worked (via
+  `PyOps.PyHash`'s identity fallback for the default case). Found via real rfc3986's own dependency
+  chain: some code checks `func.__hash__` directly as a hashability probe rather than calling
+  `hash(func)`.
+- **`atexit`** (new `AtexitModule.cs`, wired into `PyEngine.Run`): real `register`/`unregister`,
+  with registered callbacks *actually invoked* in reverse registration order once the top-level
+  script finishes — not a bare stub. The callback list lives on the `atexit` `PyModule` instance
+  itself, not a shared static, so it's naturally scoped per `PyEngine`/script run (the same lesson
+  this project already learned the hard way from the 4.1.5 flaky-suite concurrency bugs — a
+  process-wide list here would race the same way under parallel test execution). Found via real
+  certifi's `core.py` (`atexit.register(exit_cacert_ctx)`), an httpx transitive dependency.
+- **`importlib.resources`** (new `ImportlibResourcesModule.cs`): real `files()`/`as_file()` (the
+  3.11+ API certifi's own `sys.version_info >= (3, 11)` branch selects, matching this project's
+  declared 3.12 compatibility), resolving a real on-disk package directory via its already-tracked
+  `__file__` and returning a real `pathlib.Path` — no zipimport/extraction support, since nothing
+  reachable runs from a zip, matching real CPython's own documented "common case" (`as_file`'s
+  `__exit__` is a no-op). The older (<3.11) `path`/`read_text` free functions are included too, for
+  robustness, though nothing reachable actually selects that branch. Found via real certifi's
+  `core.py` resolving its bundled `cacert.pem`.
+- **`logging.addLevelName`/`getLevelName`** (LoggingModule.cs): didn't exist — the existing
+  (already-real, not-a-stub) `Logger` class hard-coded its level-name mapping. Fixed by threading a
+  per-module-instance (not shared-static — same discipline as `atexit` above) custom-level-name
+  dictionary through both the new `addLevelName`/`getLevelName` functions and the existing
+  `Logger.log`'s own level-name resolution, so a custom level registered via `addLevelName` is
+  actually used when a logger emits at that level. Found via real httpx's own `_utils.py`
+  (`get_logger`: `logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")`).
+- **PyPI dependencies installed**: `certifi`, `httpcore`, `h11` (all real, unpinned — no version
+  conflicts found with the already-pinned `httpx==0.23.3`, unlike the earlier `app=` incompatibility
+  that forced that pin in the first place).
+- **`import httpx` succeeds**, verified directly and repeatedly. Pushed further: constructing a real
+  `starlette.testclient.TestClient` against a real `FastAPI()` app now gets substantially deeper
+  into `httpcore`/`h11`'s own import chain before hitting the next real wall.
+- **The wall this round stopped at**: real, unmodified `h11` (httpx's low-level HTTP/1.1 transport,
+  installed as a genuine dependency) compiles several regexes from **bytes** patterns
+  (`re.compile(rb"[0-9]+")`, `re.compile(field_name.encode("ascii"))`) — real CPython's `re` module
+  supports compiling and matching against `bytes` as well as `str`, but PySharp's `re.compile()`
+  only ever accepted a `str` pattern, raising `TypeError: compile(): invalid argument type`. This is
+  a genuinely separate, substantial feature (not a quick fix): every entry point in `ReModule.cs`
+  (`compile`/`match`/`fullmatch`/`search`/`findall`/`finditer`/`sub`/`subn`/`split`, plus the
+  `Match` object's `group`/`groups`/`groupdict`/`start`/`end`) would need bytes-vs-str mode
+  awareness — matching against bytes would need a byte-preserving encode/decode strategy (e.g.
+  Latin-1, which maps each byte 0–255 to a codepoint 0–255 one-to-one) since .NET's `Regex` only
+  operates on `string`, with results re-encoded back to `bytes` for bytes-mode matches/groups.
+  Deliberately not started this round — left as the concrete next step for whoever picks this back
+  up.
+- 7 tests added: `M6_Stdlib/StdlibTests.cs` gained 3 new `ReTests` cases (astral character classes:
+  a single range, a mixed BMP+astral class, a quantifier+findall check), `FunctionHashAttributeTests`
+  (1), `AtexitTests` (1), `ImportlibResourcesTests` (1), `LoggingAddLevelNameTests` (1). Full suite
+  green throughout, confirmed stable across 15 consecutive clean full-suite runs: 963/963 by the end
+  of this round, up from 956 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

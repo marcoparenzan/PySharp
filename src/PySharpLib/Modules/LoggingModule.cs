@@ -26,7 +26,19 @@ public static class LoggingModule
         d["DEBUG"] = new BigInteger(10);
         d["NOTSET"] = new BigInteger(0);
 
-        var loggerClass = BuildLoggerClass();
+        // Scoped per-module-instance (per engine/script run), not a shared static — this project
+        // learned the hard way (see FASTAPI_PLAN.md's flaky-suite concurrency fixes) that
+        // process-wide mutable state like this races under xUnit's real parallel test execution.
+        var customLevelNames = new Dictionary<int, string>();
+        d["addLevelName"] = new PyBuiltinFunction("addLevelName", (_, a, _) =>
+        {
+            customLevelNames[(int)PyOps.AsBigInt(a[0], "level")] = (string)a[1];
+            return PyNone.Instance;
+        });
+        d["getLevelName"] = new PyBuiltinFunction("getLevelName", (_, a, _) =>
+            LevelNameFor((int)PyOps.AsBigInt(a[0], "level"), customLevelNames));
+
+        var loggerClass = BuildLoggerClass(customLevelNames);
         var loggers = new PyDict();
 
         d["getLogger"] = new PyBuiltinFunction("getLogger", (_, a, _) =>
@@ -62,7 +74,18 @@ public static class LoggingModule
         return m;
     }
 
-    private static PyClass BuildLoggerClass()
+    private static string LevelNameFor(int level, Dictionary<int, string> custom) => custom.TryGetValue(level, out var n) ? n : level switch
+    {
+        >= 50 => "CRITICAL",
+        >= 40 => "ERROR",
+        >= 30 => "WARNING",
+        >= 20 => "INFO",
+        >= 10 => "DEBUG",
+        0 => "NOTSET",
+        _ => $"Level {level}",
+    };
+
+    private static PyClass BuildLoggerClass(Dictionary<int, string> customLevelNames)
     {
         var cls = new PyClass("Logger", new List<PyClass>());
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"Logger.{name}", fn);
@@ -82,15 +105,7 @@ public static class LoggingModule
             interp.Out.Write($"{levelName}:{logger.Dict["name"]}:{text}\n");
         }
 
-        string LevelName(int level) => level switch
-        {
-            >= 50 => "CRITICAL",
-            >= 40 => "ERROR",
-            >= 30 => "WARNING",
-            >= 20 => "INFO",
-            >= 10 => "DEBUG",
-            _ => "NOTSET",
-        };
+        string LevelName(int level) => LevelNameFor(level, customLevelNames);
 
         Add("setLevel", (_, a, _) =>
         {

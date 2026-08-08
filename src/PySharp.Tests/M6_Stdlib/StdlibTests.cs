@@ -991,6 +991,58 @@ public class ReTests
             print(m.groups())
             print(m.groups("str"))
             """));
+
+    [Fact]
+    public void Character_class_with_an_astral_range_matches_only_codepoints_in_that_range()
+        // Regression: .NET's regex engine matches UTF-16 *code units*, not full codepoints — a
+        // literal astral (>U+FFFF) character inside a `[...]` class range (already decoded to a
+        // surrogate pair by the time a Python string literal like `\U00010000` reaches re.compile)
+        // was misparsed as two independent BMP-range endpoints, raising `error: Invalid pattern ...
+        // [x-y] range in reverse order` for completely valid Python `re` syntax. Found via real
+        // rfc3986's own abnf_regexp.py (RFC 3987 IUNRESERVED ranges — an httpx transitive
+        // dependency), fixed by decomposing the astral range into the standard UTF-16 surrogate-pair
+        // sub-range fragments before handing the pattern to .NET's engine.
+        => Assert.Equal("True\nTrue\nTrue\nFalse\nFalse\nFalse", Run("""
+            import re
+            p = re.compile("[\U00010000-\U0001FFFD]")
+            print(bool(p.match(chr(0x10000))))
+            print(bool(p.match(chr(0x1FFFD))))
+            print(bool(p.match(chr(0x15000))))
+            print(bool(p.match(chr(0x1FFFE))))
+            print(bool(p.match(chr(0x20000))))
+            print(bool(p.match("A")))
+            """));
+
+    [Fact]
+    public void Character_class_mixing_BMP_and_astral_ranges_matches_both_and_nothing_in_between()
+        // Same fix as above, but for a class with a mix of BMP and multiple astral sub-ranges (the
+        // exact real shape of rfc3986's own IPRIVATE pattern:
+        // `-\U000F0000-\U000FFFFD\U00100000-\U0010FFFD`).
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nFalse", Run("""
+            import re
+            p = re.compile("[-\U000F0000-\U000FFFFD\U00100000-\U0010FFFD]")
+            print(bool(p.match(chr(0xE000))))
+            print(bool(p.match(chr(0xF8FF))))
+            print(bool(p.match(chr(0xF0000))))
+            print(bool(p.match(chr(0xFFFFD))))
+            print(bool(p.match(chr(0x100000))))
+            print(bool(p.match(chr(0x10FFFD))))
+            print(bool(p.match(chr(0xF900))))
+            print(bool(p.match(chr(0xFFFFE))))
+            """));
+
+    [Fact]
+    public void Astral_character_class_still_works_correctly_with_a_quantifier_and_findall()
+        => Assert.Equal("True\nTrue", Run("""
+            import re
+            p3 = re.compile("[\U00010000-\U0001FFFD]+")
+            m3 = p3.match(chr(0x10000) + chr(0x10001) + "A")
+            print(m3.group() == chr(0x10000) + chr(0x10001))
+
+            p4 = re.compile("[\U00010000-\U0001FFFD]")
+            found = p4.findall("x" + chr(0x10000) + "y" + chr(0x10005) + "z")
+            print(found == [chr(0x10000), chr(0x10005)])
+            """));
 }
 
 /// <summary>colorsys: RGB/HLS/HSV conversions, ported directly from CPython's algorithms. Every
@@ -3259,4 +3311,101 @@ public class HttpCookiejarTests
 
                 print(email.message.Message().get_all("Set-Cookie", []) == [])
                 """));
+}
+
+/// <summary>Every function/builtin now exposes a real, callable `.__hash__` (real CPython: hashable
+/// by identity, object.__hash__'s default) — previously `hash(fn)` worked (via PyOps.PyHash's
+/// identity fallback) but `fn.__hash__` itself raised AttributeError, since only the top-level
+/// `hash()` builtin path was wired up. Found via real rfc3986's own dependency chain (an httpx
+/// transitive dependency) — some code checks `func.__hash__` directly as a hashability probe rather
+/// than calling `hash(func)`. See FASTAPI_PLAN.md.</summary>
+public class FunctionHashAttributeTests
+{
+    [Fact]
+    public void Hash_dunder_is_callable_and_agrees_with_the_hash_builtin()
+        => Assert.Equal("True\nTrue\nTrue", Py.Run("""
+            def f(): pass
+            print(f.__hash__() == hash(f))
+            print(len.__hash__() == hash(len))
+            print(f.__hash__ is not None)
+            """).TrimEnd('\n'));
+}
+
+/// <summary>atexit: real register/unregister, with registered callbacks actually invoked in reverse
+/// registration order when the top-level script finishes (PyEngine.Run calls
+/// AtexitModule.RunAtExit) — not a bare stub. Found via real certifi's `core.py`
+/// (`atexit.register(exit_cacert_ctx)`), an httpx transitive dependency. See FASTAPI_PLAN.md.</summary>
+public class AtexitTests
+{
+    [Fact]
+    public void Registered_callbacks_run_in_reverse_order_after_the_script_finishes()
+        => Assert.Equal("main done\na\nb 1 5", Py.Run("""
+            import atexit
+            def a():
+                print("a")
+            def b(x, y=2):
+                print("b", x, y)
+            atexit.register(a)
+            atexit.register(b, 1, y=5)
+            atexit.unregister(a)
+            atexit.register(a)
+            print("main done")
+            """).TrimEnd('\n'));
+}
+
+/// <summary>importlib.resources: real `files()`/`as_file()` (3.11+ API), resolving a real on-disk
+/// package directory via its `__file__` and returning a real `pathlib.Path` with no zipimport
+/// extraction (nothing reachable runs from a zip). Found via real certifi's `core.py`
+/// (`from importlib.resources import as_file, files`), an httpx transitive dependency, resolving
+/// its bundled `cacert.pem`. See FASTAPI_PLAN.md.</summary>
+public class ImportlibResourcesTests
+{
+    [Fact]
+    public void Files_joinpath_and_as_file_resolve_a_real_bundled_package_resource()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "pysharp_implib_res_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string pkgDir = Path.Combine(dir, "mypkg");
+        Directory.CreateDirectory(pkgDir);
+        File.WriteAllText(Path.Combine(pkgDir, "__init__.py"), "");
+        File.WriteAllText(Path.Combine(pkgDir, "data.txt"), "hello resource");
+        try
+        {
+            var writer = new StringWriter();
+            var engine = new PyEngine(writer);
+            engine.Importer.SearchPaths.Add(dir);
+            engine.Run("""
+                from importlib.resources import as_file, files
+                t = files("mypkg").joinpath("data.txt")
+                with as_file(t) as p:
+                    print(type(p).__name__)
+                    print(str(p).endswith("data.txt"))
+                    print(p.read_text())
+                """);
+            Assert.Equal("Path\nTrue\nhello resource\n", writer.ToString());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+}
+
+/// <summary>logging.addLevelName/getLevelName: real, scoped per-module-instance (not a shared
+/// static — this project learned that lesson the hard way from earlier flaky-suite concurrency
+/// bugs). Found via real httpx's `_utils.py` (`get_logger`: `logging.addLevelName(TRACE_LOG_LEVEL,
+/// "TRACE")`). See FASTAPI_PLAN.md.</summary>
+public class LoggingAddLevelNameTests
+{
+    [Fact]
+    public void Custom_level_name_is_used_by_getLevelName_and_by_a_logger_emitting_at_that_level()
+        => Assert.Equal("TRACE\nINFO\nTRACE:test:hello world", Py.Run("""
+            import logging
+            logging.addLevelName(5, "TRACE")
+            print(logging.getLevelName(5))
+            print(logging.getLevelName(20))
+            logger = logging.getLogger("test")
+            logger.setLevel(5)
+            logger.log(5, "hello %s", "world")
+            """).TrimEnd('\n'));
 }

@@ -47,6 +47,8 @@ public static class StdlibModules
         importer.RegisterBuiltin("bisect", _ => BisectModule.Create());
         importer.RegisterBuiltin("unicodedata", _ => UnicodedataModule.Create());
         importer.RegisterBuiltin("netrc", _ => NetrcModule.Create());
+        importer.RegisterBuiltin("atexit", _ => AtexitModule.Create());
+        importer.RegisterBuiltin("importlib.resources", _ => ImportlibResourcesModule.Create());
         importer.RegisterBuiltin("urllib", _ => UrllibModule.Create());
         importer.RegisterBuiltin("urllib.parse", _ => UrllibModule.CreateParse());
         importer.RegisterBuiltin("urllib.request", _ => UrllibModule.CreateRequest());

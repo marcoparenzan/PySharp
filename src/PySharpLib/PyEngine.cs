@@ -72,6 +72,8 @@ public sealed class PyEngine
         // that one fix. Matches the same technique this codebase already uses for coroutine/
         // generator bodies (their own dedicated threads in Async.cs/PyGenerator.cs).
         Runtime.BigStack.Run(() => Interp.RunModule(ast, module));
+        if (Importer.Modules.TryGet("atexit", out var atexitObj) && atexitObj is PyModule atexitModule)
+            Modules.AtexitModule.RunAtExit(Interp, atexitModule);
         return module;
     }
 
