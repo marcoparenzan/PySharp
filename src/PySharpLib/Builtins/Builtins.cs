@@ -14,6 +14,92 @@ namespace PySharpLib.Builtins;
 /// <summary>Builds the builtins module: functions, types and exception classes.</summary>
 public static class BuiltinsFactory
 {
+    /// <summary>memoryview: a real (if simplified) view over bytes/bytearray — a bytearray-backed
+    /// view shares the SAME underlying storage (mutations through either side are visible on the
+    /// other, matching real CPython), a bytes-backed view is read-only. Implemented as a PyClass
+    /// (like StringIO/BytesIO) rather than a new native runtime type: get isinstance/GetItem/`|`
+    /// union-operand support for free from the existing generic PyInstance/PyClass machinery,
+    /// instead of needing new native-type plumbing throughout the interpreter. Found via
+    /// starlette's real `Content = str | bytes | memoryview` module-level type alias
+    /// (responses.py — evaluated eagerly despite `from __future__ import annotations`, since it's a
+    /// plain assignment, not a deferred annotation), reachable from `import starlette`. See
+    /// FASTAPI_PLAN.md Phase 3.</summary>
+    private static readonly PyClass MemoryViewClass = BuildMemoryViewClass();
+
+    private static PyClass BuildMemoryViewClass()
+    {
+        var cls = new PyClass("memoryview", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"memoryview.{name}", fn);
+        const string dataKey = "__data__";
+        const string roKey = "__readonly__";
+
+        List<byte> Data(object self) => (List<byte>)((PyInstance)self).Dict[dataKey];
+
+        Add("__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            switch (a[1])
+            {
+                case PyByteArray ba:
+                    inst.Dict[dataKey] = ba.Data; // shared reference: real view semantics
+                    inst.Dict[roKey] = false;
+                    break;
+                case PyBytes b:
+                    inst.Dict[dataKey] = new List<byte>(b.Data);
+                    inst.Dict[roKey] = true;
+                    break;
+                default:
+                    throw PyErr.TypeError("memoryview: a bytes-like object is required");
+            }
+            return PyNone.Instance;
+        });
+        Add("__len__", (_, a, _) => new BigInteger(Data(a[0]).Count));
+        Add("__getitem__", (_, a, _) =>
+        {
+            var data = Data(a[0]);
+            if (a[1] is PySlice slice)
+            {
+                var (start, _, step, count) = slice.Indices(data.Count);
+                var items = new byte[count];
+                for (int k = 0, idx = start; k < count; k++, idx += step)
+                    items[k] = data[idx];
+                return new PyBytes(items);
+            }
+            int i = PyOps.SeqIndex(a[1], data.Count, "memoryview");
+            return new BigInteger(data[i]);
+        });
+        Add("__setitem__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            if (inst.Dict[roKey] is true)
+                throw PyErr.TypeError("cannot modify read-only memory");
+            Data(inst)[PyOps.SeqIndex(a[1], Data(inst).Count, "memoryview")] = (byte)PyOps.AsBigInt(a[2], "value");
+            return PyNone.Instance;
+        });
+        Add("__eq__", (_, a, _) =>
+        {
+            var self = Data(a[0]);
+            var other = a[1] switch
+            {
+                PyBytes b => b.Data,
+                PyByteArray b => (IReadOnlyList<byte>)b.Data,
+                PyInstance i when i.Class == cls => Data(i),
+                _ => null,
+            };
+            return other is not null && self.SequenceEqual(other);
+        });
+        Add("__iter__", (_, a, _) => new PyIterator(Data(a[0]).Select(b => (object)new BigInteger(b)).GetEnumerator()));
+        Add("tobytes", (_, a, _) => new PyBytes(Data(a[0]).ToArray()));
+        Add("tolist", (_, a, _) => new PyList(Data(a[0]).Select(b => (object)new BigInteger(b))));
+        Add("release", (_, _, _) => PyNone.Instance);
+        Add("__repr__", (_, a, _) => $"<memory at 0x{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(a[0]):x8}>");
+        cls.Dict["nbytes"] = new PyProperty { Getter = new PyBuiltinFunction("memoryview.nbytes", (_, a, _) => new BigInteger(Data(a[0]).Count)) };
+        cls.Dict["readonly"] = new PyProperty { Getter = new PyBuiltinFunction("memoryview.readonly", (_, a, _) => ((PyInstance)a[0]).Dict[roKey]) };
+        cls.Dict["obj"] = new PyProperty { Getter = new PyBuiltinFunction("memoryview.obj", (_, a, _) => new PyBytes(Data(a[0]).ToArray())) };
+
+        return cls;
+    }
+
     public static PyModule Create()
     {
         var module = new PyModule("builtins");
@@ -194,6 +280,8 @@ public static class BuiltinsFactory
                     .Select(x => (byte)PyOps.AsBigInt(x, "bytes item"))),
             };
         });
+
+        d["memoryview"] = MemoryViewClass;
 
         Add("list", (interp, args, _) =>
             args.Length == 0 ? new PyList() : new PyList(PyOps.Iterate(interp, args[0])));
@@ -678,6 +766,14 @@ public static class BuiltinsFactory
             case PyBuiltinFunction bf:
                 // isinstance(x, int) where int is the builtin conversion function
                 return TypeMatchesBuiltinName(obj, bf.Name);
+            // isinstance(x, A | B): real CPython (3.10+) accepts a types.UnionType directly as
+            // isinstance's 2nd arg, same as a tuple of types. Found via starlette's real `Content =
+            // str | bytes | memoryview` combined with real `isinstance(content, bytes | memoryview)`
+            // calls (responses.py) — reachable once memoryview and the PEP 604 union itself both
+            // existed, but this recursive-membership check never had.
+            case PyInstance ui when ui.Class == Modules.GenericAliasModule.GenericAliasClass
+                && ReferenceEquals(Modules.GenericAliasModule.GetOrigin(ui), Modules.MiscModules.UnionTypeClass):
+                return Modules.GenericAliasModule.GetArgs(ui).Items.Any(x => IsInstance(obj, x));
             default:
                 throw PyErr.TypeError("isinstance() arg 2 must be a type or tuple of types");
         }
@@ -699,6 +795,10 @@ public static class BuiltinsFactory
                 // dict)` (typing.py's is_typeddict) — `dict`/`list`/`str`/etc. as issubclass's 2nd
                 // arg previously always raised, since they're PyBuiltinFunction, not PyClass.
                 return cls.Mro.Any(m => m.Name == bf.Name);
+            // issubclass(X, A | B): same real CPython 3.10+ acceptance as isinstance's case above.
+            case PyInstance ui when ui.Class == Modules.GenericAliasModule.GenericAliasClass
+                && ReferenceEquals(Modules.GenericAliasModule.GetOrigin(ui), Modules.MiscModules.UnionTypeClass):
+                return Modules.GenericAliasModule.GetArgs(ui).Items.Any(x => IsSubclass(cls, x));
             default:
                 throw PyErr.TypeError("issubclass() arg 2 must be a class or tuple of classes");
         }

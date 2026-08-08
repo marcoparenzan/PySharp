@@ -1815,3 +1815,86 @@ public class EmailUtilsTests
                 print(a < b)
                 """));
 }
+
+/// <summary>mimetypes.guess_type: a real extension-to-MIME table plus real encoding-suffix
+/// detection (.gz/.bz2/...). Found via starlette's real `from mimetypes import guess_type`
+/// (responses.py, for FileResponse's Content-Type header), reachable from `import starlette`. See
+/// FASTAPI_PLAN.md Phase 3.</summary>
+public class MimetypesTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Guess_type_matches_real_CPython_shapes()
+        => Assert.Equal(
+            "('text/html', None)\n('application/x-tar', 'gzip')\n('application/json', None)\n(None, None)",
+            Run("""
+                from mimetypes import guess_type
+                print(guess_type("foo.html"))
+                print(guess_type("foo.tar.gz"))
+                print(guess_type("foo.json"))
+                print(guess_type("noext"))
+                """));
+}
+
+/// <summary>secrets: real CSPRNG-backed tokens (System.Security.Cryptography.RandomNumberGenerator,
+/// the same one os.urandom already uses), and a real constant-time compare_digest. Found via
+/// starlette's real `from secrets import token_hex` (responses.py, for FileResponse's ETag),
+/// reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class SecretsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Token_hex_and_compare_digest_behave_for_real()
+        => Assert.Equal("16 True\nTrue\nFalse", Run("""
+            import secrets
+            h = secrets.token_hex(8)
+            print(len(h), all(c in "0123456789abcdef" for c in h))
+            print(secrets.compare_digest("abc", "abc"))
+            print(secrets.compare_digest("abc", "abd"))
+            """));
+}
+
+/// <summary>memoryview: a real (if simplified) view over bytes/bytearray — a bytearray-backed view
+/// shares the same underlying storage, matching real CPython. Found via starlette's real `Content =
+/// str | bytes | memoryview` module-level type alias (responses.py), eagerly evaluated despite
+/// `from __future__ import annotations` since it's a plain assignment; and `isinstance(content,
+/// bytes | memoryview)`, which uncovered a separate real gap — `isinstance`/`issubclass` never
+/// accepted a `X | Y` union as the 2nd argument at all. Both reachable from `import starlette`. See
+/// FASTAPI_PLAN.md Phase 3.</summary>
+public class MemoryViewTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Reads_slices_and_equals_the_underlying_bytes()
+        => Assert.Equal("5\n104\nb'el'\nb'hello'\nTrue\nTrue", Run("""
+            mv = memoryview(b"hello")
+            print(len(mv))
+            print(mv[0])
+            print(bytes(mv[1:3]))
+            print(mv.tobytes())
+            print(mv == b"hello")
+            print(mv.readonly)
+            """));
+
+    [Fact]
+    public void Bytearray_backed_view_shares_storage_for_real()
+        => Assert.Equal("b'World'\nFalse", Run("""
+            ba = bytearray(b"world")
+            mv = memoryview(ba)
+            mv[0] = ord('W')
+            print(bytes(ba))
+            print(mv.readonly)
+            """));
+
+    [Fact]
+    public void Isinstance_and_issubclass_accept_a_real_union_as_the_second_argument()
+        => Assert.Equal("True\nTrue\nTrue", Run("""
+            mv = memoryview(b"x")
+            print(isinstance(mv, bytes | memoryview))
+            print(isinstance(5, int | str))
+            print(issubclass(int, int | float))
+            """));
+}

@@ -603,24 +603,17 @@ long session once the author said "procedi" to continue past Phase 1's completio
 
 ## Phase 3 — starlette + anyio 🟡 in progress
 
-- [ ] 3.1 Get `import starlette` to succeed. **In progress** — real starlette 1.4.1 (from PyPI,
-  unmodified) + its real `anyio` dependency drove a long probe-driven round (triggered by the
-  author's "puoi proseguire" after Phase 2's BaseModel milestone), closing ~20 real gaps: full
-  blow-by-blow in 3.1.1 below. That round's frontier — `match`/`case` structural pattern matching
-  (PEP 634) — is now **done**: real parser + interpreter support landed (3.1.2 below), verified
-  directly against the anyio statement that originally blocked this phase. A further probe-driven
-  round past that (3.1.3 below) closed 6 more real gaps — `concurrent.futures`, `stat`, `os.chmod`,
-  real `abc.ABC.register()` virtual-subclass support, a `typing.Generic[T]` MRO-deduplication bug,
-  and `typing.override`. A fourth round (3.1.4 below), triggered by the author's "match/case parte
-  2" commit followed by "prosegui", pushed `import starlette` all the way through
-  `starlette.applications`/`routing`/`responses`/`requests` — closing 12 more real gaps
-  (`subprocess`, `tempfile`, `io.TextIOWrapper`, `http`/`http.cookies`, `email.utils`, a
-  `re.Pattern.search` pos/endpos bug, generic-alias re-subscription with TypeVar substitution,
-  `html`, `traceback`/`sys.exc_info`, `contextlib.asynccontextmanager`, real `object.__eq__`/
-  `__ne__`/`__hash__`/`__repr__`/`__str__` defaults, and — found chasing a regression from that last
-  one — a real recursion-depth guard, since this interpreter had never had one at all before).
-  **Current frontier**: `mimetypes` (no module named `mimetypes`) — used by starlette's real
-  `staticfiles.py`. Not started.
+- [x] 3.1 Get `import starlette` to succeed. **Done.** Real starlette 1.4.1 (from PyPI, unmodified),
+  plus its real `anyio` dependency, drove five probe-driven rounds (3.1.1–3.1.5 below), closing ~51
+  real gaps in total — from the original blocking `SyntaxError` on `match`/`case` all the way
+  through `starlette.applications`/`routing`/`responses`/`requests` importing cleanly. The last
+  round (3.1.5) went one step further than the checkbox: a real `Starlette(routes=[Route(...)])`
+  app now **constructs successfully**, verified directly (not just "the import didn't crash").
+  `staticfiles.py` (needing `mimetypes`, closed in 3.1.5) and `websockets.py` are not yet exercised
+  by this probe — real usage of either may still turn up further gaps.
+- [ ] 3.1b Exercise more of starlette's real surface beyond construction — routing dispatch,
+  request/response handling, middleware, `staticfiles.py`, WebSockets — to find the *next* real
+  gaps before Phase 3.2's ASGI server work begins.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
@@ -915,6 +908,51 @@ Continuing the same probe past `subprocess`, same discipline throughout.
   the real `object` dunders). Full suite green throughout: 857/857 by the end of this round, up from
   836 at the start of it.
 
+### 3.1.5 — past `mimetypes`: the last 4 real gaps — `import starlette` now succeeds, a real app constructs
+
+Continuing the same probe past `mimetypes` (the author's "procedi con i mime types" after
+confirming the round-3.1.4 commit), same discipline throughout — and this round finally reached
+the end of the original probe script: `starlette+anyio import OK`, all three core modules import,
+and `Starlette(routes=[Route("/", homepage)])` constructs for real.
+
+- **`mimetypes`**: `guess_type` via a real extension→MIME table (the common web-relevant subset of
+  CPython's own `types_map`, not every obscure entry) plus real encoding-suffix detection
+  (`.gz`/`.bz2`/`.xz`/`.Z`/`.br`, matching CPython's actual algorithm: strip a known encoding suffix
+  first, then look up what's left). Verified against 6 real cases (`.html`, `.tar.gz`, `.json`, no
+  extension, `.txt.bz2`, `.css`) before writing tests — every result matched real CPython exactly.
+  Found via starlette's real `from mimetypes import guess_type` (`responses.py`, for
+  `FileResponse`'s `Content-Type` header).
+- **`secrets`**: `token_bytes`/`token_hex`/`token_urlsafe`/`randbelow`/`choice`/`compare_digest`, a
+  real CSPRNG-backed implementation (`System.Security.Cryptography.RandomNumberGenerator`, the same
+  one `os.urandom` already uses) with a real constant-time `compare_digest`, not a
+  `random.random()`-backed stand-in. Found via starlette's real `from secrets import token_hex`
+  (`responses.py`, for `FileResponse`'s ETag generation).
+- **`memoryview`**: a real (if simplified) builtin view type over `bytes`/`bytearray` — implemented
+  as a `PyClass` (the same pattern as `StringIO`/`BytesIO`) rather than a new native runtime type,
+  which gets `isinstance`/`GetItem`/`|`-union-operand support for free from the existing generic
+  `PyInstance`/`PyClass` machinery instead of needing new native-type plumbing throughout the
+  interpreter. A `bytearray`-backed view shares the *same* underlying storage (mutations through
+  either side are visible on the other, matching real CPython's actual view semantics — verified
+  end to end: mutating through the view changes the original `bytearray`); a `bytes`-backed view is
+  read-only. Supports real indexing/slicing, `==`, iteration, `.tobytes()`/`.tolist()`, `.nbytes`/
+  `.readonly`. Found via starlette's real `Content = str | bytes | memoryview` module-level type
+  alias (`responses.py`) — evaluated eagerly despite `from __future__ import annotations` being
+  present, since it's a plain assignment, not a deferred annotation.
+- **A real, separate gap surfaced by the fix above: `isinstance`/`issubclass` never accepted a real
+  `X | Y` union as the 2nd argument at all**, raising `TypeError: isinstance() arg 2 must be a type
+  or tuple of types` — a real CPython 3.10+ feature (unions work exactly like a tuple of types
+  there). Found via starlette's real `isinstance(content, bytes | memoryview)` (`responses.py`),
+  reachable only once `memoryview` itself existed for the union to contain. Fixed for real in both
+  `IsInstance` and `IsSubclass` (recognizing a `GenericAliasModule`-backed union instance and
+  recursing membership over its `__args__`), not just for `memoryview` specifically.
+- 5 tests added (`M6_Stdlib/StdlibTests.cs`: `MimetypesTests`, `SecretsTests`, `MemoryViewTests` —
+  covering real view/mutation semantics and the `isinstance`/`issubclass`-with-union fix together).
+  Full suite green throughout: 862/862 by the end of this round, up from 857 at the start of it.
+- **Directly verified against the original probe script's own end-to-end goal**: re-ran the exact
+  scenario that had been the moving target since the `match`/`case` blocker — `import starlette`,
+  `import anyio.from_thread`/`to_thread`, and `Starlette(routes=[Route("/", homepage)])` — all
+  succeed for real, not just "doesn't crash at import time."
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1052,8 +1090,20 @@ backed by running top-level execution on a real 64MB-stack thread since this tre
 interpreter needs real headroom for that depth. Full blow-by-blow in 3.1.4. 857/857 tests green (up
 from 836).
 
-**Current frontier for Phase 3**: `mimetypes` — no module named `mimetypes` at all. Found via
-starlette's real `staticfiles.py`. Not started.
+**`import starlette` now succeeds completely — Phase 3.1 is done.** 4 more real gaps closed past
+`mimetypes` (same continuation, "fatto io il commit, procedi con i mime types"): real `mimetypes
+.guess_type` (a real extension→MIME table plus real encoding-suffix detection), real `secrets`
+(CSPRNG-backed tokens + constant-time `compare_digest`), a real `memoryview` builtin type
+(bytearray-backed views share real underlying storage, matching CPython), and — surfaced by
+`memoryview` needing it — a real fix making `isinstance`/`issubclass` accept a genuine `X | Y` union
+as the 2nd argument, which had never worked at all before. Full blow-by-blow in 3.1.5. 862/862 tests
+green (up from 857). **Verified end to end, not just at import time**: `starlette.applications`/
+`routing`/`responses` all import cleanly, and a real `Starlette(routes=[Route("/", homepage)])` app
+now genuinely constructs.
+
+**Current frontier for Phase 3**: not yet probed further — 3.1b (routing dispatch, request/response
+handling, middleware, `staticfiles.py`, WebSockets) is the natural next step before Phase 3.2's ASGI
+server work begins, but hasn't been started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.
