@@ -606,14 +606,12 @@ long session once the author said "procedi" to continue past Phase 1's completio
 - [ ] 3.1 Get `import starlette` to succeed. **In progress** — real starlette 1.4.1 (from PyPI,
   unmodified) + its real `anyio` dependency drove a long probe-driven round (triggered by the
   author's "puoi proseguire" after Phase 2's BaseModel milestone), closing ~20 real gaps: full
-  blow-by-blow in 3.1.1 below. **Current frontier**: a real, large-scope language gap — `match`/
-  `case` structural pattern matching (PEP 634, Python 3.10+), used by anyio's real
-  `_core/_tasks.py` (`match self.status: case TaskHandle.Status.PENDING: ...`). PySharp's parser
-  doesn't support `match` at all (a long-standing, explicitly out-of-v1-scope item — see
-  ROADMAP.md's Axis A gap list). Unlike everything closed in this round (real bugs/missing stdlib
-  surface, each a self-contained fix), this is a genuine new parser+interpreter language construct —
-  comparable in scope to the `async`/`await` work in Phase 2a of this same plan — deliberately left
-  for a dedicated look rather than attempted inline.
+  blow-by-blow in 3.1.1 below. That round's frontier — `match`/`case` structural pattern matching
+  (PEP 634) — is now **done**: real parser + interpreter support landed (3.1.2 below), verified
+  directly against the anyio statement that originally blocked this phase. **Current frontier**:
+  `concurrent.futures` (no module named `concurrent` at all yet) — used by anyio's real
+  `from_thread.py`/`_backends/_asyncio.py` for its blocking-portal/worker-thread machinery. Found by
+  re-running the starlette+anyio probe past the fixed `match` statement.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
@@ -707,6 +705,43 @@ regression test; suite stayed green throughout.
   Phase 1, both symptoms of the identical root cause finally fixed here for real, everywhere.
 - Full suite green after every single step above (799/799 by the end of this round, up from 776 at
   the start of it — 23 new tests); `git status` clean of scratch installs after each round.
+
+### 3.1.2 — `match`/`case` structural pattern matching (PEP 634)
+
+Real parser + interpreter support for `match`/`case` (not a stub or partial subset), triggered by the
+author's direct "match/case" follow-up request once this was identified as Phase 3's frontier.
+
+- **Parser**: `match`/`case` are soft keywords in real Python — never reserved — so PySharp's lexer
+  already tokenized them as plain `Name`s (they were never added to the hard `Keywords` set). A
+  non-backtracking lookahead (`LooksLikeMatchStatement`: does `match <expr>:` end in
+  `NEWLINE INDENT "case"`?) disambiguates `match x:` (a statement) from `match(1, 2)`/`match = 5`/
+  `match + 1` (plain uses of the name `match`) the same way real CPython's own PEG grammar does. A
+  full pattern grammar was added: literal, capture, wildcard (`_`), value (dotted-name), sequence
+  (list/tuple, with `*rest` star-capture), mapping (dict, with `**rest`), class (`Point(0, y=y)`),
+  or- (`|`), and as- (`as name`) patterns, plus guards (`if cond`).
+- **Interpreter**: real matching semantics, not just parsing — `ExecMatch`/`TryMatchPattern`
+  (`Interp.cs`) implement each pattern kind for real: literal patterns use `is` for the `None`/`True`/
+  `False` singletons specifically (so `case True:` does NOT match `1`, even though `1 == True` in
+  Python — a real, easy-to-get-wrong CPython semantic); sequence patterns explicitly exclude `str`/
+  `bytes`/`bytearray` (PEP 634's own carve-out, since those are iterable but matching them
+  character-by-character is never what real code wants); class patterns use `__match_args__` for
+  positional sub-patterns and real attribute lookup for keyword ones, with a builtin-type special case
+  (`int(n)`, `str(s)`, ...) matching the whole subject value against the single positional pattern,
+  since builtins have no real `__match_args__`.
+- Verified against three hand-written probe scripts (covering every pattern kind) BEFORE writing any
+  formal tests — every result matched real Python's output on the first try, catching zero semantic
+  bugs. Verified the soft-keyword heuristic doesn't false-positive: `match` used as a variable name, a
+  function parameter name, a dict key, and in a real `re.match(...)` call all continued to work.
+- **Directly verified against the real original blocker**: re-ran the exact anyio probe that had hit
+  `SyntaxError: expected end of line, got 'self'` on `match self.status: case TaskHandle.Status
+  .PENDING: ...` — confirmed the error is gone and the probe progresses further.
+- One small fix alongside it: **`typing.Never`** (PEP 654-adjacent bare placeholder, like the
+  pre-existing `NoReturn`/`Text`/etc.) was missing — trivial one-line addition, found immediately after
+  the `match` fix when the probe advanced past it.
+- 22 tests added (`M2_Parser/MatchParsingTests.cs`: parser/AST-dump coverage for every pattern kind and
+  the soft-keyword disambiguation cases; `M17_Match/MatchExecutionTests.cs`: execution semantics,
+  including a test reproducing the exact real anyio `TaskHandle.Status.PENDING` scenario). Full suite
+  green throughout: 825/825 by the end of this round, up from 799 at the start of it.
 
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
@@ -805,12 +840,18 @@ operator between types) and PEP 585 (`tuple[int, str]` builtin-generic subscript
 as genuine *value expressions* (not just type-hint comments) in anyio's real source. Full blow-by-blow
 in 3.1.1. 799/799 tests green (up from 776 at the start of this round).
 
-**Current frontier for Phase 3 is a real language gap, not another stdlib/interpreter-plumbing fix**:
-anyio's real `_core/_tasks.py` uses a `match`/`case` statement (PEP 634, Python 3.10+ structural
-pattern matching) — PySharp's parser doesn't support `match` at all, a long-standing item explicitly
-out of v1 scope (see ROADMAP.md's Axis A). Comparable in size to the `async`/`await` language-core
-work in Phase 2a of this same plan — a genuine new parser+interpreter construct, not a quick fix —
-deliberately left for a dedicated look rather than attempted inline.
+**`match`/`case` structural pattern matching (PEP 634) is now done** (2026-08-08): real parser
+(soft-keyword lookahead disambiguation, full pattern grammar) and interpreter (real matching semantics
+for every pattern kind, not a stub) support landed, directly requested by the author once this was
+identified as Phase 3's frontier. Verified against the exact real anyio statement that originally
+blocked this phase (`match self.status: case TaskHandle.Status.PENDING: ...`), plus a small
+`typing.Never` fix found immediately after. Full blow-by-blow in 3.1.2. 825/825 tests green (up from
+799 at the start of this round).
+
+**Current frontier for Phase 3**: `concurrent.futures` — no module named `concurrent` exists yet.
+Found by re-running the starlette+anyio probe past the now-fixed `match` statement; anyio's real
+`from_thread.py`/`_backends/_asyncio.py` use it for blocking-portal/worker-thread machinery. Not yet
+started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
-probing (which will itself likely need `match` support to get much further).
+probing.

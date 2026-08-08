@@ -64,6 +64,7 @@ public static class TypeMethods
             PyFuture => Modules.AsyncioModule.FutureTable,
             PyCoroutine => Modules.AsyncioModule.CoroutineTable,
             PyEventLoop => Modules.AsyncioModule.EventLoopTable,
+            ConcurrentFuture => Modules.ConcurrentModule.FutureTable,
             _ => null,
         };
         if (table is not null && table.TryGetValue(name, out var fn))

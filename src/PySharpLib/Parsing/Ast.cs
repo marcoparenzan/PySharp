@@ -142,3 +142,52 @@ public sealed record GlobalStmt(List<string> Names) : Stmt;
 public sealed record NonlocalStmt(List<string> Names) : Stmt;
 public sealed record DelStmt(List<Expr> Targets) : Stmt;
 public sealed record AssertStmt(Expr Test, Expr? Msg) : Stmt;
+
+// ---------------------------------------------------------------- match/case (PEP 634)
+
+public abstract record Pattern : Node;
+
+/// <summary>Matches by value: <c>==</c> for numbers/strings/bytes, <c>is</c> (identity) for the
+/// True/False/None singletons — matching real CPython's own distinction.</summary>
+public sealed record LiteralPattern(Expr Value) : Pattern;
+
+/// <summary>A bare name (captures the subject) or <c>_</c> (Name is null: matches anything, binds
+/// nothing).</summary>
+public sealed record CapturePattern(string? Name) : Pattern;
+
+/// <summary>A dotted name (<c>Color.RED</c>) — compared by <c>==</c>, never a capture, since real
+/// Python distinguishes "looks like an attribute access" from "looks like a bare name" purely by
+/// syntax (presence of a dot).</summary>
+public sealed record ValuePattern(Expr Value) : Pattern;
+
+/// <summary><c>*name</c> / <c>*_</c> inside a sequence pattern — captures the remaining middle
+/// slice (Name null for <c>*_</c>, which matches but doesn't bind).</summary>
+public sealed record StarPattern(string? Name) : Pattern;
+
+/// <summary><c>[p1, p2, *rest, p3]</c> or <c>(p1, p2)</c> — at most one item may be a
+/// <see cref="StarPattern"/>. Matches list/tuple (never str/bytes/bytearray, per PEP 634).</summary>
+public sealed record SequencePattern(List<Pattern> Items) : Pattern;
+
+/// <summary><c>{"key": pat, **rest}</c> — RestName is the <c>**rest</c> capture name, or null.
+/// Extra unmatched keys are fine unless a rest capture is present; extra pattern keys not present
+/// in the subject fail the match.</summary>
+public sealed record MappingPattern(List<(Expr Key, Pattern Value)> Items, string? RestName) : Pattern;
+
+/// <summary><c>ClassName(p1, p2, kw=p3)</c>. Positional patterns map through the class's
+/// <c>__match_args__</c> tuple — except for a handful of builtin types (int/str/list/...), where a
+/// single positional pattern matches the whole subject value directly, per PEP 634's special
+/// case.</summary>
+public sealed record ClassPattern(
+    Expr Cls, List<Pattern> Positional, List<(string Name, Pattern Value)> Keyword) : Pattern;
+
+/// <summary><c>p1 | p2 | p3</c> — first alternative that matches wins. All alternatives must bind
+/// the same set of names (not enforced here; a real gap, not attempted since nothing observed needs
+/// the enforcement, only the matching behavior).</summary>
+public sealed record OrPattern(List<Pattern> Alternatives) : Pattern;
+
+/// <summary><c>pattern as name</c> — matches like Inner, and additionally binds the whole subject
+/// to Name.</summary>
+public sealed record AsPattern(Pattern Inner, string Name) : Pattern;
+
+public sealed record MatchCase(Pattern Pattern, Expr? Guard, List<Stmt> Body);
+public sealed record MatchStmt(Expr Subject, List<MatchCase> Cases) : Stmt;

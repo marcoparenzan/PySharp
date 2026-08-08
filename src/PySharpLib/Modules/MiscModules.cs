@@ -158,7 +158,7 @@ public static class MiscModules
             "MutableSequence", "MutableSet", "Hashable", "Sized", "Container", "Collection",
             "Reversible", "SupportsInt", "SupportsFloat", "SupportsAbs", "SupportsRound",
             "SupportsComplex", "SupportsBytes", "SupportsIndex",
-            "ByteString", "AnyStr", "NoReturn", "Text", "Concatenate", "Self", "TypeAlias",
+            "ByteString", "AnyStr", "NoReturn", "Never", "Text", "Concatenate", "Self", "TypeAlias",
             "Unpack", "Annotated",
             "Match", "Pattern",
             "ForwardRef", "_Final", "_BaseGenericAlias",

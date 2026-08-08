@@ -280,7 +280,7 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 | Supported | Missing (out of scope for v1) |
 |---|---|
-| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch) | `match`, `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not) |
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch), **`match`/`case` structural pattern matching** (PEP 634 — real soft-keyword parsing + full pattern semantics: literal/capture/wildcard/value/sequence/mapping/class/or/as patterns, guards) | `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not) |
 
 ### Axis B — Stdlib
 
@@ -356,16 +356,19 @@ in scenario 1).
 ## Progress indicators
 
 - Scenarios: **1, 1b, 5, 9 complete**; **2** well underway (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic v1
-  `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); 3 and 4/6/7/8 to do; native
-  cross-cutting partial.
+  `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); **3** 🟡 in progress (starlette
+  import chain — ~20 stdlib/interpreter gaps closed plus `match`/`case`, current frontier
+  `concurrent.futures`); 4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~50 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
-  `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`;
-  `typing`/`dataclasses` upgraded from stubs to real implementations).
+  `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
+  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`; `typing`/`dataclasses` upgraded from stubs
+  to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
-  support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`match`/`exec` still missing
-  (Axis A); real `__slots__` (separate per-slot storage) still missing.
-- Tests: **776 green** (up from 547 — pydantic v1 probe-driven work across `FASTAPI_PLAN.md`, plus
-  aiomqtt/other work in between).
+  support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅; **`match`/`case`
+  (PEP 634)** ✅; `exec`/`eval` still missing (Axis A); real `__slots__` (separate per-slot storage)
+  still missing.
+- Tests: **825 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

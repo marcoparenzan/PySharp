@@ -74,9 +74,306 @@ public sealed class Parser
                 case "async": return ParseAsyncStatement(new List<Expr>());
             }
         }
+        // `match`/`case` are soft keywords (real CPython, PEP 634): plain identifiers everywhere
+        // else, special only when `match <subject>:` is immediately followed by an indented block
+        // whose first line starts with `case` — checked by lookahead, not backtracking, since a
+        // bare `:` at bracket-depth 0 inside an expression never occurs in valid Python (slice/
+        // lambda/dict colons are always nested inside brackets), so the scan is unambiguous.
+        if (t.Kind == TokenKind.Name && t.Text == "match" && LooksLikeMatchStatement())
+            return ParseMatchStatement();
         if (t.Is(TokenKind.Op, "@"))
             return ParseDecorated();
         return ParseSimpleStatementLine();
+    }
+
+    /// <summary>Lookahead-only (no token consumption): does `match` here start a match statement?
+    /// Scans forward at bracket-depth 0 for the first ':', then checks NEWLINE INDENT "case".</summary>
+    private bool LooksLikeMatchStatement()
+    {
+        int i = _pos + 1;
+        int depth = 0;
+        while (i < _tokens.Count)
+        {
+            var tok = _tokens[i];
+            if (tok.Kind == TokenKind.Op && tok.Text is "(" or "[" or "{")
+            {
+                depth++;
+            }
+            else if (tok.Kind == TokenKind.Op && tok.Text is ")" or "]" or "}")
+            {
+                depth--;
+            }
+            else if (depth == 0 && tok.Kind == TokenKind.Op && tok.Text == ":")
+            {
+                int j = i + 1;
+                if (j >= _tokens.Count || _tokens[j].Kind != TokenKind.Newline)
+                    return false;
+                j++;
+                while (j < _tokens.Count && _tokens[j].Kind == TokenKind.Newline)
+                    j++;
+                if (j >= _tokens.Count || _tokens[j].Kind != TokenKind.Indent)
+                    return false;
+                j++;
+                while (j < _tokens.Count && _tokens[j].Kind == TokenKind.Newline)
+                    j++;
+                return j < _tokens.Count && _tokens[j].Kind == TokenKind.Name && _tokens[j].Text == "case";
+            }
+            else if (depth == 0 && tok.Kind is TokenKind.Newline or TokenKind.EndOfFile)
+            {
+                return false;
+            }
+            else if (depth == 0 && tok.Kind == TokenKind.Op && tok.Text == "=")
+            {
+                return false; // `match = ...` / `match, x = ...`: plain assignment
+            }
+            i++;
+        }
+        return false;
+    }
+
+    private Stmt ParseMatchStatement()
+    {
+        var t = Cur;
+        Next(); // 'match'
+        var subject = ParseTestListStar();
+        Expect(TokenKind.Op, ":");
+        Expect(TokenKind.Newline);
+        SkipNewlines();
+        Expect(TokenKind.Indent);
+        SkipNewlines();
+        var cases = new List<MatchCase>();
+        while (Cur.Kind == TokenKind.Name && Cur.Text == "case")
+        {
+            Next(); // 'case'
+            var pattern = ParseTopLevelPatterns();
+            Expr? guard = MatchKw("if") ? ParseNamedTest() : null;
+            var body = ParseSuite();
+            cases.Add(new MatchCase(pattern, guard, body));
+            SkipNewlines();
+        }
+        Expect(TokenKind.Dedent);
+        if (cases.Count == 0)
+            throw Error("expected at least one 'case' block", t.Line, t.Column);
+        return new MatchStmt(subject, cases) { Line = t.Line, Col = t.Column };
+    }
+
+    // ---------------------------------------------------------------- patterns (PEP 634)
+
+    /// <summary>Top of a `case` line: either a single pattern, or a bare comma-separated sequence
+    /// (no brackets) — <c>case a, b:</c> / <c>case x, *rest:</c> — folded into a SequencePattern.</summary>
+    private Pattern ParseTopLevelPatterns()
+    {
+        var t = Cur;
+        var first = ParseMaybeStarPattern();
+        if (!Cur.Is(TokenKind.Op, ","))
+            return first;
+        var items = new List<Pattern> { first };
+        while (MatchOp(","))
+        {
+            if (Cur.Is(TokenKind.Op, ":") || Cur.Is(TokenKind.Keyword, "if"))
+                break; // trailing comma
+            items.Add(ParseMaybeStarPattern());
+        }
+        return new SequencePattern(items) { Line = t.Line, Col = t.Column };
+    }
+
+    private Pattern ParseMaybeStarPattern()
+    {
+        if (Cur.Is(TokenKind.Op, "*"))
+        {
+            var t = Cur;
+            Next();
+            string name = ExpectName();
+            return new StarPattern(name == "_" ? null : name) { Line = t.Line, Col = t.Column };
+        }
+        return ParsePattern();
+    }
+
+    /// <summary>pattern: or_pattern ['as' NAME].</summary>
+    private Pattern ParsePattern()
+    {
+        var e = ParseOrPattern();
+        if (Cur.Is(TokenKind.Keyword, "as"))
+        {
+            Next();
+            string name = ExpectName();
+            return new AsPattern(e, name) { Line = e.Line, Col = e.Col };
+        }
+        return e;
+    }
+
+    /// <summary>or_pattern: closed_pattern ('|' closed_pattern)*.</summary>
+    private Pattern ParseOrPattern()
+    {
+        var first = ParseClosedPattern();
+        if (!Cur.Is(TokenKind.Op, "|"))
+            return first;
+        var alts = new List<Pattern> { first };
+        while (MatchOp("|"))
+            alts.Add(ParseClosedPattern());
+        return new OrPattern(alts) { Line = first.Line, Col = first.Col };
+    }
+
+    private Pattern ParseClosedPattern()
+    {
+        var t = Cur;
+        switch (t.Kind)
+        {
+            case TokenKind.Keyword when t.Text == "True":
+                Next();
+                return new LiteralPattern(new BoolLit(true) { Line = t.Line, Col = t.Column }) { Line = t.Line, Col = t.Column };
+            case TokenKind.Keyword when t.Text == "False":
+                Next();
+                return new LiteralPattern(new BoolLit(false) { Line = t.Line, Col = t.Column }) { Line = t.Line, Col = t.Column };
+            case TokenKind.Keyword when t.Text == "None":
+                Next();
+                return new LiteralPattern(new NoneLit { Line = t.Line, Col = t.Column }) { Line = t.Line, Col = t.Column };
+
+            case TokenKind.Number:
+                Next();
+                return new LiteralPattern(ParseNumberLiteral(t)) { Line = t.Line, Col = t.Column };
+
+            case TokenKind.Str:
+            case TokenKind.Bytes:
+                return new LiteralPattern(ParseStringConcatenation()) { Line = t.Line, Col = t.Column };
+
+            case TokenKind.Op when t.Text == "-":
+            {
+                Next();
+                var numTok = Expect(TokenKind.Number);
+                var lit = ParseNumberLiteral(numTok);
+                Expr negated = lit switch
+                {
+                    IntLit il => new IntLit(-il.Value) { Line = t.Line, Col = t.Column },
+                    FloatLit fl => new FloatLit(-fl.Value) { Line = t.Line, Col = t.Column },
+                    _ => lit,
+                };
+                return new LiteralPattern(negated) { Line = t.Line, Col = t.Column };
+            }
+
+            case TokenKind.Op when t.Text == "(":
+                return ParseParenPattern();
+            case TokenKind.Op when t.Text == "[":
+                return ParseSequencePatternBracketed("[", "]");
+            case TokenKind.Op when t.Text == "{":
+                return ParseMappingPattern();
+
+            case TokenKind.Name:
+                return ParseCaptureValueOrClassPattern();
+        }
+        throw Error($"invalid pattern: unexpected '{t.Text}'", t.Line, t.Column);
+    }
+
+    private Pattern ParseParenPattern()
+    {
+        var t = Expect(TokenKind.Op, "(");
+        if (Cur.Is(TokenKind.Op, ")"))
+        {
+            Next();
+            return new SequencePattern(new List<Pattern>()) { Line = t.Line, Col = t.Column };
+        }
+        var items = new List<Pattern> { ParseMaybeStarPattern() };
+        bool sawComma = false;
+        while (MatchOp(","))
+        {
+            sawComma = true;
+            if (Cur.Is(TokenKind.Op, ")"))
+                break;
+            items.Add(ParseMaybeStarPattern());
+        }
+        Expect(TokenKind.Op, ")");
+        // A single, non-starred item with no trailing comma is just a parenthesized (group)
+        // pattern — the parens are transparent, matching real CPython's group_pattern.
+        if (!sawComma && items.Count == 1 && items[0] is not StarPattern)
+            return items[0];
+        return new SequencePattern(items) { Line = t.Line, Col = t.Column };
+    }
+
+    private Pattern ParseSequencePatternBracketed(string open, string close)
+    {
+        var t = Expect(TokenKind.Op, open);
+        var items = new List<Pattern>();
+        while (!Cur.Is(TokenKind.Op, close))
+        {
+            items.Add(ParseMaybeStarPattern());
+            if (!MatchOp(","))
+                break;
+        }
+        Expect(TokenKind.Op, close);
+        return new SequencePattern(items) { Line = t.Line, Col = t.Column };
+    }
+
+    private Pattern ParseMappingPattern()
+    {
+        var t = Expect(TokenKind.Op, "{");
+        var items = new List<(Expr, Pattern)>();
+        string? restName = null;
+        while (!Cur.Is(TokenKind.Op, "}"))
+        {
+            if (MatchOp("**"))
+            {
+                restName = ExpectName();
+            }
+            else
+            {
+                var key = ParseTest();
+                Expect(TokenKind.Op, ":");
+                items.Add((key, ParsePattern()));
+            }
+            if (!MatchOp(","))
+                break;
+        }
+        Expect(TokenKind.Op, "}");
+        return new MappingPattern(items, restName) { Line = t.Line, Col = t.Column };
+    }
+
+    /// <summary>Dispatches a bare NAME in pattern position: <c>_</c> (wildcard) / <c>Dotted.Name</c>
+    /// (value pattern, compared by ==) / <c>Cls(...)</c> (class pattern) / a plain capture.</summary>
+    private Pattern ParseCaptureValueOrClassPattern()
+    {
+        var t = Cur;
+        string name = ExpectName();
+        if (name == "_" && !Cur.Is(TokenKind.Op, ".") && !Cur.Is(TokenKind.Op, "("))
+            return new CapturePattern(null) { Line = t.Line, Col = t.Column };
+
+        Expr expr = new NameExpr(name) { Line = t.Line, Col = t.Column };
+        bool isDotted = false;
+        while (Cur.Is(TokenKind.Op, "."))
+        {
+            Next();
+            expr = new AttributeExpr(expr, ExpectName()) { Line = t.Line, Col = t.Column };
+            isDotted = true;
+        }
+
+        if (Cur.Is(TokenKind.Op, "("))
+            return ParseClassPatternArgs(expr);
+        if (isDotted)
+            return new ValuePattern(expr) { Line = t.Line, Col = t.Column };
+        return new CapturePattern(name) { Line = t.Line, Col = t.Column };
+    }
+
+    private Pattern ParseClassPatternArgs(Expr cls)
+    {
+        var t = Expect(TokenKind.Op, "(");
+        var positional = new List<Pattern>();
+        var keyword = new List<(string, Pattern)>();
+        while (!Cur.Is(TokenKind.Op, ")"))
+        {
+            if (Cur.Kind == TokenKind.Name && PeekNext.Is(TokenKind.Op, "="))
+            {
+                string kwName = ExpectName();
+                Next(); // '='
+                keyword.Add((kwName, ParsePattern()));
+            }
+            else
+            {
+                positional.Add(ParsePattern());
+            }
+            if (!MatchOp(","))
+                break;
+        }
+        Expect(TokenKind.Op, ")");
+        return new ClassPattern(cls, positional, keyword) { Line = t.Line, Col = t.Column };
     }
 
     /// <summary>Simple-statement line: small_stmt (';' small_stmt)* NEWLINE. If more than one, the caller handles lists.</summary>
@@ -1420,6 +1717,8 @@ public sealed class Parser
         WithStmt w => w.Items.Any(item => ContainsYield(item.Ctx)) || ContainsYield(w.Body),
         BlockStmt b => ContainsYield(b.Body),
         RaiseStmt r => (r.Exc is not null && ContainsYield(r.Exc)),
+        MatchStmt m => ContainsYield(m.Subject)
+            || m.Cases.Any(c => (c.Guard is not null && ContainsYield(c.Guard)) || ContainsYield(c.Body)),
         _ => false, // nested FuncDef/ClassDef do NOT propagate yield
     };
 

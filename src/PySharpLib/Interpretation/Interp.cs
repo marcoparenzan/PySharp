@@ -380,6 +380,10 @@ public sealed class Interp
                 }
                 break;
 
+            case MatchStmt m:
+                ExecMatch(m, env);
+                break;
+
             default:
                 throw PyErr.RuntimeError($"statement not supported: {stmt.GetType().Name}");
         }
@@ -791,6 +795,203 @@ public sealed class Interp
         {
             ExecStmts(t.Finally, env);
         }
+    }
+
+    // ---------------------------------------------------------------- match/case (PEP 634)
+
+    /// <summary>
+    /// Real (not stubbed) structural pattern matching: literal/capture/wildcard/value/sequence/
+    /// mapping/class/or/as patterns, with guards. Bindings from a case's pattern are collected into
+    /// a scratch dict and only applied to <paramref name="env"/> once the whole pattern (not just a
+    /// prefix of it) matches — matching real CPython, which never leaves a partial binding behind
+    /// from a case whose structural match failed partway through. A guard that evaluates falsy still
+    /// leaves that case's bindings in place (matching real CPython) and moves on to the next case.
+    /// </summary>
+    private void ExecMatch(MatchStmt m, Env env)
+    {
+        var subject = Eval(m.Subject, env);
+        foreach (var c in m.Cases)
+        {
+            var bindings = new Dictionary<string, object>();
+            if (!TryMatchPattern(c.Pattern, subject, env, bindings))
+                continue;
+            foreach (var kv in bindings)
+                env.Set(kv.Key, kv.Value);
+            if (c.Guard is not null && !PyOps.Truthy(this, Eval(c.Guard, env)))
+                continue;
+            ExecStmts(c.Body, env);
+            return;
+        }
+    }
+
+    private bool TryMatchPattern(Pattern pattern, object subject, Env env, Dictionary<string, object> bindings)
+    {
+        switch (pattern)
+        {
+            case CapturePattern cap:
+                if (cap.Name is not null)
+                    bindings[cap.Name] = subject;
+                return true;
+
+            case LiteralPattern lit:
+            {
+                var value = Eval(lit.Value, env);
+                // True/False/None compare by identity, matching real CPython's singleton patterns;
+                // everything else (numbers/strings/bytes) compares by ==.
+                return lit.Value is BoolLit or NoneLit ? IsIdentical(subject, value) : RichEquals(subject, value);
+            }
+
+            case ValuePattern vp:
+                return RichEquals(subject, Eval(vp.Value, env));
+
+            case OrPattern orPat:
+            {
+                foreach (var alt in orPat.Alternatives)
+                {
+                    var altBindings = new Dictionary<string, object>();
+                    if (!TryMatchPattern(alt, subject, env, altBindings))
+                        continue;
+                    foreach (var kv in altBindings)
+                        bindings[kv.Key] = kv.Value;
+                    return true;
+                }
+                return false;
+            }
+
+            case AsPattern asPat:
+                if (!TryMatchPattern(asPat.Inner, subject, env, bindings))
+                    return false;
+                bindings[asPat.Name] = subject;
+                return true;
+
+            case SequencePattern seq:
+                return TryMatchSequence(seq, subject, env, bindings);
+
+            case MappingPattern map:
+                return TryMatchMapping(map, subject, env, bindings);
+
+            case ClassPattern cls:
+                return TryMatchClass(cls, subject, env, bindings);
+
+            default:
+                throw PyErr.RuntimeError($"pattern not supported: {pattern.GetType().Name}");
+        }
+    }
+
+    private bool TryMatchSequence(SequencePattern seq, object subject, Env env, Dictionary<string, object> bindings)
+    {
+        // Real CPython: matches list/tuple/range-shaped sequences, explicitly excluding
+        // str/bytes/bytearray (which are iterable but not "sequence patterns" under PEP 634).
+        List<object>? items = subject switch
+        {
+            PyList l => l.Items,
+            PyTuple t => t.Items.ToList(),
+            PyRange r => r.Enumerate().ToList(),
+            _ => null,
+        };
+        if (items is null)
+            return false;
+
+        int starIndex = seq.Items.FindIndex(p => p is StarPattern);
+        if (starIndex < 0)
+        {
+            if (items.Count != seq.Items.Count)
+                return false;
+            for (int i = 0; i < items.Count; i++)
+                if (!TryMatchPattern(seq.Items[i], items[i], env, bindings))
+                    return false;
+            return true;
+        }
+
+        int after = seq.Items.Count - starIndex - 1;
+        if (items.Count < seq.Items.Count - 1)
+            return false;
+        for (int i = 0; i < starIndex; i++)
+            if (!TryMatchPattern(seq.Items[i], items[i], env, bindings))
+                return false;
+        var star = (StarPattern)seq.Items[starIndex];
+        if (star.Name is not null)
+            bindings[star.Name] = new PyList(items.Skip(starIndex).Take(items.Count - starIndex - after));
+        for (int i = 0; i < after; i++)
+            if (!TryMatchPattern(seq.Items[starIndex + 1 + i], items[items.Count - after + i], env, bindings))
+                return false;
+        return true;
+    }
+
+    private bool TryMatchMapping(MappingPattern map, object subject, Env env, Dictionary<string, object> bindings)
+    {
+        // v1 scope: a real dict only (not the full Mapping protocol on an arbitrary PyInstance) —
+        // nothing observed so far has needed a custom-Mapping subject.
+        if (subject is not PyDict dict)
+            return false;
+        var matchedKeys = new HashSet<object>(PyEqualityComparer.Instance);
+        foreach (var (keyExpr, valuePat) in map.Items)
+        {
+            var key = Eval(keyExpr, env);
+            if (!dict.TryGet(key, out var value))
+                return false;
+            if (!TryMatchPattern(valuePat, value, env, bindings))
+                return false;
+            matchedKeys.Add(key);
+        }
+        if (map.RestName is not null)
+        {
+            var rest = new PyDict();
+            foreach (var e in dict.Entries)
+                if (!matchedKeys.Contains(e.Key))
+                    rest[e.Key] = e.Value;
+            bindings[map.RestName] = rest;
+        }
+        return true;
+    }
+
+    private bool TryMatchClass(ClassPattern cp, object subject, Env env, Dictionary<string, object> bindings)
+    {
+        var clsObj = Eval(cp.Cls, env);
+        if (!Builtins.BuiltinsFactory.IsInstance(subject, clsObj))
+            return false;
+
+        if (cp.Positional.Count > 0)
+        {
+            // A handful of builtin types have no real __match_args__ — PEP 634 special-cases them:
+            // a single positional sub-pattern matches the whole subject value directly.
+            if (clsObj is PyBuiltinFunction bf && Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bf.Name))
+            {
+                if (cp.Positional.Count != 1)
+                    throw PyErr.TypeError($"{bf.Name}() accepts 1 positional sub-pattern ({cp.Positional.Count} given)");
+                if (!TryMatchPattern(cp.Positional[0], subject, env, bindings))
+                    return false;
+            }
+            else
+            {
+                List<string>? matchArgs = clsObj is PyClass realCls
+                    && realCls.TryLookup("__match_args__", out var maObj) && maObj is PyTuple maTuple
+                    ? maTuple.Items.OfType<string>().ToList()
+                    : null;
+                string clsName = (clsObj as PyClass)?.Name ?? PyOps.TypeName(clsObj);
+                if (matchArgs is null)
+                    throw PyErr.TypeError($"{clsName}() accepts 0 positional sub-patterns");
+                if (cp.Positional.Count > matchArgs.Count)
+                    throw PyErr.TypeError(
+                        $"{clsName}() accepts {matchArgs.Count} positional sub-patterns ({cp.Positional.Count} given)");
+                for (int i = 0; i < cp.Positional.Count; i++)
+                {
+                    if (!TryGetAttr(subject, matchArgs[i], out var attrVal))
+                        return false;
+                    if (!TryMatchPattern(cp.Positional[i], attrVal, env, bindings))
+                        return false;
+                }
+            }
+        }
+
+        foreach (var (name, pat) in cp.Keyword)
+        {
+            if (!TryGetAttr(subject, name, out var attrVal))
+                return false;
+            if (!TryMatchPattern(pat, attrVal, env, bindings))
+                return false;
+        }
+        return true;
     }
 
     private bool HandlerMatches(ExceptHandler handler, PyInstance exc, Env env)

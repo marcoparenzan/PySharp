@@ -59,7 +59,27 @@ public static class AstDumper
         NonlocalStmt n => $"(nonlocal {string.Join(" ", n.Names)})",
         DelStmt d => $"(del {Join(d.Targets)})",
         AssertStmt a => a.Msg is null ? $"(assert {Dump(a.Test)})" : $"(assert {Dump(a.Test)} {Dump(a.Msg)})",
+        MatchStmt m => $"(match {Dump(m.Subject)}{string.Concat(m.Cases.Select(DumpCase))})",
         _ => $"(?{s.GetType().Name})",
+    };
+
+    private static string DumpCase(MatchCase c)
+        => $" (case {DumpPattern(c.Pattern)}{(c.Guard is null ? "" : $" if {Dump(c.Guard)}")} [{Join(c.Body)}])";
+
+    private static string DumpPattern(Pattern p) => p switch
+    {
+        LiteralPattern l => Dump(l.Value),
+        CapturePattern { Name: null } => "_",
+        CapturePattern c => c.Name!,
+        ValuePattern v => Dump(v.Value),
+        StarPattern { Name: null } => "*_",
+        StarPattern s => $"*{s.Name}",
+        SequencePattern seq => $"(seq {string.Join(" ", seq.Items.Select(DumpPattern))})",
+        MappingPattern map => $"(map {string.Join(" ", map.Items.Select(kv => $"{Dump(kv.Key)}:{DumpPattern(kv.Value)}"))}{(map.RestName is null ? "" : $" **{map.RestName}")})",
+        ClassPattern cp => $"(cls {Dump(cp.Cls)}{string.Concat(cp.Positional.Select(x => " " + DumpPattern(x)))}{string.Concat(cp.Keyword.Select(kv => $" {kv.Name}={DumpPattern(kv.Value)}"))})",
+        OrPattern or_ => $"(or {string.Join(" ", or_.Alternatives.Select(DumpPattern))})",
+        AsPattern asp => $"(as {DumpPattern(asp.Inner)} {asp.Name})",
+        _ => $"(?{p.GetType().Name})",
     };
 
     public static string Dump(Expr e) => e switch
