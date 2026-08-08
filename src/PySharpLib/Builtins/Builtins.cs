@@ -52,6 +52,29 @@ public static class BuiltinsFactory
             return PyNone.Instance;
         });
         objectClass.Dict["__init__"] = new PyBuiltinFunction("object.__init__", (_, _, _) => PyNone.Instance);
+        // Real CPython default dunders — previously only reachable via hardcoded fallback branches
+        // in PyOps.Repr/Str/RichEquals when TryCallMethod found nothing (same output, so this is a
+        // transparent refactor for normal repr()/str()/== use), but that meant direct/unbound access
+        // (`object.__eq__`, `SomeClass.__eq__` when SomeClass never overrides it, `super().__repr__()`)
+        // raised AttributeError instead of finding a real method. Found via starlette's real
+        // `cls.__eq__ is object.__eq__`-style idiom (a common way real Python libraries — dataclass-
+        // like code, ORMs — detect whether a class defines custom equality), reachable from `import
+        // starlette`. __hash__ is added for the same direct-access parity but note real CPython's own
+        // `hash()` doesn't consult it here either (PyOps.PyHash has its own separate, pre-existing,
+        // standing gap: no user-defined `__hash__` override is dispatched at all yet).
+        objectClass.Dict["__eq__"] = new PyBuiltinFunction("object.__eq__", (_, a, _) =>
+            ReferenceEquals(a[0], a[1]) ? true : (object)PyNotImplemented.Instance);
+        objectClass.Dict["__ne__"] = new PyBuiltinFunction("object.__ne__", (interp, a, _) =>
+        {
+            var eq = interp.CallMethod(a[0], "__eq__", new[] { a[1] });
+            return eq is PyNotImplemented ? eq : !PyOps.Truthy(interp, eq);
+        });
+        objectClass.Dict["__hash__"] = new PyBuiltinFunction("object.__hash__", (_, a, _) =>
+            new BigInteger(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(a[0])));
+        objectClass.Dict["__repr__"] = new PyBuiltinFunction("object.__repr__", (_, a, _) =>
+            $"<{((PyInstance)a[0]).Class.Name} object at 0x{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(a[0]):x8}>");
+        objectClass.Dict["__str__"] = new PyBuiltinFunction("object.__str__", (interp, a, _) =>
+            interp.CallMethod(a[0], "__repr__", Array.Empty<object>()));
         d["object"] = objectClass;
 
         void Add(string name, BuiltinFn fn) => d[name] = new PyBuiltinFunction(name, fn);

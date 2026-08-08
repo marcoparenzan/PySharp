@@ -1533,3 +1533,285 @@ public class TypingOverrideTests
             print(Sub.f.__override__)
             """).TrimEnd('\n'));
 }
+
+/// <summary>subprocess: real process spawning (System.Diagnostics.Process) — Popen with real
+/// pipes, run()/check_output(), CalledProcessError on nonzero exit with check=True. Found via
+/// anyio's real `from subprocess import PIPE, CalledProcessError, CompletedProcess`
+/// (_core/_subprocesses.py), itself a real dependency of starlette. See FASTAPI_PLAN.md Phase 3.</summary>
+public class SubprocessTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Run_captures_output_and_returns_a_real_CompletedProcess()
+        => Assert.Equal("'hello'\n0", Run("""
+            import subprocess
+            r = subprocess.run(["cmd", "/c", "echo hello"], capture_output=True, text=True)
+            print(repr(r.stdout.strip()))
+            print(r.returncode)
+            """));
+
+    [Fact]
+    public void Check_true_raises_CalledProcessError_on_nonzero_exit()
+        => Assert.Equal("caught 3", Run("""
+            import subprocess
+            try:
+                subprocess.run(["cmd", "/c", "exit 3"], check=True)
+            except subprocess.CalledProcessError as e:
+                print("caught", e.returncode)
+            """));
+
+    [Fact]
+    public void Popen_communicate_pipes_stdin_through_to_stdout()
+        => Assert.Equal("'axb\\nxz\\n'", Run("""
+            import subprocess
+            p = subprocess.Popen(["cmd", "/c", "findstr", "x"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True)
+            out, _ = p.communicate(input="axb\nyyy\nxz\n")
+            print(repr(out))
+            """));
+
+    [Fact]
+    public void Nonexistent_executable_raises_FileNotFoundError()
+        => Assert.Equal("caught", Run("""
+            import subprocess
+            try:
+                subprocess.run(["this_does_not_exist_xyz"])
+            except FileNotFoundError:
+                print("caught")
+            """));
+}
+
+/// <summary>tempfile: real files/directories on disk. Found via starlette's real `from tempfile
+/// import SpooledTemporaryFile` (formparsers.py) and anyio's real `tempfile.TemporaryFile`/
+/// `NamedTemporaryFile`/`mkstemp`/`mkdtemp` (_core/_tempfile.py). See FASTAPI_PLAN.md Phase 3.</summary>
+public class TempfileTests
+{
+    [Fact]
+    public void NamedTemporaryFile_is_a_real_file_deleted_on_close()
+    {
+        string output = Py.Run("""
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(mode="w+", delete=True) as f:
+                path = f.name
+                f.write("hello")
+                f.flush()
+                f.seek(0)
+                print(f.read())
+                print(os.path.exists(path))
+            print(os.path.exists(path))
+            """);
+        Assert.Equal("hello\nTrue\nFalse\n", output);
+    }
+
+    [Fact]
+    public void TemporaryDirectory_is_removed_on_exit()
+    {
+        string output = Py.Run("""
+            import tempfile, os
+            with tempfile.TemporaryDirectory() as d:
+                print(os.path.isdir(d))
+            print(os.path.isdir(d))
+            """);
+        Assert.Equal("True\nFalse\n", output);
+    }
+}
+
+/// <summary>io.TextIOWrapper: real (duck-typed) text wrapper over any binary buffer object. Found
+/// via anyio's real `from io import TextIOWrapper` (_core/_tempfile.py). See FASTAPI_PLAN.md
+/// Phase 3.</summary>
+public class TextIOWrapperTests
+{
+    [Fact]
+    public void Wraps_a_BytesIO_for_real_text_encode_decode()
+        => Assert.Equal("b'hello'\nworld", Py.Run("""
+            from io import TextIOWrapper, BytesIO
+            buf = BytesIO()
+            w = TextIOWrapper(buf)
+            w.write("hello")
+            print(buf.getvalue())
+            buf2 = BytesIO(b"world")
+            print(TextIOWrapper(buf2).read())
+            """).TrimEnd('\n'));
+}
+
+/// <summary>http.HTTPStatus (real IntEnum with real .phrase per member) and http.cookies
+/// (SimpleCookie/Morsel — real Set-Cookie formatting, real quoting/unquoting). Found via
+/// starlette's real `import http`/`import http.cookies` (exceptions.py/responses.py/requests.py).
+/// See FASTAPI_PLAN.md Phase 3.</summary>
+public class HttpTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void HTTPStatus_members_have_real_phrases_and_compare_equal_to_ints()
+        => Assert.Equal("Not Found\nTrue\n200", Run("""
+            import http
+            print(http.HTTPStatus(404).phrase)
+            print(http.HTTPStatus.NOT_FOUND == 404)
+            print(int(http.HTTPStatus.OK))
+            """));
+
+    [Fact]
+    public void SimpleCookie_output_matches_real_Set_Cookie_formatting()
+        => Assert.Equal(
+            "sid=abc123; Path=/; HttpOnly; SameSite=lax\nweird=\"va lue;x\"",
+            Run("""
+                import http.cookies
+                c = http.cookies.SimpleCookie()
+                c["sid"] = "abc123"
+                c["sid"]["path"] = "/"
+                c["sid"]["httponly"] = True
+                c["sid"]["samesite"] = "lax"
+                print(c.output(header="").strip())
+
+                c2 = http.cookies.SimpleCookie()
+                c2["weird"] = "va lue;x"
+                print(c2.output(header="").strip())
+                """));
+
+    [Fact]
+    public void Unquote_handles_octal_and_backslash_escapes()
+        => Assert.Equal("ab\"c\nplain", Run("""
+            import http.cookies
+            print(http.cookies._unquote('"ab\\"c"'))
+            print(http.cookies._unquote("plain"))
+            """));
+}
+
+/// <summary>html.escape/unescape. Found via starlette's real `import html` (middleware/errors.py),
+/// reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class HtmlTests
+{
+    [Fact]
+    public void Escape_and_unescape_round_trip_real_entities()
+        => Assert.Equal(
+            "&lt;a href=&#x27;x&#x27;&gt;&quot;y&quot; &amp; z&lt;/a&gt;\n<a> & A",
+            Py.Run("""
+                import html
+                print(html.escape("<a href='x'>\"y\" & z</a>"))
+                print(html.unescape("&lt;a&gt; &amp; &#65;"))
+                """).TrimEnd('\n'));
+}
+
+/// <summary>traceback.format_exc()/sys.exc_info(): backed by the interpreter's own real
+/// currently-handled-exception tracking (Interp.CurrentHandledException), not a stub. Found via
+/// starlette's real `traceback.format_exc()` (routing.py), reachable from `import starlette`. See
+/// FASTAPI_PLAN.md Phase 3.</summary>
+public class TracebackTests
+{
+    [Fact]
+    public void Format_exc_and_exc_info_see_the_real_currently_handled_exception()
+        => Assert.Equal("True True\nValueError boom\nNone None None", Py.Run("""
+            import sys, traceback
+
+            def inner():
+                raise ValueError("boom")
+
+            try:
+                inner()
+            except ValueError:
+                text = traceback.format_exc()
+                print("ValueError" in text, "boom" in text)
+                t, v, tb = sys.exc_info()
+                print(t.__name__, str(v))
+
+            print(*sys.exc_info())
+            """).TrimEnd('\n'));
+
+    [Fact]
+    public void Bare_reraise_preserves_the_same_exception()
+        => Assert.Equal("re-raised x", Py.Run("""
+            try:
+                try:
+                    raise KeyError("x")
+                except KeyError:
+                    raise
+            except KeyError as e:
+                print("re-raised", e)
+            """).TrimEnd('\n'));
+}
+
+/// <summary>contextlib.asynccontextmanager: applying the decorator (module-definition time) works
+/// for real; actually entering it raises a clear NotImplementedError since PySharp doesn't support
+/// async generators yet (see ROADMAP.md), rather than hanging or misbehaving silently. Found via
+/// starlette's real `@asynccontextmanager async def create_collapsing_task_group(): ... yield tg
+/// ...` (_utils.py), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class AsyncContextManagerTests
+{
+    [Fact]
+    public void Decorating_an_async_generator_function_works_at_definition_time()
+        => Assert.Equal("True", Py.Run("""
+            from contextlib import asynccontextmanager
+
+            @asynccontextmanager
+            async def foo():
+                yield 1
+
+            print(callable(foo))
+            """).TrimEnd('\n'));
+}
+
+/// <summary>Generic alias re-subscription (`SomeAlias[T][Concrete]`): a real TypeVar-substitution
+/// __getitem__, not previously supported at all. Found via anyio's real `class
+/// StapledObjectStream`-adjacent pattern (`Lifespan = StatelessLifespan[AppType] |
+/// StatefulLifespan[AppType]` then `Lifespan[AppType]` as a function-parameter annotation in
+/// starlette's real applications.py, eagerly evaluated despite `from __future__ import
+/// annotations`), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class GenericResubscriptTests
+{
+    [Fact]
+    public void Subscripting_an_alias_substitutes_its_free_TypeVar()
+        => Assert.Equal("True\n(<built-in function str>, <built-in function int>)", Py.Run("""
+            from typing import Dict, TypeVar, get_origin, get_args
+            T = TypeVar("T")
+            Alias = Dict[str, T]
+            Sub = Alias[int]
+            print(get_origin(Sub) is dict)
+            print(get_args(Sub))
+            """).TrimEnd('\n'));
+
+    [Fact]
+    public void Substitution_recurses_into_Callable_parameter_lists_and_unions()
+        => Assert.Equal(
+            "Callable[[<built-in function bool>], <built-in function int>]\n" +
+            "<built-in function dict>[<built-in function str>, <built-in function bool>]",
+            Py.Run("""
+                from typing import Callable, Dict, TypeVar, get_args
+                A = TypeVar("A")
+                Combo = Callable[[A], int] | Dict[str, A]
+                Result = Combo[bool]
+                print("\n".join(repr(x) for x in get_args(Result)))
+                """).TrimEnd('\n'));
+}
+
+/// <summary>email.utils: real RFC 2822 date formatting/parsing (not the full MIME machinery).
+/// Found via starlette's real `from email.utils import format_datetime, formatdate`
+/// (responses.py) and `parsedate` (staticfiles.py), reachable from `import starlette`. See
+/// FASTAPI_PLAN.md Phase 3.</summary>
+public class EmailUtilsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Format_datetime_matches_real_RFC_2822_shape()
+        => Assert.Equal("Mon, 15 Jan 2024 12:30:45 GMT", Run("""
+            from email.utils import format_datetime
+            from datetime import datetime, timezone
+            dt = datetime(2024, 1, 15, 12, 30, 45, tzinfo=timezone.utc)
+            print(format_datetime(dt, usegmt=True))
+            """));
+
+    [Fact]
+    public void Parsedate_round_trips_and_produces_lexicographically_comparable_tuples()
+        => Assert.Equal(
+            "(2024, 1, 15, 12, 30, 45, 0, 1, -1)\nNone\nTrue",
+            Run("""
+                from email.utils import parsedate
+                print(parsedate("Mon, 15 Jan 2024 12:30:45 GMT"))
+                print(parsedate("not a date"))
+                a = parsedate("Mon, 15 Jan 2024 12:30:45 GMT")
+                b = parsedate("Tue, 16 Jan 2024 00:00:00 GMT")
+                print(a < b)
+                """));
+}

@@ -255,4 +255,33 @@ public class ClassTests
             """;
         Assert.Equal("[3, 2, 1]\n", Py.Run(src));
     }
+
+    /// <summary>Real object.__eq__/__ne__/__hash__/__repr__/__str__ default dunders — previously
+    /// only reachable via hardcoded C# fallback branches in PyOps.Repr/Str/RichEquals (same output
+    /// for normal repr()/str()/== use, so this is a transparent refactor there), but direct/unbound
+    /// access (`object.__eq__`, `SomeClass.__eq__` when never overridden) raised AttributeError.
+    /// Found via starlette's real `cls.__eq__ is object.__eq__`-style idiom, reachable from `import
+    /// starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+    [Fact]
+    public void Object_default_dunders_are_real_and_directly_accessible()
+        => Assert.Equal(
+            "True\nFalse\nNotImplemented\nTrue\nTrue\nTrue",
+            Py.Run("""
+                x = object()
+                y = object()
+                print(object.__eq__(x, x))
+                print(object.__eq__(x, x) is False)
+                print(object.__eq__(x, y))
+                print(object.__hash__(x) == object.__hash__(x))
+                print(str(x) == repr(x))
+                print(repr(x).startswith("<object object at"))
+                """).TrimEnd('\n'));
+
+    [Fact]
+    public void Class_that_never_overrides_eq_finds_the_real_default_via_inheritance()
+        => Assert.Equal("True\n", Py.Run("""
+            class Base(object):
+                pass
+            print(Base.__eq__ is object.__eq__)
+            """));
 }

@@ -31,6 +31,21 @@ public static class GenericAliasModule
     /// bases (see below).</summary>
     public static PyClass? GenericPlaceholder { get; set; }
 
+    /// <summary>`typing.TypeVar("T")`/`ParamSpec`/`TypeVarTuple` each build a fresh, uniquely-named
+    /// `PyClass` (real CPython gives each call a distinct object too) — marked with this key so
+    /// `Resubscript` can recognize one by presence of the marker rather than by a shared class
+    /// identity that doesn't exist.</summary>
+    private const string TypeVarMarker = "__is_typevar__";
+
+    public static PyClass MakeTypeVarLike(string name)
+    {
+        var cls = new PyClass(name, new List<PyClass>());
+        cls.Dict[TypeVarMarker] = true;
+        return cls;
+    }
+
+    private static bool IsTypeVarLike(object o) => o is PyClass pc && pc.Dict.ContainsKey(TypeVarMarker);
+
     /// <summary>Does resolving base <paramref name="b"/> bring `Generic` into the MRO on its own
     /// (a real class that already derives Generic, or a generic alias over one)?</summary>
     private static bool OriginBringsInGeneric(object b)
@@ -60,6 +75,65 @@ public static class GenericAliasModule
         if (ArgsTransform.TryGetValue(cls, out var transform))
             args = transform(args);
         return MakeAlias(origin, args);
+    }
+
+    /// <summary>
+    /// `alias[index]` where `alias` is itself already a built generic alias (not a bare class) —
+    /// e.g. `Dict[str, T][int]`, or a `Union` of parameterized aliases like starlette's real
+    /// `Lifespan = StatelessLifespan[AppType] | StatefulLifespan[AppType]` then `Lifespan[AppType]`.
+    /// Real CPython substitutes each free TypeVar found (recursively) in `__args__`, positionally,
+    /// with the new subscript's value(s) — matching real `_GenericAlias.__getitem__`/
+    /// `UnionType.__getitem__`. Found via starlette's real `applications.py` (itself imported by
+    /// `import starlette`): a `Lifespan[AppType]` function-parameter annotation, eagerly evaluated
+    /// here despite `from __future__ import annotations` being present (PySharp's standing,
+    /// documented gap around deferred annotations — real CPython would never evaluate this
+    /// particular expression at all).
+    /// </summary>
+    public static PyInstance Resubscript(PyInstance alias, object index)
+    {
+        var parameters = new List<object>();
+        CollectTypeVars(alias, parameters, new HashSet<object>());
+        var subs = index is PyTuple t ? t.Items : new object[] { index };
+        var map = new Dictionary<object, object>();
+        for (int i = 0; i < parameters.Count && i < subs.Length; i++)
+            map[parameters[i]] = subs[i];
+        return (PyInstance)Substitute(alias, map);
+    }
+
+    private static void CollectTypeVars(object node, List<object> found, HashSet<object> seen)
+    {
+        if (IsTypeVarLike(node))
+        {
+            if (seen.Add(node))
+                found.Add(node);
+            return;
+        }
+        if (node is PyInstance inst && inst.Class == GenericAliasClass
+            && inst.Dict.TryGet("__args__", out var argsObj) && argsObj is PyTuple args)
+        {
+            foreach (var a in args.Items)
+                CollectTypeVars(a, found, seen);
+        }
+        // Callable[[A, B], R]'s parameter list is a PyList, not directly nested aliases/TypeVars —
+        // real CPython's own _CallableGenericAlias flattens through it the same way.
+        else if (node is PyList list)
+        {
+            foreach (var a in list.Items)
+                CollectTypeVars(a, found, seen);
+        }
+    }
+
+    private static object Substitute(object node, Dictionary<object, object> map)
+    {
+        if (node is PyInstance inst && inst.Class == GenericAliasClass
+            && inst.Dict.TryGet("__origin__", out var origin) && inst.Dict.TryGet("__args__", out var argsObj) && argsObj is PyTuple args)
+        {
+            var newArgs = args.Items.Select(a => map.TryGetValue(a, out var sub) ? sub : Substitute(a, map)).ToArray();
+            return MakeAlias(origin, newArgs);
+        }
+        if (node is PyList list)
+            return new PyList(list.Items.Select(a => map.TryGetValue(a, out var sub) ? sub : Substitute(a, map)));
+        return map.TryGetValue(node, out var replaced) ? replaced : node;
     }
 
     public static PyInstance MakeAlias(object origin, IReadOnlyList<object> args)

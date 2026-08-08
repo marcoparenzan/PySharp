@@ -71,6 +71,14 @@ public static class StdlibModules
         importer.RegisterBuiltin("concurrent", _ => ConcurrentModule.Create());
         importer.RegisterBuiltin("concurrent.futures", _ => ConcurrentModule.CreateFutures());
         importer.RegisterBuiltin("stat", _ => StatModule.Create());
+        importer.RegisterBuiltin("subprocess", interp => SubprocessModule.Create(interp));
+        importer.RegisterBuiltin("tempfile", _ => TempfileModule.Create());
+        importer.RegisterBuiltin("http", interp => HttpModule.Create(interp));
+        importer.RegisterBuiltin("http.cookies", interp => CookiesModule.Create(interp));
+        importer.RegisterBuiltin("html", _ => HtmlModule.Create());
+        importer.RegisterBuiltin("traceback", interp => TracebackModule.Create(interp));
+        importer.RegisterBuiltin("email", _ => EmailModule.Create());
+        importer.RegisterBuiltin("email.utils", _ => EmailModule.CreateUtils());
         importer.RegisterBuiltin("pickle", _ => PickleModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());

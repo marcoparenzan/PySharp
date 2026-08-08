@@ -64,6 +64,25 @@ public static class OsModule
             File.Delete((string)a[0]);
             return PyNone.Instance;
         });
+        d["rmdir"] = new PyBuiltinFunction("rmdir", (_, a, _) =>
+        {
+            Directory.Delete((string)a[0]);
+            return PyNone.Instance;
+        });
+        d["removedirs"] = new PyBuiltinFunction("removedirs", (_, a, _) =>
+        {
+            Directory.Delete((string)a[0]);
+            return PyNone.Instance;
+        });
+        d["rename"] = new PyBuiltinFunction("rename", (_, a, _) =>
+        {
+            string src = (string)a[0], dst = (string)a[1];
+            if (File.Exists(src))
+                File.Move(src, dst, overwrite: true);
+            else
+                Directory.Move(src, dst);
+            return PyNone.Instance;
+        });
         d["chmod"] = new PyBuiltinFunction("chmod", (_, a, _) =>
         {
             string path = (string)a[0];

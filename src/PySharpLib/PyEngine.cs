@@ -61,7 +61,17 @@ public sealed class PyEngine
         foreach (var (name, value) in Globals)
             module.Dict[name] = Runtime.ClrMarshal.ToPython(value);
         var ast = Parser.Parse(source, fileName);
-        Interp.RunModule(ast, module);
+        // Real, deep-but-legitimate Python recursion (close to CPython's own default 1000-frame
+        // limit) needs more C# stack than the OS default thread stack (1MB) gives this tree-walking
+        // interpreter — each Python-level call is several nested C# frames (Call/CallCore/
+        // CallFunction/ExecFunctionBody/ExecStmts/Exec/Eval). Found the hard way: Interp.Call's new
+        // recursion-depth guard (see its own doc comment) correctly turned one specific runaway-
+        // recursion corpus test into a catchable RecursionError, but plain recursive functions were
+        // *still* overflowing the real CLR stack well before reaching that depth counter's limit —
+        // a real, pre-existing constraint of running on the default thread stack, not specific to
+        // that one fix. Matches the same technique this codebase already uses for coroutine/
+        // generator bodies (their own dedicated threads in Async.cs/PyGenerator.cs).
+        Runtime.BigStack.Run(() => Interp.RunModule(ast, module));
         return module;
     }
 

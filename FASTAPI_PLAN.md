@@ -611,11 +611,16 @@ long session once the author said "procedi" to continue past Phase 1's completio
   directly against the anyio statement that originally blocked this phase. A further probe-driven
   round past that (3.1.3 below) closed 6 more real gaps — `concurrent.futures`, `stat`, `os.chmod`,
   real `abc.ABC.register()` virtual-subclass support, a `typing.Generic[T]` MRO-deduplication bug,
-  and `typing.override`. **Current frontier**: `subprocess` (no module named `subprocess` at all) —
-  used by anyio's real `_core/_subprocesses.py`. A real implementation (process spawning, pipes,
-  `Popen`, real async subprocess support integrated with PySharp's event loop) is comparable in
-  scope to `threading`/`asyncio` themselves — deliberately left for a dedicated round rather than
-  attempted inline, same reasoning as `match`/`case` before it.
+  and `typing.override`. A fourth round (3.1.4 below), triggered by the author's "match/case parte
+  2" commit followed by "prosegui", pushed `import starlette` all the way through
+  `starlette.applications`/`routing`/`responses`/`requests` — closing 12 more real gaps
+  (`subprocess`, `tempfile`, `io.TextIOWrapper`, `http`/`http.cookies`, `email.utils`, a
+  `re.Pattern.search` pos/endpos bug, generic-alias re-subscription with TypeVar substitution,
+  `html`, `traceback`/`sys.exc_info`, `contextlib.asynccontextmanager`, real `object.__eq__`/
+  `__ne__`/`__hash__`/`__repr__`/`__str__` defaults, and — found chasing a regression from that last
+  one — a real recursion-depth guard, since this interpreter had never had one at all before).
+  **Current frontier**: `mimetypes` (no module named `mimetypes`) — used by starlette's real
+  `staticfiles.py`. Not started.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
@@ -805,6 +810,111 @@ against known-correct behavior, write a regression test, keep the suite green.
   `OsChmodTests`, `AbcRegisterTests`, `GenericMroDedupTests`, `TypingOverrideTests`). Full suite green
   throughout: 836/836 by the end of this round, up from 825 at the start of it.
 
+### 3.1.4 — past `subprocess`: 12 more real gaps, all the way through `applications`/`routing`/`responses`/`requests`
+
+Continuing the same probe past `subprocess`, same discipline throughout.
+
+- **`subprocess`**: real process spawning on `System.Diagnostics.Process`, not a stub —
+  `Popen` (real stdin/stdout/stderr pipes, `wait`/`communicate`/`poll`/`terminate`/`kill`, real
+  `FileNotFoundError` for a missing executable), plus `run`/`call`/`check_call`/`check_output` and
+  real `CalledProcessError`/`CompletedProcess`/`TimeoutExpired` (the latter three implemented as
+  real parsed Python source, matching CPython's own `Lib/subprocess.py`). Verified against 6 real
+  Windows subprocess scenarios (captured text output, nonzero exit under `check=True`, piping stdin
+  through to stdout, `DEVNULL`, `check_output`, a missing executable) before writing tests. Real
+  async subprocess integration (anyio's own `open_process`, wired into PySharp's event loop)
+  remains out of scope — nothing in the import chain calls it.
+- **`tempfile`**: real files/directories on disk — `gettempdir`/`mkdtemp`/`mkstemp`,
+  `NamedTemporaryFile`/`TemporaryFile`/`SpooledTemporaryFile` (file-backed, always-spooled rather
+  than CPython's memory-first optimization — a documented simplification, not a functional gap) and
+  `TemporaryDirectory`. `mkstemp`'s returned fd is a synthetic counter, not a real OS-level
+  descriptor — honest, and harmless, since PySharp has no `os.read`/`os.write(fd, ...)` low-level fd
+  API at all yet for anything to misuse it with. Also added `os.rmdir`/`removedirs`/`rename`
+  alongside it.
+- **`io.TextIOWrapper`**: a real (duck-typed) text wrapper over any binary buffer object —
+  encodes/decodes via UTF-8, forwards read/write/close/flush to the wrapped object's own methods, so
+  it works over a real file, `BytesIO`, or a `Popen` pipe alike, matching real CPython's generality.
+- **`http.HTTPStatus`**: a real IntEnum with a real `.phrase` per member (built by hand in C# with
+  the standard IANA status-code/phrase table, rather than replicating CPython's `__new__(cls, value,
+  phrase, ...)` tuple-unpacking Enum idiom, which PySharp's enum machinery doesn't support in
+  general and nothing else in scope needs). **`http.cookies`**: a real (simplified) port of
+  CPython's own `Lib/http/cookies.py` — real quoting (`_quote`)/unquoting (`_unquote`, found via
+  starlette's real direct `http_cookies._unquote` call in `requests.py`'s `cookie_parser`) and real
+  `Set-Cookie` formatting via `Morsel`/`BaseCookie`/`SimpleCookie`. These hold their own internal
+  dict rather than actually subclassing `dict` (PySharp's `class X(dict):` doesn't back subclass
+  instances with real storage yet — a separate, standing interpreter gap, not worth taking on just
+  for this); everything starlette actually calls behaves identically either way.
+- **`email.utils`**: just the RFC 2822 date helpers (`format_datetime`/`formatdate`/`parsedate`),
+  real (ported from CPython's own algorithm), not the full MIME/message-parsing machinery — found
+  via starlette's real `from email.utils import format_datetime, formatdate` (`responses.py`, for
+  `Last-Modified`/`Date` headers) and `parsedate` (`staticfiles.py`, for real `If-Modified-Since`
+  conditional-GET comparisons — real CPython's `parsedate` returns a 9-tuple that compares
+  lexicographically, which is all `staticfiles.py` actually needs).
+- **A real bug in `re.Pattern.search`/`match`/`fullmatch`/`finditer`: the `pos`/`endpos` arguments
+  were silently ignored entirely.** Found the hard way: a hand-ported `http.cookies._unquote`
+  (itself needed for the fix above) advances `pos` between successive `pattern.search(s, pos)`
+  calls; since `pos` was never actually honored, every call re-matched from position 0, `pos` never
+  advanced, and the loop span forever. Not cookies-specific — `pos`/`endpos` are a normal, commonly-
+  relied-on part of the real `Pattern` API, now implemented for real via `Regex.Match(s, pos, len)`.
+- **`typing.Generic`/generic-alias re-subscription (`SomeAlias[T][Concrete]`)**: not previously
+  supported *at all* — `alias[index]` where `alias` is itself already a built generic alias (not a
+  bare class) raised `TypeError: '_GenericAlias' object is not subscriptable`. Real CPython
+  substitutes each free `TypeVar` found recursively in `__args__` (including inside `Callable`'s own
+  parameter-list `PyList` and `Union`s of parameterized aliases) with the new subscript's value(s),
+  positionally — now implemented for real (`GenericAliasModule.Resubscript`/`CollectTypeVars`/
+  `Substitute`), including discovering along the way that `typing.TypeVar("T")` builds a fresh,
+  uniquely-named `PyClass` (not a shared-class instance), requiring a marker-key identification
+  scheme rather than a class-identity check. Found via starlette's real `applications.py`: a
+  `Lifespan[AppType]` function-parameter annotation, eagerly evaluated despite `from __future__
+  import annotations` being present (PySharp's standing, documented gap around deferred
+  annotations — real CPython would never evaluate this particular expression at all).
+- **`html`**: real `escape` (a direct port of CPython's own replace chain, same order, same
+  `&#x27;` apostrophe encoding) and `unescape` (backed by .NET's own `WebUtility.HtmlDecode`, a real
+  decoder, not guaranteed identical entity-for-entity coverage to CPython's full `html.entities`
+  table for obscure entities).
+- **`traceback.format_exc`/`print_exc`/`format_exception` + `sys.exc_info()`**: backed by a real
+  interpreter-level plumbing change — `Interp`'s exception-handling stack (`_handling`) now tracks
+  the full `PyRaise` (not just the exception instance), exposed as `Interp.CurrentHandledException`,
+  and reused directly by the existing `PyErr.FormatTraceback` (the same formatting the REPL/CLI use
+  for an uncaught exception). Bare `raise` (re-raise) also got more correct as a side effect: it now
+  re-throws the exact same `PyRaise` object instead of wrapping a new one, preserving its traceback
+  properly.
+- **`contextlib.asynccontextmanager`**: applying the decorator (module-definition time — what
+  `import starlette` itself exercises, via starlette's real `@asynccontextmanager async def
+  create_collapsing_task_group(): ... yield tg ...` in `_utils.py`) works for real. Actually
+  *entering* the resulting context manager needs to drive a real async generator, which PySharp
+  doesn't support at all (a standing, documented gap — see ROADMAP.md's Axis A) — `__aenter__`/
+  `__aexit__` raise a clear `NotImplementedError` instead of hanging or silently misbehaving, the
+  same honest-limitation shape as `AsyncExitStack`'s suspending-coroutine case.
+- **Real `object.__eq__`/`__ne__`/`__hash__`/`__repr__`/`__str__` default dunders.** Previously only
+  reachable via hardcoded C# fallback branches in `PyOps.Repr`/`Str`/`RichEquals` (same output for
+  normal `repr()`/`str()`/`==` use, so adding them was a transparent refactor there), but direct/
+  unbound access (`object.__eq__`, `SomeClass.__eq__` when never overridden, `super().__repr__()`)
+  raised `AttributeError` — a real gap, found via starlette's real `cls.__eq__ is object.__eq__`-
+  style idiom (a common way real Python libraries detect whether a class defines custom equality).
+- **A real recursion-depth guard, found chasing a regression from the fix above.** A corpus test
+  already on file (`recursion.py`, already `Xfail`-listed for exactly this) does `Foo.__repr__ =
+  Foo.__str__` on a `class Foo(object):` and expects `str(foo)` to raise a catchable
+  `RecursionError` — real CPython's own protection against exactly this cycle. Before
+  `object.__str__`/`__repr__` existed, `Foo.__str__` simply didn't resolve (`AttributeError`), so
+  the corpus test "passed" by accident, for the wrong reason. Once real defaults existed, the cycle
+  became reachable — and revealed a real, pre-existing gap: **nothing in this interpreter enforced
+  any recursion limit at all**, so the cycle overflowed the real CLR stack instead of raising a
+  catchable error. Fixed with a real depth counter in `Interp.Call` (matching CPython's default
+  `sys.getrecursionlimit()` of 1000, thread-static like the existing frame stack, raising a real
+  `PyErr.RecursionErrorClass`), *plus* running top-level script/REPL execution on a dedicated
+  64 MB-stack thread (`Runtime.BigStack`, the same technique already used for coroutine/generator
+  bodies) — needed because this tree-walking interpreter's own C# call chain is several frames deep
+  per single Python-level call, so anything close to a 1000-deep Python recursion needs real
+  headroom beyond the OS default 1 MB thread stack. `recursion.py` now genuinely passes and moved
+  from `Xfail` to supported.
+- 18 tests added (`M6_Stdlib/StdlibTests.cs`: `SubprocessTests`, `TempfileTests`,
+  `TextIOWrapperTests`, `HttpTests`, `HtmlTests`, `TracebackTests`, `AsyncContextManagerTests`,
+  `GenericResubscriptTests`, `EmailUtilsTests` — 9 new test classes;
+  `M4_Functions/FunctionTests.cs`:
+  `Runaway_recursion_raises_a_catchable_RecursionError`; `M4_Functions/ClassTests.cs`: 2 tests for
+  the real `object` dunders). Full suite green throughout: 857/857 by the end of this round, up from
+  836 at the start of it.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -921,10 +1031,29 @@ MRO" whenever `SomeGeneric` already derived `Generic` — recurs throughout anyi
 `abc/_streams.py` hierarchy, not a one-off), and `typing.override` (PEP 698, a real `__override__`
 side effect, not a bare passthrough). Full blow-by-blow in 3.1.3. 836/836 tests green (up from 825).
 
-**Current frontier for Phase 3**: `subprocess` — no module named `subprocess` at all. Found via
-anyio's real `_core/_subprocesses.py`. A real implementation (process spawning, pipes, `Popen`, real
-async subprocess support integrated with PySharp's own event loop) is comparable in scope to
-`threading`/`asyncio` themselves — deliberately left for a dedicated round, not started here.
+**12 more real gaps closed past `subprocess`** (same continuation, "match/case parte 2" →
+"prosegui"): real `subprocess` (`Popen` on `System.Diagnostics.Process`, `run`/`call`/
+`check_call`/`check_output`), real `tempfile` (files/directories genuinely on disk), `io
+.TextIOWrapper` (a real duck-typed text wrapper over any binary buffer), `http.HTTPStatus` (a real
+IntEnum with real `.phrase`) and `http.cookies` (a real, if simplified, port of CPython's own
+`Lib/http/cookies.py`), `email.utils` (real RFC 2822 date helpers), a real bug fix in
+`re.Pattern.search`/`match`/`fullmatch`/`finditer` (`pos`/`endpos` were silently ignored entirely —
+found via an infinite loop in a hand-ported `http.cookies._unquote`), real generic-alias
+re-subscription with TypeVar substitution (`SomeAlias[T][Concrete]`, not supported at all before),
+`html` (real `escape`/`unescape`), `traceback.format_exc`/`sys.exc_info()` (backed by a real
+interpreter-level change: `Interp`'s exception-handling stack now tracks the full `PyRaise`, not
+just the instance), `contextlib.asynccontextmanager` (works for real at decoration time; entering it
+correctly raises `NotImplementedError` since PySharp has no async generators), real `object.__eq__`/
+`__ne__`/`__hash__`/`__repr__`/`__str__` defaults (previously only reachable via hardcoded fallback
+branches, not as real inheritable methods), and — found chasing a regression from that last one — a
+**real recursion-depth guard**, since this interpreter had never enforced any recursion limit at
+all: runaway recursion now raises a catchable `RecursionError` (matching CPython's default 1000),
+backed by running top-level execution on a real 64MB-stack thread since this tree-walking
+interpreter needs real headroom for that depth. Full blow-by-blow in 3.1.4. 857/857 tests green (up
+from 836).
+
+**Current frontier for Phase 3**: `mimetypes` — no module named `mimetypes` at all. Found via
+starlette's real `staticfiles.py`. Not started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

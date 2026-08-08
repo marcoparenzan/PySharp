@@ -40,8 +40,13 @@ public sealed class Interp
         ["!="] = "__ne__",
     };
 
-    /// <summary>Stack of exceptions being handled (for bare raise).</summary>
-    private readonly Stack<PyInstance> _handling = new();
+    /// <summary>Stack of exceptions being handled (for bare raise, and for sys.exc_info()/
+    /// traceback.format_exc() to see the real currently-handled exception + its traceback).</summary>
+    private readonly Stack<PyRaise> _handling = new();
+
+    /// <summary>The exception currently being handled (innermost active `except:` block), or null
+    /// outside of one — real CPython's `sys.exc_info()`/`traceback.format_exc()` semantics.</summary>
+    public PyRaise? CurrentHandledException => _handling.Count > 0 ? _handling.Peek() : null;
 
     /// <summary>Call stack (module frame + function frames). Per-thread (generators/coroutines run on their own threads).</summary>
     [ThreadStatic]
@@ -735,7 +740,7 @@ public sealed class Interp
         {
             if (_handling.Count == 0)
                 throw PyErr.RuntimeError("No active exception to re-raise");
-            throw new PyRaise(_handling.Peek());
+            throw _handling.Peek();
         }
 
         var excValue = Eval(r.Exc, env);
@@ -774,7 +779,7 @@ public sealed class Interp
                     handled = true;
                     if (handler.Name is not null)
                         env.Set(handler.Name, ex.Value);
-                    _handling.Push(ex.Value);
+                    _handling.Push(ex);
                     try
                     {
                         ExecStmts(handler.Body, env);
@@ -1553,7 +1558,36 @@ public sealed class Interp
         return Call(callee, args.ToArray(), kwargs);
     }
 
+    // Real CPython's sys.getrecursionlimit() default (1000), guarding every call — not just
+    // Python-level function calls but builtin/dunder dispatch too, since those recurse through
+    // this exact same entry point. Thread-static like _frames (coroutines run on their own
+    // threads). Found the hard way: object.__str__'s new default (calling __repr__) combined
+    // with a real corpus test's `Foo.__repr__ = Foo.__str__` (recursion.py, already Xfail-listed
+    // for exactly this) turned what real CPython raises as a catchable RecursionError into an
+    // actual unbounded C# stack overflow — a real, pre-existing gap (no call path in this
+    // interpreter enforced any recursion limit before), not specific to that one dunder pair.
+    [ThreadStatic]
+    private static int _callDepth;
+    private const int MaxCallDepth = 1000;
+
     public object Call(object callee, object[] args, Dictionary<string, object>? kwargs = null)
+    {
+        if (++_callDepth > MaxCallDepth)
+        {
+            _callDepth--;
+            throw new PyRaise(PyErr.MakeInstance(PyErr.RecursionErrorClass, "maximum recursion depth exceeded"));
+        }
+        try
+        {
+            return CallCore(callee, args, kwargs);
+        }
+        finally
+        {
+            _callDepth--;
+        }
+    }
+
+    private object CallCore(object callee, object[] args, Dictionary<string, object>? kwargs)
     {
         switch (callee)
         {
@@ -2373,6 +2407,8 @@ public sealed class Interp
             {
                 if (TryCallMethod(inst, "__getitem__", new[] { index }, out var r))
                     return r;
+                if (inst.Class == Modules.GenericAliasModule.GenericAliasClass)
+                    return Modules.GenericAliasModule.Resubscript(inst, index);
                 throw PyErr.TypeError($"'{inst.Class.Name}' object is not subscriptable");
             }
             case PyClass pc:

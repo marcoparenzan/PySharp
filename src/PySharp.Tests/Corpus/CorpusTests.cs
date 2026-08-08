@@ -53,7 +53,6 @@ public class CorpusTests
         ["builtin_tuple.py"] = "dunder-attr: tuple.__ne__ as an attribute",
         ["builtin_issubclass.py"] = "dunder-attr / __subclasshook__",
         ["operator_comparison.py"] = "dunder-attr: comparisons as type methods",
-        ["recursion.py"] = "dunder-attr: type.__str__ / recursion limits",
         ["builtin_enumerate.py"] = "iter-type: type(enumerate(...)) == enumerate",
         ["builtin_filter.py"] = "iter-type: type(filter(...)) == filter",
         ["builtin_map.py"] = "iter-type: type(map(...)) == map",

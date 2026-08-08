@@ -18,7 +18,12 @@ public static class ContextlibModule
     private const string GenKey = "__gen__";
     private const string ExcTypesKey = "__exc_types__";
 
+    private const string AsyncFnKey = "__async_fn__";
+    private const string AsyncArgsKey = "__async_args__";
+    private const string AsyncKwargsKey = "__async_kwargs__";
+
     public static readonly PyClass GeneratorContextManagerClass = BuildGeneratorContextManagerClass();
+    public static readonly PyClass AsyncGeneratorContextManagerClass = BuildAsyncGeneratorContextManagerClass();
     public static readonly PyClass SuppressClass = BuildSuppressClass();
     public static readonly PyClass AbstractContextManagerClass = BuildAbstractContextManagerClass("AbstractContextManager", "__enter__", "__exit__");
     public static readonly PyClass AbstractAsyncContextManagerClass = BuildAbstractContextManagerClass("AbstractAsyncContextManager", "__aenter__", "__aexit__");
@@ -47,6 +52,31 @@ public static class ContextlibModule
                     throw PyErr.TypeError("@contextmanager function must be a generator function (use 'yield')");
                 var inst = new PyInstance(GeneratorContextManagerClass);
                 inst.Dict[GenKey] = gen;
+                return inst;
+            });
+        });
+
+        // Real CPython's async counterpart of @contextmanager, wrapping an async-generator
+        // function. Applying the decorator (module-definition time — what `import starlette`
+        // actually exercises, via starlette._utils's real `@asynccontextmanager async def
+        // create_collapsing_task_group(): ... yield tg ...`) works for real: it just wraps the
+        // function reference. Actually *entering* the resulting context manager needs to drive a
+        // real async generator, which PySharp doesn't support yet (see ROADMAP.md's Axis A gap
+        // list) — __aenter__/__aexit__ raise a clear NotImplementedError instead of hanging or
+        // silently misbehaving, the same honest-limitation shape as AsyncExitStack's suspending-
+        // coroutine case.
+        d["asynccontextmanager"] = new PyBuiltinFunction("asynccontextmanager", (interp, a, _) =>
+        {
+            if (a.Length < 1)
+                throw PyErr.TypeError("asynccontextmanager() missing 1 required positional argument: 'func'");
+            var genFn = a[0];
+
+            return new PyBuiltinFunction("asynccontextmanager_wrapper", (_, callArgs, callKwargs) =>
+            {
+                var inst = new PyInstance(AsyncGeneratorContextManagerClass);
+                inst.Dict[AsyncFnKey] = genFn;
+                inst.Dict[AsyncArgsKey] = callArgs;
+                inst.Dict[AsyncKwargsKey] = (object?)callKwargs ?? PyNone.Instance;
                 return inst;
             });
         });
@@ -109,6 +139,21 @@ public static class ContextlibModule
 
     private static PyGenerator Gen(object self) =>
         (PyGenerator)((PyInstance)self).Dict[GenKey];
+
+    private static PyClass BuildAsyncGeneratorContextManagerClass()
+    {
+        var cls = new PyClass("_AsyncGeneratorContextManager", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"_AsyncGeneratorContextManager.{name}", fn);
+
+        PyRaise NotSupported() => new(PyErr.MakeInstance(PyErr.NotImplementedErrorClass,
+            "PySharp doesn't support async generators yet, so an @asynccontextmanager-wrapped " +
+            "function can't actually be entered (defining/decorating it works; driving it doesn't)."));
+
+        Add("__aenter__", (_, _, _) => throw NotSupported());
+        Add("__aexit__", (_, _, _) => throw NotSupported());
+
+        return cls;
+    }
 
     private static PyClass BuildSuppressClass()
     {

@@ -96,6 +96,24 @@ public class FunctionTests
         Assert.Equal("55\n", Py.Run(src));
     }
 
+    /// <summary>Runaway recursion raises a catchable RecursionError instead of crashing the
+    /// process — Interp.Call's real recursion-depth guard (matching CPython's default
+    /// sys.getrecursionlimit() of 1000), backed by running on a real large-stack thread
+    /// (PyEngine.Run/BigStack) so genuinely deep-but-legitimate recursion still succeeds. Found
+    /// via a real corpus regression: `Foo.__repr__ = Foo.__str__` (recursion.py) combined with
+    /// object.__str__'s new real default (calling __repr__) turned an uncatchable C# stack
+    /// overflow into what real CPython also does here — a clean RecursionError.</summary>
+    [Fact]
+    public void Runaway_recursion_raises_a_catchable_RecursionError()
+        => Assert.Equal("caught\n", Py.Run("""
+            def rec(n):
+                return rec(n + 1)
+            try:
+                rec(0)
+            except RecursionError:
+                print("caught")
+            """));
+
     [Fact]
     public void Decorators_wrap_functions()
     {

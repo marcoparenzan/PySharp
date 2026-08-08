@@ -24,6 +24,7 @@ public static class IoModule
         m.Dict["IOBase"] = IOBaseClass;
         m.Dict["StringIO"] = BuildStringIo();
         m.Dict["BytesIO"] = BuildBytesIo();
+        m.Dict["TextIOWrapper"] = BuildTextIoWrapper();
         m.Dict["SEEK_SET"] = (BigInteger)0;
         m.Dict["SEEK_CUR"] = (BigInteger)1;
         m.Dict["SEEK_END"] = (BigInteger)2;
@@ -101,6 +102,48 @@ public static class IoModule
         Add("tell", (_, a, _) => new BigInteger(Buf(a[0]).Count));
         Add("__enter__", (_, a, _) => a[0]);
         Add("__exit__", (_, _, _) => false);
+        return cls;
+    }
+
+    /// <summary>Real (duck-typed) text wrapper over any binary buffer object — encodes/decodes via
+    /// UTF-8 and forwards read/write/close/flush to the buffer's own methods, so it works over
+    /// anything with the right shape (a real file, BytesIO, a Popen pipe reader/writer), matching
+    /// real CPython's own generality. Found via anyio's real `from io import TextIOWrapper`
+    /// (_core/_tempfile.py), used there to wrap a binary temp file in text mode.</summary>
+    private static PyClass BuildTextIoWrapper()
+    {
+        var cls = new PyClass("TextIOWrapper", new List<PyClass> { IOBaseClass });
+        const string bufKey = "__buffer__";
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"TextIOWrapper.{name}", fn);
+
+        object Buf(object self) => ((PyInstance)self).Dict[bufKey];
+
+        Add("__init__", (_, a, _) =>
+        {
+            ((PyInstance)a[0]).Dict[bufKey] = a[1];
+            return PyNone.Instance;
+        });
+        Add("write", (interp, a, _) =>
+        {
+            string s = a[1] as string ?? throw PyErr.TypeError("write() argument must be str");
+            interp.CallMethod(Buf(a[0]), "write", new object[] { new PyBytes(Encoding.UTF8.GetBytes(s)) });
+            return new BigInteger(s.Length);
+        });
+        Add("read", (interp, a, _) =>
+        {
+            var result = interp.CallMethod(Buf(a[0]), "read", Array.Empty<object>());
+            return result switch
+            {
+                PyBytes b => Encoding.UTF8.GetString(b.Data),
+                string s => s,
+                _ => result,
+            };
+        });
+        Add("close", (interp, a, _) => interp.CallMethod(Buf(a[0]), "close", Array.Empty<object>()));
+        Add("flush", (interp, a, _) => interp.CallMethod(Buf(a[0]), "flush", Array.Empty<object>()));
+        Add("__enter__", (_, a, _) => a[0]);
+        Add("__exit__", (interp, a, _) => { interp.CallMethod(a[0], "close", Array.Empty<object>()); return false; });
+        cls.Dict["buffer"] = new PyProperty { Getter = new PyBuiltinFunction("TextIOWrapper.buffer", (_, a, _) => Buf(a[0])) };
         return cls;
     }
 }

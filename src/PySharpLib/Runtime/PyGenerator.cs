@@ -13,6 +13,9 @@ namespace PySharpLib.Runtime;
 /// </summary>
 public sealed class PyGenerator
 {
+    // See BigStack's doc comment: real recursion depth needs real C# stack headroom.
+    private const int BigStackSize = 64 * 1024 * 1024;
+
     private readonly PyFunction _fn;
     private readonly Env _env;
     private readonly SemaphoreSlim _resume = new(0, 1);
@@ -107,7 +110,7 @@ public sealed class PyGenerator
                     _finished = true;
                     _produced.Release();
                 }
-            })
+            }, BigStackSize)
             {
                 IsBackground = true,
                 Name = $"pygen-{_fn.Name}",

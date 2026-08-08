@@ -202,14 +202,15 @@ internal sealed class ReplCommand : Command
             {
                 var expr = Parser.ParseExpression(source);
                 var env = new Env(module) { IsGlobalScope = true };
-                var value = engine.Interp.Eval(expr, env);
+                object value = PyNone.Instance;
+                BigStack.Run(() => value = engine.Interp.Eval(expr, env));
                 if (value is not PyNone)
                     AnsiConsole.WriteLine(PyOps.Repr(engine.Interp, value));
             }
             catch (PySyntaxError)
             {
                 var ast = Parser.Parse(source, module.FileName);
-                engine.Interp.RunModule(ast, module);
+                BigStack.Run(() => engine.Interp.RunModule(ast, module));
             }
         }
         catch (PyRaise ex)

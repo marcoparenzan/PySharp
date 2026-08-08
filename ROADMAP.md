@@ -280,20 +280,22 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 | Supported | Missing (out of scope for v1) |
 |---|---|
-| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch), **`match`/`case` structural pattern matching** (PEP 634 — real soft-keyword parsing + full pattern semantics: literal/capture/wildcard/value/sequence/mapping/class/or/as patterns, guards) | `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def`), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not) |
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch), **`match`/`case` structural pattern matching** (PEP 634 — real soft-keyword parsing + full pattern semantics: literal/capture/wildcard/value/sequence/mapping/class/or/as patterns, guards), real `object.__eq__`/`__ne__`/`__hash__`/`__repr__`/`__str__` default dunders (directly/unbound-accessible, not just hardcoded fallbacks), **real recursion-depth guard** (runaway recursion raises `RecursionError`, matching CPython's default limit, instead of crashing the process) | `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def` — also blocks *entering* a `contextlib.asynccontextmanager`-wrapped function, though defining/decorating one works), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not), real `class X(dict):` subclass storage (instances of a `dict` subclass aren't backed by real dict storage unless the subclass defines its own `__getitem__`/`__setitem__`) |
 
 ### Axis B — Stdlib
 
-Implemented **~50 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
-`errno`, `io`, `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio`, `struct`, `hashlib`,
+Implemented **~55 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+`errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio`, `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
 (`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
-`re` (real regex engine), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
-`decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`; real (not stub) `typing`
+`re` (real regex engine, incl. `pos`/`endpos`), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
+`decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib` (incl. `asynccontextmanager` at
+decoration time), `inspect`, `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`,
+`concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`,
+`html`, `traceback`; real (not stub) `typing`
 and `dataclasses`; stub `__future__`.
 
-**High-priority missing**: `importlib`, `sqlite3`, `email`/`http` (needed for scenario 2e's ASGI
-work).
+**High-priority missing**: `sqlite3`, `mimetypes` (needed for scenario 2e's ASGI work).
 
 ### Axis C — Native extensions (C/Rust)
 
@@ -357,18 +359,24 @@ in scenario 1).
 
 - Scenarios: **1, 1b, 5, 9 complete**; **2** well underway (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic v1
   `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); **3** 🟡 in progress (starlette
-  import chain — ~28 stdlib/interpreter gaps closed plus `match`/`case`, current frontier
-  `subprocess`); 4/6/7/8 to do; native cross-cutting partial.
-- Stdlib modules: **~50 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
+  import chain — ~46 stdlib/interpreter gaps closed plus `match`/`case`; `import starlette` now
+  succeeds all the way through `applications`/`routing`/`responses`/`requests`; current frontier
+  `mimetypes`); 4/6/7/8 to do; native cross-cutting partial.
+- Stdlib modules: **~55 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
-  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`; `typing`/
+  `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
+  `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`, `html`, `traceback`; `typing`/
   `dataclasses` upgraded from stubs to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅; **`match`/`case`
-  (PEP 634)** ✅; real `abc.ABC.register()` virtual-subclass support ✅; `exec`/`eval` still missing
-  (Axis A); real `__slots__` (separate per-slot storage) still missing.
-- Tests: **836 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  (PEP 634)** ✅; real `abc.ABC.register()` virtual-subclass support ✅; real `object.__eq__`/
+  `__ne__`/`__hash__`/`__repr__`/`__str__` defaults ✅; **real recursion-depth guard** ✅ (runaway
+  recursion raises `RecursionError` instead of crashing — this interpreter had no recursion limit at
+  all before); `exec`/`eval` still missing (Axis A); real `__slots__` (separate per-slot storage)
+  still missing; async generators still missing (blocks *entering* `contextlib
+  .asynccontextmanager`-wrapped functions, though defining/decorating them works).
+- Tests: **857 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

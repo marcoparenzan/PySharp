@@ -204,9 +204,9 @@ public static class MiscModules
         // (with whatever eq_default/order_default/etc. kwargs) returns an identity decorator.
         d["dataclass_transform"] = new PyBuiltinFunction("dataclass_transform", (_, _, _) =>
             new PyBuiltinFunction("dataclass_transform.<locals>.decorator", (_, a2, _) => a2[0]));
-        d["TypeVar"] = new PyBuiltinFunction("TypeVar", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
-        d["ParamSpec"] = new PyBuiltinFunction("ParamSpec", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
-        d["TypeVarTuple"] = new PyBuiltinFunction("TypeVarTuple", (_, a, _) => new PyClass((string)a[0], new List<PyClass>()));
+        d["TypeVar"] = new PyBuiltinFunction("TypeVar", (_, a, _) => GenericAliasModule.MakeTypeVarLike((string)a[0]));
+        d["ParamSpec"] = new PyBuiltinFunction("ParamSpec", (_, a, _) => GenericAliasModule.MakeTypeVarLike((string)a[0]));
+        d["TypeVarTuple"] = new PyBuiltinFunction("TypeVarTuple", (_, a, _) => GenericAliasModule.MakeTypeVarLike((string)a[0]));
         d["NewType"] = new PyBuiltinFunction("NewType", (_, a, _) => a[1]);
         // Real CPython caches generic-alias construction with this; a passthrough is correct,
         // just uncached (no scenario here depends on the caching itself, only on the name existing

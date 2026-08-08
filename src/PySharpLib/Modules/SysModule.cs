@@ -35,6 +35,20 @@ public static class SysModule
 
         d["getdefaultencoding"] = new PyBuiltinFunction("getdefaultencoding", (_, _, _) => "utf-8");
 
+        // Real CPython: (type, value, traceback) of the exception currently being handled, or all
+        // None outside an except block. `traceback` here is just the exception's own PyRaise (the
+        // richest thing PySharp has — real per-frame info lives in its .Traceback list), not a real
+        // traceback object with next/tb_frame; nothing in scope introspects it beyond passing it
+        // straight to traceback.format_exception. Found via starlette's real `traceback.format_exc()`
+        // (routing.py) needing a currently-handled exception to format.
+        d["exc_info"] = new PyBuiltinFunction("exc_info", (interp2, _, _) =>
+        {
+            var ex = interp2.CurrentHandledException;
+            return ex is null
+                ? new PyTuple(new object[] { PyNone.Instance, PyNone.Instance, PyNone.Instance })
+                : new PyTuple(new object[] { ex.Value.Class, ex.Value, ex });
+        });
+
         d["stderr"] = MakeWriter("stderr");
         d["stdout"] = MakeWriter("stdout");
 
