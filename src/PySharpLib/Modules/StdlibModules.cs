@@ -66,6 +66,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("shlex", _ => ShlexModule.Create());
         importer.RegisterBuiltin("contextvars", _ => ContextVarsModule.Create());
         importer.RegisterBuiltin("importlib", _ => ImportlibModule.Create(importer));
+        importer.RegisterBuiltin("importlib.util", _ => ImportlibModule.CreateUtil(importer));
         importer.RegisterBuiltin("textwrap", _ => TextwrapModule.Create());
         importer.RegisterBuiltin("signal", interp => SignalModule.Create(interp));
         importer.RegisterBuiltin("concurrent", _ => ConcurrentModule.Create());

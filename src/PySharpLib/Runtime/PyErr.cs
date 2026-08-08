@@ -37,6 +37,8 @@ public static class PyErr
     public static readonly PyClass ConnectionResetErrorClass = Derive("ConnectionResetError", ConnectionErrorClass);
     public static readonly PyClass FileExistsErrorClass = Derive("FileExistsError", OSErrorClass);
     public static readonly PyClass FileNotFoundErrorClass = Derive("FileNotFoundError", OSErrorClass);
+    public static readonly PyClass IsADirectoryErrorClass = Derive("IsADirectoryError", OSErrorClass);
+    public static readonly PyClass NotADirectoryErrorClass = Derive("NotADirectoryError", OSErrorClass);
     public static readonly PyClass InterruptedErrorClass = Derive("InterruptedError", OSErrorClass);
     public static readonly PyClass PermissionErrorClass = Derive("PermissionError", OSErrorClass);
     public static readonly PyClass TimeoutErrorClass = Derive("TimeoutError", OSErrorClass);
@@ -122,6 +124,8 @@ public static class PyErr
         yield return ConnectionResetErrorClass;
         yield return FileExistsErrorClass;
         yield return FileNotFoundErrorClass;
+        yield return IsADirectoryErrorClass;
+        yield return NotADirectoryErrorClass;
         yield return InterruptedErrorClass;
         yield return PermissionErrorClass;
         yield return TimeoutErrorClass;

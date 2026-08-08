@@ -270,13 +270,37 @@ public static class CollectionsModule
         {
             "Callable", "Hashable", "Iterable", "Iterator", "Reversible", "Generator",
             "Sized", "Container", "Collection", "Set", "MutableSet",
-            "Mapping", "MutableMapping", "MappingView", "KeysView", "ItemsView", "ValuesView",
+            "MappingView", "KeysView", "ItemsView", "ValuesView",
             "Sequence", "MutableSequence", "ByteString", "Awaitable", "Coroutine",
             "AsyncIterable", "AsyncIterator", "AsyncGenerator", "Buffer",
         })
         {
             d[name] = new PyClass(name, new List<PyClass>());
         }
+
+        // Real Mapping mixin method: `get(key, default=None)` via `self[key]`, catching KeyError.
+        // Found via starlette's real `Headers(Mapping[str, str])` (datastructures.py) — Headers
+        // overrides __getitem__/keys/values/items/__contains__/__eq__ itself, but relies on this one
+        // mixin method from the real ABC for `headers.get("content-type")`-style lookups
+        // (responses.py's FileResponse, reached serving a real static asset).
+        var mapping = new PyClass("Mapping", new List<PyClass>());
+        mapping.Dict["get"] = new PyBuiltinFunction("Mapping.get", (interp, a, kwargs) =>
+        {
+            object? def = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("default", out var d2) ? d2 : PyNone.Instance;
+            try
+            {
+                return interp.GetItem(a[0], a[1]);
+            }
+            catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.KeyErrorClass))
+            {
+                return def!;
+            }
+        });
+        d["Mapping"] = mapping;
+        // Real CPython: MutableMapping derives from Mapping (inheriting the same mixin methods) —
+        // must be built with Mapping already in its bases at construction time, since PyClass
+        // computes its MRO once in the constructor (mutating .Bases afterward wouldn't update it).
+        d["MutableMapping"] = new PyClass("MutableMapping", new List<PyClass> { mapping });
         return m;
     }
 }

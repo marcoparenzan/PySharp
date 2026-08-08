@@ -1495,6 +1495,145 @@ public class OsChmodTests
     }
 }
 
+/// <summary>os.stat/os.path.normpath/realpath/commonpath, and NotADirectoryError/IsADirectoryError
+/// — found via starlette's real staticfiles.py (`import importlib.util` at module load time
+/// unblocked the module, then serving a real static file exercised each of these in turn). See
+/// FASTAPI_PLAN.md Phase 3.</summary>
+public class OsStatAndPathTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Stat_reports_real_mode_size_and_mtime_for_a_file_and_a_directory()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"pysharp_stat_test_{Guid.NewGuid():N}");
+        string file = Path.Combine(dir, "hello.txt");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(file, "hello");
+        try
+        {
+            Assert.Equal("True\nTrue\n5\nTrue\nTrue", Run($$"""
+                import os, stat
+                file_st = os.stat(r"{{file}}")
+                dir_st = os.stat(r"{{dir}}")
+                print(stat.S_ISREG(file_st.st_mode))
+                print(stat.S_ISDIR(dir_st.st_mode))
+                print(file_st.st_size)
+                print(file_st.st_mtime > 0)
+                try:
+                    os.stat(r"{{Path.Combine(dir, "nope.txt")}}")
+                    print(False)
+                except FileNotFoundError:
+                    print(True)
+                """));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Normpath_collapses_dot_and_dotdot_segments_without_touching_the_filesystem()
+        => Assert.Equal(string.Join(Path.DirectorySeparatorChar, "a", "c"), Run($$"""
+            import os
+            print(os.path.normpath(r"a{{Path.DirectorySeparatorChar}}b{{Path.DirectorySeparatorChar}}..{{Path.DirectorySeparatorChar}}.{{Path.DirectorySeparatorChar}}c"))
+            """));
+
+    [Fact]
+    public void Commonpath_finds_the_longest_shared_path_component_prefix()
+    {
+        char s = Path.DirectorySeparatorChar;
+        string p1 = $"{s}a{s}b{s}c";
+        string p2 = $"{s}a{s}b{s}d";
+        string expected = $"{s}a{s}b";
+        Assert.Equal(expected, Run($"""
+            import os
+            print(os.path.commonpath([r"{p1}", r"{p2}"]))
+            """));
+    }
+
+    [Fact]
+    public void NotADirectoryError_and_IsADirectoryError_are_real_OSError_subclasses()
+        => Assert.Equal("True\nTrue", Run("""
+            print(issubclass(NotADirectoryError, OSError))
+            print(issubclass(IsADirectoryError, OSError))
+            """));
+}
+
+/// <summary>importlib.util.find_spec: real behavior — locates a module without importing it,
+/// backed by Importer.FindModuleSpec. Found via starlette's real staticfiles.py's module-load-time
+/// `import importlib.util` (needed even before find_spec is ever called). See FASTAPI_PLAN.md
+/// Phase 3.</summary>
+public class ImportlibUtilTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Find_spec_locates_an_already_imported_module_and_returns_None_for_a_missing_one()
+        => Assert.Equal("True\nTrue\nNone", Run("""
+            import importlib.util
+            import os
+            spec = importlib.util.find_spec("os")
+            print(spec is not None)
+            print(spec.name == "os")
+            print(importlib.util.find_spec("no_such_module_xyz"))
+            """));
+}
+
+/// <summary>collections.abc.Mapping's real `get(key, default=None)` mixin method — MutableMapping
+/// now derives from Mapping too, matching real CPython's ABC hierarchy. Found via starlette's real
+/// `Headers(Mapping[str, str])` (datastructures.py): Headers overrides every other Mapping method
+/// itself but relies on the inherited mixin for `headers.get(...)`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class CollectionsAbcMappingTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Mapping_get_mixin_works_via_getitem_and_falls_back_to_default_on_KeyError()
+        => Assert.Equal("1\nNone\nmissing", Run("""
+            from collections.abc import Mapping
+
+            class M(Mapping):
+                def __init__(self, d):
+                    self._d = d
+                def __getitem__(self, k):
+                    return self._d[k]
+                def __iter__(self):
+                    return iter(self._d)
+                def __len__(self):
+                    return len(self._d)
+
+            m = M({"a": 1})
+            print(m.get("a"))
+            print(m.get("b"))
+            print(m.get("b", "missing"))
+            """));
+
+    [Fact]
+    public void MutableMapping_inherits_the_same_get_mixin_from_Mapping()
+        => Assert.Equal("True\n1", Run("""
+            from collections.abc import Mapping, MutableMapping
+            print(issubclass(MutableMapping, Mapping))
+
+            class M(MutableMapping):
+                def __init__(self, d):
+                    self._d = d
+                def __getitem__(self, k):
+                    return self._d[k]
+                def __setitem__(self, k, v):
+                    self._d[k] = v
+                def __delitem__(self, k):
+                    del self._d[k]
+                def __iter__(self):
+                    return iter(self._d)
+                def __len__(self):
+                    return len(self._d)
+
+            print(M({"a": 1}).get("a"))
+            """));
+}
+
 /// <summary>abc.ABC/ABCMeta.register: real virtual-subclass registration — isinstance/issubclass
 /// recognize a registered class without it appearing in the actual MRO, matching real ABCMeta
 /// semantics. Found via anyio's real `os.PathLike.register(pathlib.Path)`-style usage chain

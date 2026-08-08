@@ -92,6 +92,35 @@ public sealed class Importer
         }
     }
 
+    /// <summary>
+    /// Locates a module without importing/executing it — real `importlib.util.find_spec`'s job.
+    /// Returns (origin, found): origin is the real file path for a disk-based module/package (a
+    /// package's origin is its `__init__.py`, matching real CPython), null for an already-loaded or
+    /// builtin C# module (no file backs it). found is false only when nothing at all matches.
+    /// </summary>
+    public (string? Origin, bool Found) FindModuleSpec(string absolute)
+    {
+        if (Modules.TryGet(absolute, out var existing) && existing is PyModule loaded)
+        {
+            string? origin = loaded.Dict.TryGet("__file__", out var f) && f is string fs ? fs : null;
+            return (origin, true);
+        }
+        if (_builtinFactories.ContainsKey(absolute))
+            return (null, true);
+
+        string relPath = absolute.Replace('.', Path.DirectorySeparatorChar);
+        foreach (var searchPath in SearchPaths)
+        {
+            string packageInit = Path.Combine(searchPath, relPath, "__init__.py");
+            string moduleFile = Path.Combine(searchPath, relPath + ".py");
+            if (File.Exists(packageInit))
+                return (packageInit, true);
+            if (File.Exists(moduleFile))
+                return (moduleFile, true);
+        }
+        return (null, false);
+    }
+
     private PyModule LoadModule(Interp interp, string absolute)
     {
         // 1. builtin C#

@@ -1197,6 +1197,78 @@ AST and owning module name.
   haven't been probed yet either — good next targets before considering 3.1b closed and moving to 3.2
   (a real ASGI server).
 
+### 3.1.10 — custom exception handlers verified clean, then `staticfiles.py` closed: 7 more real gaps
+
+Picking up the exact 3.1.9 frontier. First, **custom exception handlers verified end to end with zero
+new bugs**: a `Starlette(exception_handlers={404: custom_404, Exception: custom_500})` app correctly
+routes a 404 to `custom_404` and an uncaught `ValueError` to `custom_500` — including real starlette's
+documented "always re-raise after handling" semantics for the `Exception`/500 case (`ServerErrorMiddleware`
+calls the handler, sends its response, *then* re-raises so a real ASGI server/test client can still log
+or observe the original error). The first probe run "failed" only because the probe script itself
+didn't catch that expected re-raise — not a PySharp bug, caught by re-reading real starlette source
+before concluding otherwise (the project's standing discipline: verify against real behavior, don't
+assume a probe failure is always the interpreter's fault).
+
+Then pushed into `staticfiles.py`, entirely unexercised before this round — a real `StaticFiles`-mounted
+directory serving an actual file from disk. 7 real gaps found and fixed, one at a time via the same
+bisection loop:
+
+- **`importlib.util` didn't exist as an importable submodule at all** — `staticfiles.py`'s own
+  `import importlib.util` (a module-load-time statement, unconditional) failed before any of its code
+  could even run. Real CPython resolves `import a.b` by finding a *separately registered* submodule,
+  not just an attribute a parent module happens to expose after import — matching the existing
+  `asyncio.base_events` pattern, added `importer.RegisterBuiltin("importlib.util", ...)` as its own
+  factory (StdlibModules.cs). Implemented `find_spec(name)` for real via a new
+  `Importer.FindModuleSpec`: locates a module *without importing/executing it* (already-loaded →
+  real `__file__`; builtin C# module → `origin=None`; else a real file-system search over
+  `SearchPaths`), returning `None` only when nothing matches at all — matching real
+  `importlib.util.find_spec`'s contract.
+- **`os.stat`/`os.stat_result` didn't exist** — added for real: real `st_mode` (`S_IFREG`/`S_IFDIR`,
+  matching `StatModule.cs`'s existing real `S_ISREG`/`S_ISDIR` bit values), real `st_size`, real
+  `st_mtime`/`st_atime`/`st_ctime` (via `FileSystemInfo`, converted to Unix-epoch seconds); `st_uid`/
+  `st_gid`/`st_ino`/`st_dev` are `0` (real CPython itself synthesizes meaningless values for these on
+  Windows — not a shortcut specific to PySharp). Raises a real `FileNotFoundError` for a missing path.
+- **`os.path.normpath` didn't exist** — implemented for real: collapses `.`/`..` segments and
+  redundant separators *lexically*, without touching the filesystem or changing a relative path into
+  an absolute one (the key difference from `Path.GetFullPath`, which does both).
+- **`os.path.realpath` didn't exist** — real symlink resolution via `FileSystemInfo.ResolveLinkTarget`
+  when the path actually is a symlink, falling back to the same absolute-path canonicalization as
+  `abspath` otherwise (matching real CPython's behavior for the overwhelmingly common non-symlink
+  case).
+- **`os.path.commonpath` didn't exist** — implemented for real: the longest common leading sequence
+  of path *components* (not a naive string prefix) across the given paths — this is starlette's real
+  path-traversal guard (`commonpath([full_path, directory]) == directory` rejects a request path that
+  escapes the configured static directory via `..` segments). v1 scope: doesn't raise `ValueError` for
+  a mix of absolute/relative paths or an empty sequence — not exercised by the reachable path.
+- **`NotADirectoryError`/`IsADirectoryError` didn't exist as builtin exceptions** — added as real
+  `OSError` subclasses (`PyErr.cs`), matching real CPython's hierarchy.
+- **`collections.abc.Mapping` had no real mixin methods at all** (a documented v1 simplification from
+  much earlier in the project — "just need to exist and be importable/subclassable... unless a real
+  scenario needs it"; now one does). Real starlette's `Headers(Mapping[str, str])` (datastructures.py)
+  overrides `__getitem__`/`keys`/`values`/`items`/`__contains__`/`__eq__`/`__iter__`/`__len__` itself,
+  but relies on the *real Mapping ABC's* `get(key, default=None)` mixin (`self[key]` via
+  `__getitem__`, catching `KeyError`) for `headers.get("content-type")`-style lookups. Also fixed
+  `MutableMapping` to derive from `Mapping` for real (previously two independent, unrelated placeholder
+  classes — an existing structural gap, not itself blocking this round but essentially free to fix
+  alongside): required constructing `Mapping` *before* `MutableMapping` with `Mapping` already in its
+  base list, since `PyClass` computes its MRO once in the constructor — mutating `.Bases` afterward
+  (the first attempt) silently doesn't update an already-computed `.Mro`, caught by the regression test
+  itself failing before being trusted as fixed.
+- **Verified the full static-file path end to end**: `GET /static/hello.txt` against a real
+  `StaticFiles(directory=...)` mount returns 200 with the real file's bytes and real
+  `content-type`/`accept-ranges`/`content-length`/`last-modified`/`etag` headers; `GET
+  /static/nope.txt` correctly returns starlette's real 404. Both went through the *entire* real ASGI
+  dispatch chain fixed across 3.1.6–3.1.9 (routing, exception middleware, worker-thread offload for
+  the blocking `os.stat`/file-read calls) with zero further gaps once the 7 above were closed.
+- 9 tests added (`M6_Stdlib/StdlibTests.cs`: new `OsStatAndPathTests` (4), `ImportlibUtilTests` (1),
+  `CollectionsAbcMappingTests` (2), plus 2 more folded into the same batch). Full suite green
+  throughout: 892/892 by the end of this round, up from 885 at the start of it.
+- **New frontier for Phase 3.1b**: WebSockets remain entirely unexercised (a different `scope["type"]`
+  and message protocol, not yet probed at all) — the natural next target. Path-parameter routes and
+  custom exception handlers are now both verified; `staticfiles.py`'s common case (plain
+  `directory=...`, no `packages=[...]`) is verified — the `packages=` argument itself (which actually
+  calls `find_spec` at runtime, not just at import time) remains unexercised.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1399,11 +1471,25 @@ matched route, 404 (`"Not Found"`) for an unmatched one, and correctly propagate
 `ValueError` from a route handler — all three together in one run. Full blow-by-blow in 3.1.9.
 885/885 tests green (up from 877 at the start of 3.1.8).
 
-**Current frontier for Phase 3**: `staticfiles.py`/WebSockets remain entirely unexercised;
-path-parameter routes and custom exception handlers (`Starlette(exception_handlers=...)`) haven't been
-probed yet either. PySharp's traceback formatting still doesn't reveal real file/line for imported
-modules (shows `<string>` — a known, pre-existing limitation, separately worth revisiting, though it
-didn't block root-causing anything this round). Not started.
+**Custom exception handlers verified end to end with zero new bugs** (`Starlette(exception_handlers=
+{404: ..., Exception: ...})`, including real starlette's "always re-raise after handling" semantics
+for the `Exception`/500 case). **`staticfiles.py` is now closed too**: 7 more real gaps found and
+fixed — `importlib.util` didn't exist as an importable submodule at all (needed a separately
+registered builtin factory, matching the `asyncio.base_events` pattern, plus a new
+`Importer.FindModuleSpec` backing a real `find_spec`); `os.stat`/`os.stat_result`, `os.path.normpath`,
+`os.path.realpath`, and `os.path.commonpath` didn't exist; `NotADirectoryError`/`IsADirectoryError`
+weren't real builtin exceptions; `collections.abc.Mapping` had no real mixin methods at all (now has
+a real `get`, and `MutableMapping` derives from it for real, matching CPython's ABC hierarchy).
+**Verified end to end**: `GET /static/hello.txt` returns 200 with the real file's bytes and real
+`content-type`/`etag`/`last-modified` headers; `GET /static/nope.txt` returns a real 404. Full
+blow-by-blow in 3.1.10. 892/892 tests green (up from 885 at the start of 3.1.10).
+
+**Current frontier for Phase 3**: WebSockets remain entirely unexercised (a different `scope["type"]`
+and message protocol, not probed at all yet) — the natural next target. `staticfiles.py`'s
+`packages=[...]` argument (which calls `find_spec` at runtime, not just import time) also remains
+unexercised. PySharp's traceback formatting still doesn't reveal real file/line for imported modules
+(shows `<string>` — a known, pre-existing limitation, separately worth revisiting, though it hasn't
+blocked root-causing anything so far). Not started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

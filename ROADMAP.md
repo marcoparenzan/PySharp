@@ -372,9 +372,14 @@ in scenario 1).
   `asyncio.current_task()` (always `None`), `Future[T]()` PEP 585 subscript-then-call, a `Future`/
   `Task` private `_loop` attribute, a structural `threading.local`-across-`@contextmanager` bug, and
   `iscoroutinefunction`/`isgeneratorfunction` not seeing through a bound method (misdetecting
-  starlette's real bound `async def` 404 handler as non-async). Next: `staticfiles.py`/WebSockets,
-  path-parameter routes, and custom exception handlers remain unexercised; 3.2 (ASGI server) not
-  started; 4/6/7/8 to do; native cross-cutting partial.
+  starlette's real bound `async def` 404 handler as non-async). Custom exception handlers and
+  path-parameter routes are now verified too (zero new bugs). **`staticfiles.py` is now closed**: a
+  real `StaticFiles`-mounted directory correctly serves a file (200, real bytes + real
+  `content-type`/`etag`/`last-modified` headers) and correctly 404s a missing one — 7 more real gaps
+  closed along the way (`importlib.util`/`find_spec`, `os.stat`/`os.path.normpath`/`realpath`/
+  `commonpath`, `NotADirectoryError`/`IsADirectoryError`, and a real `collections.abc.Mapping.get`
+  mixin with `MutableMapping` now properly deriving from `Mapping`). Next: WebSockets remain entirely
+  unexercised; 3.2 (ASGI server) not started; 4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -415,8 +420,14 @@ in scenario 1).
   default)`/`hasattr` for any type relying on that standard contract); **`iscoroutinefunction`/
   `isgeneratorfunction` now see through a bound method** ✅ (previously only matched a raw function;
   real CPython unwraps a bound method first — this broke `is_async_callable` for any bound `async
-  def` instance method, including starlette's real default 404 handler).
-- Tests: **885 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  def` instance method, including starlette's real default 404 handler); real **`os.stat`/
+  `os.stat_result`/`os.path.normpath`/`realpath`/`commonpath`** ✅ (didn't exist at all; found via
+  starlette's real `staticfiles.py`); real **`importlib.util.find_spec`** ✅, backed by a new
+  `Importer.FindModuleSpec` (locates a module without importing/executing it); real
+  **`collections.abc.Mapping.get`** mixin ✅ (the ABC previously had no real methods at all — a
+  documented v1 simplification, closed once a real scenario needed it), with `MutableMapping` now
+  properly deriving from `Mapping` (previously two unrelated placeholder classes).
+- Tests: **892 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
