@@ -389,7 +389,13 @@ in scenario 1).
   app — found and fixed a real, general bug along the way (`sys.path` was a disconnected snapshot
   copy; `sys.path.insert(...)` from Python code had zero effect on actual import resolution).
   **Phase 3 (starlette + anyio + a real ASGI server) is now substantially complete end to end.**
-  4/6/7/8 to do; native cross-cutting partial.
+  **Phase 4 underway**: `import fastapi` needs version pinning (`fastapi==0.99.1`+
+  `starlette==0.27.0`+`pydantic==1.10.13` — the last pydantic-v1-only combo; the default `install
+  fastapi` resolves pydantic v2/Rust). Found and fixed a serious, general deadlock in the import
+  system (a module-level generator expression evaluated during an import could spawn a real OS
+  thread that blocked forever on a lock the importing thread wouldn't release until that same
+  generator finished). Currently past that into real pydantic v1 field-validator internals. 6/7/8 to
+  do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -447,8 +453,14 @@ in scenario 1).
   categories in real CPython); **real `sys.path` mutation** ✅ (`sys.path.insert(...)`/`.append(...)`
   from Python code previously had zero effect on actual import resolution — it mutated a disconnected
   snapshot copy, not the list the importer actually consults; found via a real ASGI server sample);
-  real **`bytes.partition`/`rpartition`** ✅ (only `str` had them before).
-- Tests: **910 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  real **`bytes.partition`/`rpartition`** ✅ (only `str` had them before); **fixed a real deadlock in
+  the import system** ✅ (`Importer.ImportAbsolute` held a lock across its entire recursive load-
+  and-*execute* loop; a module-level generator expression evaluated during an import could spawn a
+  real OS thread that blocked forever on that lock — narrowed to only the module-registry
+  bookkeeping); real **`email.message.Message`** ✅ (didn't exist at all); real **`Morsel._reserved`
+  as an actual class attribute** ✅ (was a module-level name closed over by methods, invisible to
+  starlette's real `Morsel._reserved[...] = ...` module-level patch).
+- Tests: **911 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

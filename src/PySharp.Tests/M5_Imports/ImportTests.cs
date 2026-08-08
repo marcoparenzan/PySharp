@@ -271,6 +271,40 @@ public class ImportTests : IDisposable
     }
 
     [Fact]
+    public async Task Nested_import_from_inside_a_generator_body_driven_during_import_does_not_deadlock()
+    {
+        // Regression: a real, serious bug found via `import fastapi` (which transitively imports
+        // real pydantic v1's utils.py, whose own module-level code hits this exact shape).
+        // Importer.ImportAbsolute used to hold `_lock` for its *entire* recursive load-and-execute
+        // loop, including running the target module's arbitrary Python code. PyGenerator/
+        // PyCoroutine/PyAsyncGenerator (and real threading.Thread) each run their body on a genuine
+        // dedicated OS thread — so a module-level generator expression driven synchronously
+        // (`list(some_generator())`) while the importing thread was still inside that held lock
+        // would spawn a second real thread whose body, if it needed to `import` anything new,
+        // blocked forever on the very lock the first thread wasn't going to release until that
+        // same generator finished. Fixed by narrowing the lock to only the `Modules` dict
+        // bookkeeping, never around actual module code execution — matching how real CPython's own
+        // import lock is per-module, not one lock held across unbounded arbitrary code.
+        WriteModule("deadpkg/__init__.py", "import deadpkg.a\n");
+        WriteModule("deadpkg/a.py", """
+            def gen():
+                import deadpkg.b
+                yield deadpkg.b.VALUE
+
+            RESULT = list(gen())
+            """);
+        WriteModule("deadpkg/b.py", "VALUE = 42\n");
+
+        var task = Task.Run(() => Run("""
+            import deadpkg
+            print(deadpkg.a.RESULT)
+            """));
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.True(completed == task, "import deadlocked");
+        Assert.Equal("[42]\n", task.Result);
+    }
+
+    [Fact]
     public void Module_dunder_dict_exposes_its_own_namespace()
     {
         // Regression: a module's `__dict__` attribute wasn't handled at all (fell through to a plain

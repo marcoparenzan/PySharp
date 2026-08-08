@@ -26,6 +26,7 @@ public static class EmailModule
     {
         var m = new PyModule("email");
         m.Dict["utils"] = CreateUtils();
+        m.Dict["message"] = CreateMessage();
         return m;
     }
 
@@ -61,6 +62,98 @@ public static class EmailModule
         d["parsedate_tz"] = new PyBuiltinFunction("parsedate_tz", (_, a, _) => ParseDate(a[0] as string));
 
         return m;
+    }
+
+    private const string HeadersKey = "__headers__";
+    private const string DefaultTypeKey = "__default_type__";
+    private static readonly PyClass MessageClass = BuildMessageClass();
+
+    /// <summary>
+    /// email.message.Message: real header storage (repeated __setitem__ appends, case-insensitive
+    /// lookup, matching real CPython) and real get_content_type/get_content_maintype/
+    /// get_content_subtype (parsing the Content-Type header, defaulting to "text/plain" for a
+    /// missing or malformed value, matching Lib/email/message.py's own algorithm). v1 scope: not
+    /// the full MIME/multipart/payload API — only what's actually used. Found via fastapi's real
+    /// `routing.py`: `message = email.message.Message(); message["content-type"] = value; if
+    /// message.get_content_maintype() == "application": ...` — checking whether a request body is
+    /// JSON-shaped without a full MIME parser. See FASTAPI_PLAN.md Phase 4.
+    /// </summary>
+    public static PyModule CreateMessage()
+    {
+        var m = new PyModule("email.message");
+        m.Dict["Message"] = MessageClass;
+        return m;
+    }
+
+    private static PyList Headers(PyInstance inst)
+    {
+        if (!inst.Dict.TryGet(HeadersKey, out var v) || v is not PyList list)
+        {
+            list = new PyList();
+            inst.Dict[HeadersKey] = list;
+        }
+        return list;
+    }
+
+    private static bool TryGetHeader(PyInstance inst, string name, out object value)
+    {
+        foreach (var item in Headers(inst).Items)
+        {
+            var t = (PyTuple)item;
+            if (string.Equals((string)t.Items[0], name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = t.Items[1];
+                return true;
+            }
+        }
+        value = PyNone.Instance;
+        return false;
+    }
+
+    private static PyClass BuildMessageClass()
+    {
+        var cls = new PyClass("Message", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"Message.{name}", fn);
+
+        Add("__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict[HeadersKey] = new PyList();
+            inst.Dict[DefaultTypeKey] = "text/plain";
+            return PyNone.Instance;
+        });
+
+        Add("__setitem__", (_, a, _) =>
+        {
+            Headers((PyInstance)a[0]).Items.Add(new PyTuple(new object[] { a[1], a[2] }));
+            return PyNone.Instance;
+        });
+
+        Add("__getitem__", (_, a, _) =>
+            TryGetHeader((PyInstance)a[0], (string)a[1], out var v) ? v : PyNone.Instance);
+
+        Add("get", (_, a, _) =>
+        {
+            object def = a.Length > 2 ? a[2] : PyNone.Instance;
+            return TryGetHeader((PyInstance)a[0], (string)a[1], out var v) ? v : def;
+        });
+
+        Add("get_content_type", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            if (!TryGetHeader(inst, "content-type", out var raw) || raw is not string s)
+                return inst.Dict.TryGet(DefaultTypeKey, out var dt) ? dt : "text/plain";
+            string ctype = s.Split(';')[0].Trim().ToLowerInvariant();
+            return ctype.Count(c => c == '/') == 1 ? ctype : "text/plain";
+        });
+
+        Add("get_content_maintype", (interp, a, _) =>
+            ((string)interp.CallMethod(a[0], "get_content_type", Array.Empty<object>())).Split('/')[0]);
+
+        Add("get_content_subtype", (interp, a, _) =>
+            ((string)interp.CallMethod(a[0], "get_content_type", Array.Empty<object>())).Split('/')[1]);
+
+        return cls;
     }
 
     private static (DateTime dt, bool hasTz) ExtractDateTime(Interp interp, object dtObj)

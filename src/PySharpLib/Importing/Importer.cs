@@ -84,34 +84,53 @@ public sealed class Importer
         return string.Join(".", parts);
     }
 
+    /// <summary>
+    /// Resolves and, if needed, loads+executes the module chain a, a.b, a.b.c for `absolute`.
+    /// Deliberately does NOT hold `_lock` while a module's own Python code runs (only around the
+    /// `Modules` dictionary bookkeeping) — a real deadlock found the hard way: PyGenerator/
+    /// PyCoroutine/PyAsyncGenerator (and real `threading.Thread`) each run their body on a genuine
+    /// dedicated OS thread, so a module-level generator expression (or anything indirectly using
+    /// one) evaluated while *this* thread was still inside a held `lock (_lock)` spanning the whole
+    /// recursive load-and-execute chain would spawn a second real thread that, if its body needed
+    /// to import anything, blocked forever on the very lock this thread wasn't going to release
+    /// until that same generator finished — found via real pydantic v1's `pydantic/utils.py`
+    /// (imported by `import fastapi`), whose module-level code does exactly this. Real CPython
+    /// avoids the equivalent case with a *per-module* lock, not one global lock over an unbounded
+    /// amount of arbitrary code execution; here, `ExecuteFile`'s existing "register the module in
+    /// `Modules` before running its code" is what makes circular imports safe, so a global lock
+    /// around *just* that bookkeeping (not the execution) keeps the same guarantee without the
+    /// cross-thread self-deadlock.
+    /// </summary>
     public PyModule ImportAbsolute(Interp interp, string absolute)
     {
         lock (_lock)
         {
             if (Modules.TryGet(absolute, out var cached))
                 return (PyModule)cached;
-
-            // load the chain: a, a.b, a.b.c
-            var parts = absolute.Split('.');
-            PyModule? parent = null;
-            PyModule? result = null;
-            for (int i = 0; i < parts.Length; i++)
-            {
-                string prefix = string.Join(".", parts[..(i + 1)]);
-                if (Modules.TryGet(prefix, out var existing))
-                {
-                    result = (PyModule)existing;
-                }
-                else
-                {
-                    result = LoadModule(interp, prefix);
-                    if (parent is not null)
-                        parent.Dict[parts[i]] = result;
-                }
-                parent = result;
-            }
-            return result!;
         }
+
+        // load the chain: a, a.b, a.b.c
+        var parts = absolute.Split('.');
+        PyModule? parent = null;
+        PyModule? result = null;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string prefix = string.Join(".", parts[..(i + 1)]);
+            bool cachedHit;
+            lock (_lock)
+            {
+                cachedHit = Modules.TryGet(prefix, out var existing);
+                result = cachedHit ? (PyModule)existing! : null;
+            }
+            if (!cachedHit)
+            {
+                result = LoadModule(interp, prefix);
+                if (parent is not null)
+                    parent.Dict[parts[i]] = result;
+            }
+            parent = result;
+        }
+        return result!;
     }
 
     /// <summary>
@@ -150,7 +169,8 @@ public sealed class Importer
         {
             var module = factory(interp);
             module.Builtins = BuiltinsModule;
-            Modules[absolute] = module;
+            lock (_lock)
+                Modules[absolute] = module;
             return module;
         }
 
@@ -178,8 +198,10 @@ public sealed class Importer
             ? absolute
             : absolute.Contains('.') ? absolute[..absolute.LastIndexOf('.')] : "";
 
-        // registered before execution: allows circular imports
-        Modules[absolute] = module;
+        // registered before execution: allows circular imports. The registration itself is under
+        // `_lock`; running `module`'s own code deliberately is not (see ImportAbsolute's doc comment).
+        lock (_lock)
+            Modules[absolute] = module;
         try
         {
             string source = File.ReadAllText(filePath);
@@ -188,7 +210,8 @@ public sealed class Importer
         }
         catch
         {
-            Modules.Remove(absolute);
+            lock (_lock)
+                Modules.Remove(absolute);
             throw;
         }
         return module;

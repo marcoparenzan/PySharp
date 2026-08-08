@@ -159,7 +159,7 @@ public static class MiscModules
             "Reversible", "SupportsInt", "SupportsFloat", "SupportsAbs", "SupportsRound",
             "SupportsComplex", "SupportsBytes", "SupportsIndex",
             "ByteString", "AnyStr", "NoReturn", "Never", "Text", "Concatenate", "Self", "TypeAlias",
-            "Unpack", "Annotated",
+            "TypeGuard", "Unpack", "Annotated",
             "Match", "Pattern",
             "ForwardRef", "_Final", "_BaseGenericAlias",
             "_SpecialGenericAlias", "_AnnotatedAlias", "_UnionGenericAlias",

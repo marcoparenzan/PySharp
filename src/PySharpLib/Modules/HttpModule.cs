@@ -197,32 +197,35 @@ internal static class CookiesModule
                     i = j + 4
             return "".join(res)
 
-        _RESERVED = {
-            "expires": "expires",
-            "path": "Path",
-            "comment": "Comment",
-            "domain": "Domain",
-            "max-age": "Max-Age",
-            "secure": "Secure",
-            "httponly": "HttpOnly",
-            "version": "Version",
-            "samesite": "SameSite",
-            "partitioned": "Partitioned",
-        }
-        _FLAGS = {"secure", "httponly", "partitioned"}
-
         class Morsel:
+            # Real CPython class attributes, not module-level names — starlette's real responses.py
+            # patches this directly (`http.cookies.Morsel._reserved["samesite"] = "SameSite"`), so it
+            # must be reachable as an attribute of the class itself, not just closed over by methods.
+            _reserved = {
+                "expires": "expires",
+                "path": "Path",
+                "comment": "Comment",
+                "domain": "Domain",
+                "max-age": "Max-Age",
+                "secure": "Secure",
+                "httponly": "HttpOnly",
+                "version": "Version",
+                "samesite": "SameSite",
+                "partitioned": "Partitioned",
+            }
+            _flags = {"secure", "httponly", "partitioned"}
+
             def __init__(self):
                 self.key = None
                 self.value = None
                 self.coded_value = None
                 self._attrs = {}
-                for k in _RESERVED:
+                for k in self._reserved:
                     self._attrs[k] = ""
 
             def __setitem__(self, key, value):
                 key = key.lower()
-                if key not in _RESERVED:
+                if key not in self._reserved:
                     raise KeyError(f"Invalid attribute {key!r}")
                 self._attrs[key] = value
 
@@ -240,20 +243,20 @@ internal static class CookiesModule
             def OutputString(self, attrs=None):
                 result = [f"{self.key}={self.coded_value}"]
                 if attrs is None:
-                    attrs = _RESERVED
-                for key in _RESERVED:
+                    attrs = self._reserved
+                for key in self._reserved:
                     value = self._attrs.get(key, "")
                     if value == "" or value is False:
                         continue
                     if key not in attrs:
                         continue
                     if key == "max-age" and isinstance(value, int):
-                        result.append(f"{_RESERVED[key]}={value}")
-                    elif key in _FLAGS:
+                        result.append(f"{self._reserved[key]}={value}")
+                    elif key in self._flags:
                         if value:
-                            result.append(_RESERVED[key])
+                            result.append(self._reserved[key])
                     else:
-                        result.append(f"{_RESERVED[key]}={value}")
+                        result.append(f"{self._reserved[key]}={value}")
                 return "; ".join(result)
 
             def output(self, attrs=None, header="Set-Cookie:"):
@@ -327,7 +330,7 @@ internal static class CookiesModule
                     key, _, value = part.partition("=")
                     key = key.strip()
                     value = value.strip()
-                    if key.lower() in _RESERVED:
+                    if key.lower() in Morsel._reserved:
                         continue
                     self[key] = _unquote(value)
 

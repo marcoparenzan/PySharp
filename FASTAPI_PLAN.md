@@ -1448,13 +1448,85 @@ scoping down explicitly rather than silently.
 
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
-- [ ] 4.1 `import fastapi` succeeds.
+- [ ] 4.1 `import fastapi` succeeds. 🟡 in progress (4.1.1 below) — a serious real deadlock found and
+  fixed, plus several smaller real gaps; progressed well into real pydantic v1's field-validator
+  machinery before hitting the current frontier (see 4.1.1).
 - [ ] 4.2 Write the first real target sample (mirrors scenario 1's/1b's "the script is the test
   bench"): a small real FastAPI app — path params, a pydantic request model, JSON response — run
   under PySharp with an ASGI server (starlette's own dev server, or a minimal one over the C#
   `socket` per ROADMAP 2e's fallback option if uvicorn itself doesn't port cleanly).
 - [ ] 4.3 Verify with real HTTP requests (`curl`, matching scenario 1's `http_api.py`/`http_api_min.py`
   verification style), not just offline unit tests.
+
+### 4.1.1 — version pinning, a real deadlock, several real gaps, then real pydantic validator internals
+
+**Version pinning** (real, needed before any probing could start): the mini-pip's default `install
+fastapi` resolves the *latest* release (0.141.1), which requires **pydantic v2** (`pydantic-core`,
+Rust — exactly the wall this whole plan has deliberately avoided since Phase 0). Pinned to
+`fastapi==0.99.1`, the last release built purely against pydantic v1 (no v2 compatibility layer
+assumptions). That in turn requires `starlette>=0.27.0,<0.28.0` — considerably older than every
+starlette version probed in Phase 3 (1.4.1/1.5.0) — pinned to `starlette==0.27.0`. `anyio<5,>=3.4.0`
+was already satisfied by the existing 4.14.2 install. **This combination — fastapi 0.99.1 + starlette
+0.27.0 + pydantic 1.10.13 — is the one to install for all further Phase 4 probing**; re-derive this
+exact recipe at the start of any future round rather than defaulting to `install fastapi` bare.
+
+- **`starlette.applications` failed immediately**: `AttributeError: 'type' object has no attribute
+  '_reserved'` — real starlette 0.27.0's `responses.py` does
+  `http.cookies.Morsel._reserved["samesite"] = "SameSite"` at module level, patching the *class*
+  attribute directly. PySharp's `Morsel` (a real parsed-Python-source class, `HttpModule.cs`) had
+  `_RESERVED`/`_FLAGS` as *module-level* names (closed over by methods), not real class attributes
+  — so `Morsel._reserved` didn't exist at all. Fixed by moving them into the class body as real
+  `_reserved`/`_flags` class attributes (renamed to match real CPython's actual lowercase names),
+  updating every internal reference from the bare module-level name to `self._reserved`/
+  `self._flags` (methods don't see class-body-level names as a lexical scope in Python — a real,
+  well-known quirk, not an oversight).
+- **`email.message` didn't exist as an importable submodule at all** — fastapi's real `routing.py`
+  does `import email.message` at module load time, then later
+  `message = email.message.Message(); message["content-type"] = value;
+  message.get_content_maintype()`/`get_content_subtype()` to check whether a request body is
+  JSON-shaped without a full MIME parser. Implemented a real (not stubbed) `email.message.Message`:
+  real header storage (repeated `__setitem__` appends, case-insensitive lookup, matching real
+  CPython) and real `get_content_type`/`get_content_maintype`/`get_content_subtype` parsing the
+  Content-Type header, defaulting to `"text/plain"` for a missing/malformed value — matching
+  `Lib/email/message.py`'s own algorithm. Registered as a separate builtin factory
+  (`importer.RegisterBuiltin("email.message", ...)`), matching the `importlib.util` pattern from
+  Phase 3.2 — needed for `import email.message` itself to resolve, not just attribute access after
+  `import email`.
+- **`typing.TypeGuard` didn't exist** — a bare placeholder was enough (real CPython 3.10+, a
+  type-checker-only marker with no runtime behavior needed here).
+- **A serious, general deadlock found and fixed** (the most significant finding of this round):
+  `Importer.ImportAbsolute` held a single C# lock for its *entire* recursive module load-and-execute
+  loop — including running the target module's arbitrary Python code. PyGenerator/PyCoroutine/
+  PyAsyncGenerator (and real `threading.Thread`) each run their body on a genuine dedicated OS
+  thread (the project's whole coroutine/generator model, established since scenario 2a). So a
+  module-level generator expression evaluated synchronously (`list(some_generator())`) while the
+  importing thread was still inside that held lock would spawn a *second* real OS thread — and if
+  that thread's body needed to `import` anything not yet cached, it blocked forever on the very lock
+  the first thread wasn't going to release until that same generator finished. Found via real
+  pydantic v1's `pydantic/utils.py` (transitively imported by `import fastapi`), whose own
+  module-level code hits exactly this shape — reproduced by adding temporary `Importer`-level
+  tracing (module name + CLR thread ID at each import call) to watch the exact moment a second
+  thread appeared and never got past "waiting for the lock." Fixed by narrowing the lock to only the
+  `Modules` dict bookkeeping (the cache check, and the "register before executing" step
+  `ExecuteFile` already did — which is what makes circular imports safe in the first place), never
+  around the actual code execution — matching how real CPython's own import lock is per-module, not
+  one lock held across an unbounded amount of arbitrary code. A dedicated regression test
+  reconstructs the exact shape (a package whose `__init__.py` imports a submodule that drives a
+  generator whose body itself imports a third, not-yet-cached submodule), wrapped in a
+  `Task.WhenAny(..., Task.Delay(15s))` guard so a real regression fails the test instead of hanging
+  the whole suite.
+- **New frontier**: past all of the above, `import fastapi` now reaches real pydantic v1's field/
+  validator machinery (`ModelField.prepare` → `_type_analysis` → `_create_sub_type` →
+  `populate_validators` → `find_validators`) and hits a real `RuntimeError`: no validator found for
+  `NoneType` (pointing at the `arbitrary_types_allowed` Config option) — real pydantic recursing into
+  building a sub-`ModelField` for each member of a `Union`/`Optional` annotation (including the `NoneType`
+  member, which real pydantic *does* have a built-in validator for — `none_validator`). Not yet
+  root-caused: plausibly a `type(None)`/`NoneType` identity or registry-lookup mismatch somewhere in
+  PySharp's typing/class machinery, but unconfirmed. A genuinely deep, pydantic-internals
+  investigation — a natural point to pause and report given the size of this round's findings
+  (especially the deadlock) rather than pushing further immediately.
+- 1 test added (`M5_Imports/ImportTests.cs`: the deadlock regression). Full suite green throughout:
+  911/911 by the end of this round, up from 910 at the start of it.
 
 ## Phase 5 — docs
 
@@ -1702,6 +1774,16 @@ import resolution — now backed by a live reference. Also added real `bytes.par
 
 **Phase 3 (starlette + anyio + a real ASGI server) is now substantially complete end to end.**
 
-**Next**: Phase 4 — attempting `import fastapi` itself, a significantly larger new probe target
-likely to surface many new gaps, similar in character to how the pydantic or starlette work began.
-Not started.
+**Phase 4 is underway (4.1.1)**: `import fastapi` requires real version pinning first —
+`fastapi==0.99.1` + `starlette==0.27.0` + `pydantic==1.10.13` is the last combination built purely
+against pydantic v1 (the default `install fastapi` resolves the latest release, which needs pydantic
+v2/Rust — the exact wall this plan avoids). Found and fixed **a serious, general deadlock**:
+`Importer.ImportAbsolute` held a lock across its entire recursive load-and-*execute* loop, so a
+module-level generator expression evaluated during an import (real pydantic v1's own `utils.py` does
+this) could spawn a second real OS thread that blocked forever on that same lock if it needed to
+import anything new — a real bug well beyond this one scenario, fixed by narrowing the lock to only
+the module-registry bookkeeping. Also fixed: `Morsel._reserved` needed to be a real class attribute
+(starlette 0.27.0 patches it directly), `email.message.Message` didn't exist, `typing.TypeGuard`
+didn't exist. 911/911 tests green (up from 910). **Current frontier**: real pydantic v1 field/
+validator internals — a `RuntimeError: no validator found for NoneType` deep in `ModelField.prepare`,
+not yet root-caused. Full blow-by-blow in 4.1.1.

@@ -80,6 +80,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("traceback", interp => TracebackModule.Create(interp));
         importer.RegisterBuiltin("email", _ => EmailModule.Create());
         importer.RegisterBuiltin("email.utils", _ => EmailModule.CreateUtils());
+        importer.RegisterBuiltin("email.message", _ => EmailModule.CreateMessage());
         importer.RegisterBuiltin("mimetypes", _ => MimetypesModule.Create());
         importer.RegisterBuiltin("secrets", _ => SecretsModule.Create());
         importer.RegisterBuiltin("array", _ => ArrayModule.Create());
