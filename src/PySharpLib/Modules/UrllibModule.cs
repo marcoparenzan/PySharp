@@ -116,6 +116,14 @@ public static class UrllibModule
             var (scheme, netloc, path, query, fragment) = SplitUrl(url, allowFragments);
             return MakeSplitResult(scheme, netloc, path, query, fragment);
         });
+        d["urljoin"] = new PyBuiltinFunction("urljoin", (interp, a, kwargs) =>
+        {
+            string bs = (string)a[0], url = (string)a[1];
+            bool allowFragments = a.Length > 2 ? PyOps.Truthy(interp, a[2])
+                : kwargs is null || !kwargs.TryGetValue("allow_fragments", out var af) || PyOps.Truthy(interp, af);
+            return UrlJoin(bs, url, allowFragments);
+        });
+
         d["parse_qsl"] = new PyBuiltinFunction("parse_qsl", (interp, a, kwargs) =>
         {
             string qs = (string)a[0];
@@ -188,6 +196,114 @@ public static class UrllibModule
         }
 
         return (scheme, netloc, url, query, fragment);
+    }
+
+    /// <summary>Real (not stubbed) urljoin — a direct port of CPython's own Lib/urllib/parse.py
+    /// algorithm (RFC 3986 §5 relative resolution), scoped to the no-`;params` shape our urlparse/
+    /// urlsplit already use throughout this file. Found via real starlette's testclient.py
+    /// (`urljoin("ws://testserver", url)`), needed to construct a real TestClient — the next step
+    /// past route registration/openapi() on the FASTAPI_PLAN.md path. See CPython's own
+    /// `uses_relative`/`uses_netloc` scheme allowlists, reproduced verbatim below.</summary>
+    private static readonly string[] UsesRelative = { "", "ftp", "http", "gopher", "nntp", "imap",
+        "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtspu", "sftp", "svn",
+        "svn+ssh", "ws", "wss" };
+    private static readonly string[] UsesNetloc = { "", "ftp", "http", "gopher", "nntp", "telnet",
+        "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtspu",
+        "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss" };
+
+    /// <summary>Real port of CPython's urlunsplit — notably, when a netloc is present (or implied by
+    /// the scheme), a path that doesn't already start with '/' gets one forced on, e.g. joining
+    /// "http://example.com" + "path" must yield "http://example.com/path", not
+    /// "http://example.compath".</summary>
+    private static string UnparseUrl(string scheme, string netloc, string path, string query, string fragment)
+    {
+        string url = path;
+        if (netloc.Length > 0 || (scheme.Length > 0 && UsesNetloc.Contains(scheme) && !url.StartsWith("//", StringComparison.Ordinal)))
+        {
+            if (url.Length > 0 && url[0] != '/')
+                url = "/" + url;
+            url = "//" + netloc + url;
+        }
+        if (scheme.Length > 0)
+            url = $"{scheme}:{url}";
+        if (query.Length > 0)
+            url += $"?{query}";
+        if (fragment.Length > 0)
+            url += $"#{fragment}";
+        return url;
+    }
+
+    private static string UrlJoin(string bs, string url, bool allowFragments)
+    {
+        if (bs.Length == 0)
+            return url;
+        if (url.Length == 0)
+            return bs;
+
+        var (bscheme, bnetloc, bpath, bquery, bfragment) = SplitUrl(bs, allowFragments);
+        var (scheme, netloc, path, query, fragment) = SplitUrl(url, allowFragments);
+        if (scheme.Length == 0)
+            scheme = bscheme;
+
+        if (scheme != bscheme || !UsesRelative.Contains(scheme))
+            return url;
+        if (UsesNetloc.Contains(scheme))
+        {
+            if (netloc.Length > 0)
+                return UnparseUrl(scheme, netloc, path, query, fragment);
+            netloc = bnetloc;
+        }
+
+        if (path.Length == 0)
+        {
+            path = bpath;
+            if (query.Length == 0)
+                query = bquery;
+            return UnparseUrl(scheme, netloc, path, query, fragment);
+        }
+
+        var baseParts = bpath.Split('/').ToList();
+        if (baseParts[^1].Length != 0)
+            baseParts.RemoveAt(baseParts.Count - 1);
+
+        List<string> segments;
+        if (path.StartsWith('/'))
+        {
+            segments = path.Split('/').ToList();
+        }
+        else
+        {
+            segments = baseParts.Concat(path.Split('/')).ToList();
+            // Ports Python's in-place slice assignment `segments[1:-1] = filter(None, ...)`. When
+            // segments has exactly one element, index 0 and index -1 are the SAME element, so the
+            // slice [1:-1] is empty and the list must be left untouched — naively concatenating
+            // "first element" + middle + "last element" would duplicate that single element.
+            if (segments.Count > 1)
+            {
+                string head = segments[0], tail = segments[^1];
+                var middle = segments.Skip(1).SkipLast(1).Where(s => s.Length > 0);
+                segments = new List<string> { head }.Concat(middle).Append(tail).ToList();
+            }
+        }
+
+        var resolved = new List<string>();
+        foreach (var seg in segments)
+        {
+            if (seg == "..")
+            {
+                if (resolved.Count > 0)
+                    resolved.RemoveAt(resolved.Count - 1);
+            }
+            else if (seg == ".")
+                continue;
+            else
+                resolved.Add(seg);
+        }
+        if (segments[^1] is "." or "..")
+            resolved.Add("");
+
+        string joinedPath = string.Join('/', resolved);
+        return UnparseUrl(scheme, netloc, joinedPath.Length > 0 ? joinedPath : "/", query, fragment);
     }
 
     private static readonly string[] SplitResultFields = { "scheme", "netloc", "path", "query", "fragment" };

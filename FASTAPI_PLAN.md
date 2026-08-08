@@ -1680,6 +1680,69 @@ This round closed it out completely and reached Phase 4.1's actual target.
   green throughout, confirmed stable across dozens of repeated runs: 928/928 by the end of this
   round, up from 914 at the start of it.
 
+### 4.1.4 — past the milestone: `FastAPI()` construction, real route registration, `openapi()`, then the `httpx` wall
+
+Continuing straight past 4.1.3's `import fastapi` milestone into actually constructing an app and
+registering routes — the next frontier flagged at the end of 4.1.3.
+
+- **`inspect.isroutine`** (InspectModule.cs): didn't exist at all
+  (`AttributeError: 'module' object has no attribute 'isroutine'`). Real CPython:
+  `isroutine = isbuiltin or isfunction or ismethod or ismethoddescriptor or ismethodwrapper` —
+  implemented as `PyBuiltinFunction or PyFunction or PyBoundMethod` (the practically relevant
+  subset; the two rare C-level slot-wrapper cases aren't produced by anything reachable here).
+  Verified manually against real CPython semantics first (function, bound method, builtin, class,
+  int, string — 6 cases). Found via real starlette's own `routing.py`'s `get_name(endpoint)`,
+  called while constructing *every* real `Route` — so this blocked `FastAPI()` itself from
+  constructing, since it builds its own default docs/openapi/redoc routes at construction time.
+  With this fixed, `FastAPI()` constructs successfully.
+- **`inspect.Parameter.__init__` didn't accept `name`/`kind` as keywords** (InspectModule.cs): only
+  ever read them positionally (`a[1]`/`a[2]`), throwing `TypeError: Parameter() missing required
+  argument: 'name'` the moment both were passed by keyword. Real CPython's `Parameter.name`/`.kind`
+  are positional-or-keyword, not positional-only (only `default`/`annotation` are keyword-only,
+  after the real `*`). Found via real fastapi's own `get_typed_signature`
+  (`dependencies/utils.py`), calling `inspect.Parameter(name=param.name, kind=param.kind,
+  default=param.default, annotation=...)` entirely by keyword while building the typed signature
+  for *every* route handler — so this blocked all real route registration outright. Fixed by
+  checking `kwargs` as a fallback for both, matching the pattern already used for
+  `default`/`annotation`. Verified manually (`inspect.Parameter(name=..., kind=...)` produces an
+  identical object to the equivalent positional call) before trusting it. With this fixed, real
+  `@app.get("/")`/`@app.get("/items/{item_id}")` route registration — including a path parameter —
+  succeeds (`len(app.routes) == 6`: the app's own default `/openapi.json`/`/docs`/
+  `/docs/oauth2-redirect`/`/redoc` plus the two registered here). `app.openapi()` (real schema
+  generation) also verified working at this point, unprompted — no further gap needed for it.
+- **`urllib.parse.urljoin` didn't exist at all** (UrllibModule.cs): `ImportError: cannot import
+  name 'urljoin' from 'urllib.parse'`. Found via real starlette's `testclient.py`
+  (`from urllib.parse import unquote, urljoin`, used to build the fake `ws://testserver` URL for
+  `TestClient`) — the natural next step past route registration towards actually issuing a request
+  against the app. Implemented as a real, direct port of CPython's own `Lib/urllib/parse.py`
+  algorithm (RFC 3986 §5 relative-reference resolution: netloc override, last-path-segment
+  replacement, absolute-path override, `.`/`..` segment resolution including climbing past the
+  root, `uses_relative`/`uses_netloc` scheme allowlists reproduced verbatim), scoped to the
+  no-`;params` URL shape this file's `urlparse`/`urlsplit` already use throughout. Two real porting
+  bugs were caught and fixed during manual verification (no local Python interpreter was available
+  in this environment, so every expected value was hand-derived by tracing CPython's actual
+  algorithm line by line, then cross-checked against 17 cases): (1) `urlunsplit` must force a
+  leading `/` onto the path when a netloc is present — missing this turned
+  `urljoin("http://example.com", "path")` into the malformed `"http://example.compath/path"`
+  instead of `"http://example.com/path"`; (2) the `segments[1:-1] = filter(...)` in-place
+  slice-assignment CPython uses degenerates when the list has exactly one element (index `0` and
+  index `-1` are the *same* element there), which an initial reconstruction as
+  `head + middle + tail` didn't account for, duplicating that lone element. Both fixed and
+  re-verified against the full 17-case suite before locking in with a test.
+- **The next real wall, found immediately after**: `starlette.testclient.TestClient` (needed to
+  actually issue a request against a constructed app — the natural next milestone) imports `httpx`
+  at module level, and `httpx` isn't installed at all (`ModuleNotFoundError: No module named
+  'httpx'`). This is a substantially larger dependency (a real, independent HTTP client library
+  with its own transitive dependency tree — `httpcore`, `certifi`, `sniffio`, `h11`, etc.),
+  deliberately not chased this round; left as the concrete next step for whoever picks this back up.
+- 4 tests added: `M6_Stdlib/StdlibTests.cs` gained
+  `Parameter_constructor_accepts_name_and_kind_as_keyword_arguments` and
+  `Urljoin_resolves_relative_urls_against_a_base_matching_real_CPython` (17 cases in one test);
+  `M16_FastApi/FastApiSmokeTests.cs` gained `FastAPI_app_can_be_constructed` and
+  `Real_routes_with_path_parameters_can_be_registered`. Full suite green throughout, confirmed
+  stable across 6 repeated full-suite runs this round: 932/932 by the end of it, up from 928 at the
+  start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

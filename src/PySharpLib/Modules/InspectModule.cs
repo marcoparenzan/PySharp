@@ -61,6 +61,14 @@ public static class InspectModule
         d["isclass"] = new PyBuiltinFunction("isclass", (_, a, _) => a[0] is PyClass);
         d["ismodule"] = new PyBuiltinFunction("ismodule", (_, a, _) => a[0] is PyModule);
         d["isbuiltin"] = new PyBuiltinFunction("isbuiltin", (_, a, _) => a[0] is PyBuiltinFunction);
+        // Real CPython: isroutine = isbuiltin or isfunction or ismethod or ismethoddescriptor or
+        // ismethodwrapper — the last two are rare C-level slot-wrapper concepts nothing in the
+        // reachable path produces, so this covers the practically relevant cases. Found via real
+        // starlette's own routing.py: `get_name(endpoint)` uses it to decide whether to read
+        // `endpoint.__name__` directly or fall back to `endpoint.__class__.__name__` — called while
+        // constructing every real `Route`, so this blocked `FastAPI()` itself from constructing.
+        d["isroutine"] = new PyBuiltinFunction("isroutine", (_, a, _) =>
+            a[0] is PyBuiltinFunction or PyFunction or PyBoundMethod);
         // Real CPython unwraps a bound method to its underlying function for these checks (a bound
         // async instance method is still a coroutine function) — found via starlette's real
         // ExceptionMiddleware.http_exception, an `async def` instance method whose bound form
@@ -137,12 +145,18 @@ public static class InspectModule
         // Real constructor (not just the internal signature()-builder path above): pydantic's real
         // `generate_model_signature` builds extra params directly, e.g. `Parameter(param_name,
         // Parameter.KEYWORD_ONLY, annotation=field.annotation, default=field.default)`. See
-        // FASTAPI_PLAN.md Phase 1.9.
+        // FASTAPI_PLAN.md Phase 1.9. `name`/`kind` are real CPython positional-or-keyword params
+        // (only `default`/`annotation` are keyword-only, after `*`) — found via fastapi's real
+        // `get_typed_signature` (dependencies/utils.py) calling `Parameter(name=..., kind=...,
+        // default=..., annotation=...)` entirely by keyword.
         cls.Dict["__init__"] = new PyBuiltinFunction("Parameter.__init__", (_, a, kwargs) =>
         {
             var inst = (PyInstance)a[0];
-            inst.Dict["name"] = a.Length > 1 ? a[1] : throw PyErr.TypeError("Parameter() missing required argument: 'name'");
-            inst.Dict["kind"] = a.Length > 2 ? a[2] : throw PyErr.TypeError("Parameter() missing required argument: 'kind'");
+            object Arg(string name, int pos) => pos < a.Length ? a[pos]
+                : kwargs is not null && kwargs.TryGetValue(name, out var v) ? v
+                : throw PyErr.TypeError($"Parameter() missing required argument: '{name}'");
+            inst.Dict["name"] = Arg("name", 1);
+            inst.Dict["kind"] = Arg("kind", 2);
             inst.Dict["default"] = kwargs is not null && kwargs.TryGetValue("default", out var def) ? def : Empty;
             inst.Dict["annotation"] = kwargs is not null && kwargs.TryGetValue("annotation", out var ann) ? ann : Empty;
             return PyNone.Instance;

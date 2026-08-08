@@ -364,6 +364,25 @@ public class InspectTests
             """));
 
     [Fact]
+    public void Parameter_constructor_accepts_name_and_kind_as_keyword_arguments()
+        // Regression: Parameter.__init__ only ever read name/kind positionally (a[1]/a[2]), throwing
+        // "missing required argument: 'name'" when both were passed by keyword. Real CPython's
+        // Parameter.name/kind are positional-or-keyword, not positional-only. Found via real fastapi's
+        // own get_typed_signature (dependencies/utils.py): `inspect.Parameter(name=param.name,
+        // kind=param.kind, default=param.default, annotation=...)` — called while registering every
+        // real @app.get(...) route, entirely by keyword.
+        => Assert.Equal("x\nTrue\ny\nTrue\n5", Run("""
+            import inspect
+            p1 = inspect.Parameter(name='x', kind=inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            print(p1.name)
+            print(p1.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            p2 = inspect.Parameter(name='y', kind=inspect.Parameter.KEYWORD_ONLY, default=5)
+            print(p2.name)
+            print(p2.kind is inspect.Parameter.KEYWORD_ONLY)
+            print(p2.default)
+            """));
+
+    [Fact]
     public void Predicates_report_real_runtime_object_shapes()
         // Real predicates (not stubs), added over PySharp's actual runtime object shapes — found
         // via starlette's/anyio's real dependency chain (route-handler introspection). Async
@@ -1138,6 +1157,61 @@ public class UrlSplitTests
             print(parse_qsl("a=1&b=2&c="))
             print(parse_qsl("a=1&c=", keep_blank_values=True))
             """));
+
+    [Fact]
+    public void Urljoin_resolves_relative_urls_against_a_base_matching_real_CPython()
+        // Regression: urljoin didn't exist at all (`ImportError: cannot import name 'urljoin' from
+        // 'urllib.parse'`) — found via real starlette's testclient.py
+        // (`urljoin("ws://testserver", url)`), needed to construct a real TestClient. Real port of
+        // CPython's own Lib/urllib/parse.py algorithm (RFC 3986 §5 relative resolution); every
+        // expected value below was hand-derived by tracing that exact algorithm since no local
+        // Python interpreter was available to cross-check against directly. Covers: netloc override,
+        // last-segment ("file") replacement, absolute-path override, '..'/'.' segment resolution
+        // (including climbing past the root), a base path ending in '/', a bare-host base needing a
+        // forced leading '/', query/fragment-only relative refs, and the base/url empty-string
+        // short-circuits.
+        => Assert.Equal(string.Join("\n",
+            "ws://testserver/ws",
+            "ws://otherserver/ws",
+            "http://example.com/foo/baz",
+            "http://example.com/baz",
+            "http://example.com/foo/bar/baz",
+            "http://example.com/baz",
+            "http://example.com/foo/bar?query=1",
+            "http://example.com/foo/bar#frag",
+            "http://example.com/path",
+            "http://a/b/c/g",
+            "http://a/b/c/g",
+            "http://a/b/g",
+            "http://a/g",
+            "http://a/g",
+            "http://a/b/c/g?y#s",
+            "http://a/b/c/d",
+            "http://a/b"),
+            Run("""
+                from urllib.parse import urljoin
+                cases = [
+                    ("ws://testserver", "/ws"),
+                    ("ws://testserver", "ws://otherserver/ws"),
+                    ("http://example.com/foo/bar", "baz"),
+                    ("http://example.com/foo/bar", "/baz"),
+                    ("http://example.com/foo/bar/", "baz"),
+                    ("http://example.com/foo/bar", "../baz"),
+                    ("http://example.com/foo/bar", "?query=1"),
+                    ("http://example.com/foo/bar", "#frag"),
+                    ("http://example.com", "path"),
+                    ("http://a/b/c/d", "g"),
+                    ("http://a/b/c/d", "./g"),
+                    ("http://a/b/c/d", "../g"),
+                    ("http://a/b/c/d", "../../g"),
+                    ("http://a/b/c/d", "../../../g"),
+                    ("http://a/b/c/d", "g?y#s"),
+                    ("http://a/b/c/d", ""),
+                    ("", "http://a/b"),
+                ]
+                for base, url in cases:
+                    print(urljoin(base, url))
+                """));
 }
 
 /// <summary>contextvars: real get/set/reset/Context/copy_context — scoped to a single current value

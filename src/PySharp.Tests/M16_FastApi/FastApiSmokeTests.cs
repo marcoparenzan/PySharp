@@ -42,13 +42,57 @@ public class FastApiSmokeTests : IClassFixture<FastApiInstallFixture>
     [Fact]
     public void FastAPI_class_itself_is_importable()
     {
-        // Constructing FastAPI() itself is the next frontier (inspect.isroutine, found while
-        // probing this — not yet fixed), deliberately not asserted here yet.
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
         engine.Importer.SearchPaths.Add(_fixture.SitePackages);
 
         engine.Run("from fastapi import FastAPI\nprint(FastAPI.__name__)");
         Assert.Equal("FastAPI\n", writer.ToString());
+    }
+
+    [Fact]
+    public void FastAPI_app_can_be_constructed()
+    {
+        // Regression for inspect.isroutine (starlette's routing.py's get_name(endpoint) calls it
+        // while constructing every real Route — FastAPI() builds its default docs/openapi/redoc
+        // routes at construction time, so this previously failed before the __init__ ran at all).
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        engine.Importer.SearchPaths.Add(_fixture.SitePackages);
+
+        engine.Run("from fastapi import FastAPI\napp = FastAPI()\nprint(type(app).__name__)");
+        Assert.Equal("FastAPI\n", writer.ToString());
+    }
+
+    [Fact]
+    public void Real_routes_with_path_parameters_can_be_registered()
+    {
+        // Regression for inspect.Parameter's constructor not accepting name/kind as keywords — real
+        // fastapi's get_typed_signature (dependencies/utils.py) calls
+        // `inspect.Parameter(name=..., kind=..., default=..., annotation=...)` entirely by keyword
+        // while building the typed signature for every route handler. The default docs/openapi/redoc
+        // routes FastAPI() itself registers, plus our two, add up to 6.
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        engine.Importer.SearchPaths.Add(_fixture.SitePackages);
+
+        engine.Run("""
+            from fastapi import FastAPI
+
+            app = FastAPI()
+
+            @app.get("/")
+            async def index():
+                return {"message": "hello from real fastapi"}
+
+            @app.get("/items/{item_id}")
+            async def get_item(item_id: int):
+                return {"item_id": item_id}
+
+            print(len(app.routes))
+            print(app.routes[-2].path)
+            print(app.routes[-1].path)
+            """);
+        Assert.Equal("6\n/\n/items/{item_id}\n", writer.ToString());
     }
 }

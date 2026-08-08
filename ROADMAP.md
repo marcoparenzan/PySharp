@@ -375,9 +375,14 @@ in scenario 1).
   consecutive clean full-suite runs); real `eval()` (expression evaluation) and real
   `typing.ForwardRef`/`typing_extensions._AnnotatedAlias`, implemented to resolve fastapi's real,
   genuinely self-referential JSON-Schema-shaped forward refs; and ~15 smaller real stdlib/typing
-  gaps. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4. **Current frontier**: `FastAPI()`
-  construction hits a missing `inspect.isroutine` — Phase 4.2 (a real target sample app) not
-  started. 6/7/8 to do; native cross-cutting partial.
+  gaps. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4. **Past the milestone**: `FastAPI()`
+  constructs, real route registration (incl. path parameters) works, and `app.openapi()` (real
+  schema generation) works — `inspect.isroutine`, `inspect.Parameter.__init__` accepting
+  `name`/`kind` as keywords, and a real `urllib.parse.urljoin` (ported from CPython's own
+  algorithm) all fixed along the way. **Current frontier**: `starlette.testclient.TestClient`
+  imports `httpx`, which isn't installed at all — a real, independent HTTP client library with its
+  own dependency tree, not yet pulled in. Phase 4.2 (a real target sample app) not started. 6/7/8
+  to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -459,8 +464,14 @@ in scenario 1).
   concurrent `import typing`, causing an intermittent flaky-suite MRO failure — fixed with
   `[ThreadStatic]`); real **`hash()` dunder dispatch** ✅ (never consulted a `PyInstance`'s own
   `__hash__`, unlike `==`); `email.message.Message`, `binascii.Error`, `http.client.responses`
-  didn't exist. **`import fastapi` now succeeds.**
-- Tests: **928 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  didn't exist. **`import fastapi` now succeeds.** Past that: real **`inspect.isroutine`** ✅
+  (unblocked `FastAPI()` construction — starlette's `routing.py` calls it while building every
+  `Route`); **`inspect.Parameter.__init__`** ✅ now accepts `name`/`kind` as keywords, not just
+  positionally (real fastapi's `get_typed_signature` calls it entirely by keyword — unblocked real
+  route registration, incl. path parameters, and `app.openapi()` schema generation); real
+  **`urllib.parse.urljoin`** ✅ (a direct port of CPython's own RFC-3986 relative-resolution
+  algorithm — didn't exist at all before).
+- Tests: **932 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
