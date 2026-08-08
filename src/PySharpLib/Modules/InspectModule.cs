@@ -61,10 +61,16 @@ public static class InspectModule
         d["isclass"] = new PyBuiltinFunction("isclass", (_, a, _) => a[0] is PyClass);
         d["ismodule"] = new PyBuiltinFunction("ismodule", (_, a, _) => a[0] is PyModule);
         d["isbuiltin"] = new PyBuiltinFunction("isbuiltin", (_, a, _) => a[0] is PyBuiltinFunction);
+        // Real CPython unwraps a bound method to its underlying function for these checks (a bound
+        // async instance method is still a coroutine function) — found via starlette's real
+        // ExceptionMiddleware.http_exception, an `async def` instance method whose bound form
+        // (`self.http_exception`) is_async_callable's fallback (`asyncio.iscoroutinefunction`,
+        // see below) needs to recognize; missing it routed the call through the sync
+        // run_in_threadpool path instead, producing an un-awaited coroutine object.
         d["isgeneratorfunction"] = new PyBuiltinFunction("isgeneratorfunction", (_, a, _) =>
-            a[0] is PyFunction { IsGenerator: true, IsAsync: false });
+            UnwrapBoundMethod(a[0]) is PyFunction { IsGenerator: true, IsAsync: false });
         d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
-            a[0] is PyFunction { IsAsync: true });
+            UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true });
         d["isasyncgenfunction"] = new PyBuiltinFunction("isasyncgenfunction", (_, _, _) => false);
         d["isgenerator"] = new PyBuiltinFunction("isgenerator", (_, a, _) => a[0] is PyGenerator);
         d["iscoroutine"] = new PyBuiltinFunction("iscoroutine", (_, a, _) => a[0] is PyCoroutine);
@@ -98,6 +104,8 @@ public static class InspectModule
 
         return m;
     }
+
+    internal static object UnwrapBoundMethod(object obj) => obj is PyBoundMethod bm ? bm.Function : obj;
 
     private static PyInstance MakeKind(string name)
     {

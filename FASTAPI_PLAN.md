@@ -1160,6 +1160,43 @@ Root-caused via the project's usual debug-print-then-remove bisection on `Assert
   the `__delattr__` dispatch fix, and independent-thread isolation still holding). Full suite green
   throughout: 883/883 by the end of this round, up from 877 at the start of it.
 
+### 3.1.9 — the 404 path is closed: one more real bug, then a full end-to-end pass
+
+Picking up the exact 3.1.8 frontier (`TypeError: 'coroutine' object is not callable`). Root-caused via
+the same `EvalCall`-site debug-print-then-remove bisection, this time dumping the callee expression's
+AST and owning module name.
+
+- **`asyncio.iscoroutinefunction`/`inspect.iscoroutinefunction`/`inspect.isgeneratorfunction` didn't
+  see through a bound method**: all three only matched a raw `PyFunction`, never a `PyBoundMethod`
+  wrapping one. Real CPython unwraps a bound method to its underlying function first — a bound async
+  instance method genuinely is a coroutine function. The debug print pinned the failing call to
+  `starlette._exception_handler`, calling `response(scope, receive, sender)` where `response` was a
+  `PyCoroutine`, not the `Response` instance it should have been. Traced to real starlette's
+  `ExceptionMiddleware.http_exception` (an `async def` *instance method*, registered as the default
+  handler for `HTTPException` — including the plain 404 case, via `self.http_exception`): starlette's
+  real `is_async_callable(handler)` (`_utils.py`) calls `asyncio.iscoroutinefunction(handler)` first
+  (Python <3.13's import path), which came back `False` for the bound method, routing the call
+  through the *sync* `run_in_threadpool(handler, conn, exc)` path instead of `await handler(conn,
+  exc)`. Calling an `async def` method without awaiting it just produces a coroutine object without
+  running it — that unawaited coroutine became `response`, and the next line
+  (`await response(scope, receive, sender)`) tried to ASGI-dispatch it as if it were a real `Response`,
+  hence "coroutine object is not callable". Fixed with a shared `InspectModule.UnwrapBoundMethod`
+  helper, applied to all three predicates.
+- **Verified the full 404 path end to end**: a real, unmodified `Starlette(routes=[...])` app with no
+  custom exception handlers now correctly returns `{"type": "http.response.start", "status": 404,
+  ...}` + `{"type": "http.response.body", "body": b"Not Found"}` for an unmatched route — matching real
+  starlette's default `ExceptionMiddleware.http_exception` behavior exactly. Re-verified the happy path
+  (`/` → 200, `"hello world"`) and the uncaught-exception path (`/boom` → real `ValueError`
+  propagating all the way to the caller) together in the same run to confirm no regression from this
+  round's fix. **This closes the entire 404-path investigation chain started in 3.1.6.**
+- 2 tests added (`M6_Stdlib/StdlibTests.cs`: `InspectTests.Iscoroutinefunction_and_isgeneratorfunction_
+  see_through_a_bound_method`, `AsyncioAdditionsTests.Asyncio_iscoroutinefunction_sees_through_a_bound_
+  method`). Full suite green throughout: 885/885 by the end of this round, up from 883 at the start.
+- **New frontier for Phase 3.1b**: `staticfiles.py`/WebSockets remain entirely unexercised; path-
+  parameter routes and custom exception handlers (registered via `Starlette(exception_handlers=...)`)
+  haven't been probed yet either — good next targets before considering 3.1b closed and moving to 3.2
+  (a real ASGI server).
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1351,12 +1388,22 @@ thread hops but *not* across genuine `threading.Thread.start()` calls. Found und
 `hasattr` for any type relying on that standard contract — both fixed generally, not just for
 `threading.local`. Full blow-by-blow in 3.1.8. 883/883 tests green (up from 877).
 
-**Current frontier for Phase 3**: past all of the above, the 404 path now hits
-`TypeError: 'coroutine' object is not callable` — some code in the dispatch chain calls an
-already-produced coroutine object a second time. Not yet root-caused; PySharp's traceback formatting
-still doesn't reveal real file/line for imported modules (shows `<string>` — a known, pre-existing
-limitation, separately worth revisiting). `staticfiles.py`/WebSockets also remain unexercised. Not
-started.
+**The 404-not-found fallback path is now fully closed** (one more real bug found and fixed):
+`asyncio.iscoroutinefunction`/`inspect.iscoroutinefunction`/`inspect.isgeneratorfunction` didn't see
+through a bound method (real CPython does), so starlette's real `is_async_callable(self.
+http_exception)` — the default 404/`HTTPException` handler, a bound `async def` instance method — came
+back `False`, routing the call through a sync path that produced an unawaited coroutine object instead
+of the real `Response`. Fixed with a shared `InspectModule.UnwrapBoundMethod` helper across all three
+predicates. **Verified end to end**: a real, unmodified `Starlette` app now correctly returns 200 for a
+matched route, 404 (`"Not Found"`) for an unmatched one, and correctly propagates an uncaught
+`ValueError` from a route handler — all three together in one run. Full blow-by-blow in 3.1.9.
+885/885 tests green (up from 877 at the start of 3.1.8).
+
+**Current frontier for Phase 3**: `staticfiles.py`/WebSockets remain entirely unexercised;
+path-parameter routes and custom exception handlers (`Starlette(exception_handlers=...)`) haven't been
+probed yet either. PySharp's traceback formatting still doesn't reveal real file/line for imported
+modules (shows `<string>` — a known, pre-existing limitation, separately worth revisiting, though it
+didn't block root-causing anything this round). Not started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

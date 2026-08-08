@@ -403,6 +403,29 @@ public class InspectTests
             print(inspect.isfunction(gen_fn))
             print(inspect.isfunction(async_gen_fn))
             """));
+
+    [Fact]
+    public void Iscoroutinefunction_and_isgeneratorfunction_see_through_a_bound_method()
+        // Regression: both only matched a raw PyFunction, not a PyBoundMethod wrapping one — real
+        // CPython unwraps a bound method to its underlying function first, so a bound async
+        // instance method is still a coroutine function. Found via starlette's real
+        // ExceptionMiddleware.http_exception (an `async def` instance method): is_async_callable's
+        // primary check (`asyncio.iscoroutinefunction(self.http_exception)`) came back False,
+        // routing the call through the sync run_in_threadpool path instead of awaiting it directly
+        // — producing an un-awaited coroutine object where a real Response was expected, which then
+        // failed with "'coroutine' object is not callable" trying to ASGI-dispatch it.
+        => Assert.Equal("True\nTrue\nFalse\nFalse", Run("""
+            import inspect
+            class C:
+                async def coro_method(self): pass
+                def gen_method(self):
+                    yield 1
+            c = C()
+            print(inspect.iscoroutinefunction(c.coro_method))
+            print(inspect.isgeneratorfunction(c.gen_method))
+            print(inspect.iscoroutinefunction(c.gen_method))
+            print(inspect.isgeneratorfunction(c.coro_method))
+            """));
 }
 
 /// <summary>itertools (chain/islice/zip_longest) and the collections.Counter/ChainMap additions —
@@ -2212,6 +2235,21 @@ public class AsyncioAdditionsTests
                 print(isinstance(fut, asyncio.Future))
                 print(fut.done())
             asyncio.run(main())
+            """));
+
+    [Fact]
+    public void Asyncio_iscoroutinefunction_sees_through_a_bound_method()
+        // Regression: same bug as inspect.iscoroutinefunction (see InspectTests) — matched only a
+        // raw PyFunction, not a PyBoundMethod wrapping one. asyncio.iscoroutinefunction specifically
+        // (not just inspect's) is what starlette's real is_async_callable imports for Python <3.13
+        // (`from asyncio import iscoroutinefunction`), and it's what broke the real 404 path: a
+        // bound async instance method (starlette's real ExceptionMiddleware.http_exception) was
+        // misdetected as non-async.
+        => Assert.Equal("True", Run("""
+            import asyncio
+            class C:
+                async def m(self): pass
+            print(asyncio.iscoroutinefunction(C().m))
             """));
 
     [Fact]

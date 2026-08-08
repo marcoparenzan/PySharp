@@ -322,8 +322,11 @@ public static class AsyncioModule
             AsyncRuntime.EnsureFuture(interp, Arg(a, 0, "Task"), RunningLoop()));
 
         d["iscoroutine"] = new PyBuiltinFunction("iscoroutine", (_, a, _) => a[0] is PyCoroutine);
+        // Unwraps a bound method to its underlying function first — real CPython does the same, and
+        // a bound async instance method (e.g. starlette's real `self.http_exception`) is still a
+        // coroutine function. See InspectModule.cs's matching fix for the full story.
         d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
-            a[0] is PyFunction f && f.IsAsync);
+            InspectModule.UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true });
 
         return m;
     }

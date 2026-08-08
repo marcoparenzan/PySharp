@@ -365,12 +365,16 @@ in scenario 1).
   stdlib/interpreter gaps closed plus `match`/`case` across 5 probe-driven rounds); **3.1b under
   way**: real ASGI request dispatch verified end to end (index route + a path-parameter route + real
   exception propagation for an app-level error), surfacing and fixing several significant,
-  previously-silent correctness bugs (see below) — the 404-not-found fallback path's
-  `AssertionError` was root-caused and fixed (`asyncio.current_task()`), along with `Future[T]()`
-  PEP 585 subscript-then-call, a `Future`/`Task` private `_loop` attribute, and a structural
-  `threading.local`-across-`@contextmanager` bug; current frontier narrowed further to a
-  `TypeError: 'coroutine' object is not callable` on the same path; 3.2 (ASGI server) not started;
-  4/6/7/8 to do; native cross-cutting partial.
+  previously-silent correctness bugs (see below) — **the 404-not-found fallback path is now fully
+  closed**: a real, unmodified `Starlette` app correctly returns 200 for a matched route, 404
+  (`"Not Found"`) for an unmatched one, and correctly propagates an uncaught exception from a route
+  handler, all verified together in one run. Bugs found and fixed along the way:
+  `asyncio.current_task()` (always `None`), `Future[T]()` PEP 585 subscript-then-call, a `Future`/
+  `Task` private `_loop` attribute, a structural `threading.local`-across-`@contextmanager` bug, and
+  `iscoroutinefunction`/`isgeneratorfunction` not seeing through a bound method (misdetecting
+  starlette's real bound `async def` 404 handler as non-async). Next: `staticfiles.py`/WebSockets,
+  path-parameter routes, and custom exception handlers remain unexercised; 3.2 (ASGI server) not
+  started; 4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -408,8 +412,11 @@ in scenario 1).
   asymmetric and a real gap for any type routing attribute deletion through `__delattr__`);
   **`TryGetAttr`'s `__getattr__` fallback now catches a raised `AttributeError`** ✅ (previously
   always returned found, even when `__getattr__` itself raised — broke `getattr(obj, name,
-  default)`/`hasattr` for any type relying on that standard contract).
-- Tests: **883 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  default)`/`hasattr` for any type relying on that standard contract); **`iscoroutinefunction`/
+  `isgeneratorfunction` now see through a bound method** ✅ (previously only matched a raw function;
+  real CPython unwraps a bound method first — this broke `is_async_callable` for any bound `async
+  def` instance method, including starlette's real default 404 handler).
+- Tests: **885 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
