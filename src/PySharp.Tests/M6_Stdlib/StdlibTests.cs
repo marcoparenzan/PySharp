@@ -3,6 +3,8 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib;
+
 namespace PySharp.Tests.M6_Stdlib;
 
 public class StructTests
@@ -1156,6 +1158,17 @@ public class UrlSplitTests
             from urllib.parse import parse_qsl
             print(parse_qsl("a=1&b=2&c="))
             print(parse_qsl("a=1&c=", keep_blank_values=True))
+            """));
+
+    [Fact]
+    public void Parse_qs_groups_repeated_keys_into_lists()
+        // Regression: parse_qs didn't exist at all (`ImportError: cannot import name 'parse_qs'
+        // from 'urllib.parse'`) — found via real idna's/rfc3986's own dependency chain reached while
+        // chasing real httpx. Built on top of the same ParseQsl helper parse_qsl already used.
+        => Assert.Equal("{'a': ['1', '3'], 'b': ['2']}\n{}", Run("""
+            from urllib.parse import parse_qs
+            print(parse_qs("a=1&b=2&a=3"))
+            print(parse_qs(""))
             """));
 
     [Fact]
@@ -2903,4 +2916,347 @@ public class ThreadingLocalContextManagerTests
             print(seen[0])
             print(tl.value)
             """));
+}
+
+/// <summary>enum: a member's value given as a tuple, combined with a class-defined `__new__`, now
+/// unpacks the tuple as that `__new__`'s positional args (real CPython semantics) instead of storing
+/// the raw tuple as the member's value. Needed `int.__new__(cls, value)` support too (a builtin
+/// function gaining a real, per-class-aware `__new__`). Found via real httpx's own transitive
+/// dependency chain: `httpx._status_codes.codes(IntEnum)` — `OK = 200, "OK"` with a custom
+/// `__new__(cls, value, phrase="")` doing `obj = int.__new__(cls, value); obj.phrase = phrase`. See
+/// FASTAPI_PLAN.md.</summary>
+public class EnumTupleValueTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Tuple_valued_member_is_unpacked_into_a_custom_new()
+        => Assert.Equal("200\nOK\nTrue\n200", Run("""
+            from enum import IntEnum
+            class codes(IntEnum):
+                def __new__(cls, value, phrase=""):
+                    obj = int.__new__(cls, value)
+                    obj._value_ = value
+                    obj.phrase = phrase
+                    return obj
+                OK = 200, "OK"
+                NOT_FOUND = 404, "Not Found"
+            print(int(codes.OK))
+            print(codes.OK.phrase)
+            print(codes.OK == 200)
+            print(codes.OK.value)
+            """));
+
+    [Fact]
+    public void Iterating_the_enum_and_calling_int_on_each_member_works()
+        // Regression: this is the exact pattern that surfaced the bug — real httpx's
+        // _status_codes.py ends with `for code in codes: setattr(codes, code._name_.lower(),
+        // int(code))`, which previously raised "TypeError: enum value: expected int, got tuple".
+        => Assert.Equal("200\n404", Run("""
+            from enum import IntEnum
+            class codes(IntEnum):
+                def __new__(cls, value, phrase=""):
+                    obj = int.__new__(cls, value)
+                    obj._value_ = value
+                    obj.phrase = phrase
+                    return obj
+                OK = 200, "OK"
+                NOT_FOUND = 404, "Not Found"
+            for code in codes:
+                setattr(codes, code._name_.lower(), int(code))
+            print(codes.ok)
+            print(codes.not_found)
+            """));
+}
+
+/// <summary>typing.TypedDict/NamedTuple: real construction-time behavior for both. Found via real
+/// httpx's transitive dependency chain. See FASTAPI_PLAN.md.</summary>
+public class TypedDictAndNamedTupleFunctionalTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void TypedDict_subclass_construction_returns_a_plain_dict()
+        // Regression: `class Foo(TypedDict): ...; Foo(a=1)` raised "TypeError: Foo() takes no
+        // arguments" — TypedDict is erased at runtime in real CPython, so calling a TypedDict
+        // subclass must return a plain dict, never build an instance of the subclass. Found via
+        // real starlette's testclient.py: `class _AsyncBackend(TypedDict): ...` then
+        // `_AsyncBackend(backend=..., backend_options=...)`.
+        => Assert.Equal("{'name': 'Blade Runner', 'year': 1982}\nTrue", Run("""
+            from typing import TypedDict
+            class Movie(TypedDict):
+                name: str
+                year: int
+            m = Movie(name="Blade Runner", year=1982)
+            print(m)
+            print(isinstance(m, dict))
+            """));
+
+    [Fact]
+    public void NamedTuple_functional_syntax_builds_a_real_working_class()
+        // Regression: `NamedTuple("Name", [...])` (the functional form, not `class Foo(NamedTuple):`)
+        // raised "TypeError: NamedTuple() takes no arguments" — only the class-based syntax was
+        // wired to Interp.ConvertToNamedTuple. Found via real httpx's `_types.py`:
+        // `RawURL = NamedTuple("RawURL", [("scheme", bytes), ("host", bytes), ("port", int)])`.
+        => Assert.Equal("b'http' b'example.com' 80\n3\nRawURL(scheme=b'http', host=b'example.com', port=80)", Run("""
+            from typing import NamedTuple
+            RawURL = NamedTuple("RawURL", [("scheme", bytes), ("host", bytes), ("port", int)])
+            u = RawURL(b"http", b"example.com", 80)
+            print(u.scheme, u.host, u.port)
+            print(len(u))
+            print(repr(u))
+            """));
+}
+
+/// <summary>A builtin function (PyBuiltinFunction) can now carry arbitrary extra attributes, the
+/// same way a real Python-level function already could. Found via real httpx's own `__init__.py`:
+/// `for __name in __all__: setattr(__locals[__name], "__module__", "httpx")` — some `__all__`
+/// entries resolve to a PyBuiltinFunction in this interpreter even though real CPython's equivalent
+/// is a plain function. See FASTAPI_PLAN.md.</summary>
+public class BuiltinFunctionAttributeTests
+{
+    [Fact]
+    public void Setattr_on_a_builtin_function_persists_and_reads_back()
+        => Assert.Equal("mymod\nlen", Py.Run("""
+            setattr(len, "__module__", "mymod")
+            print(len.__module__)
+            print(len.__name__)
+            """).TrimEnd('\n'));
+}
+
+/// <summary>zlib: real compress/decompress/decompressobj backed by .NET's own
+/// ZLibStream/DeflateStream/GZipStream. Found via real httpx's `_decoders.py`
+/// (DeflateDecoder/GZipDecoder, handling `Content-Encoding: deflate`/`gzip`). See
+/// FASTAPI_PLAN.md.</summary>
+public class ZlibTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Compress_decompress_round_trips_and_MAX_WBITS_is_15()
+        => Assert.Equal("True\n15", Run("""
+            import zlib
+            data = b"hello world, this is a test of zlib compression!" * 20
+            print(zlib.decompress(zlib.compress(data)) == data)
+            print(zlib.MAX_WBITS)
+            """));
+
+    [Fact]
+    public void Decompressobj_handles_a_stream_fed_across_multiple_chunks()
+        // Regression: an earlier implementation called Decoder.GetCharCount then Decoder.GetChars
+        // separately (same bug class as the codecs.py incremental decoder fix), corrupting output
+        // held over between decompress() calls — switched to accumulate-and-redecompress-from-scratch
+        // instead, correct for the common case (a handful of chunks, not a tiny-read firehose).
+        => Assert.Equal("True", Run("""
+            import zlib
+            data = b"hello world, this is a test of zlib compression!" * 20
+            compressed = zlib.compress(data)
+            d = zlib.decompressobj()
+            out = d.decompress(compressed[:10]) + d.decompress(compressed[10:]) + d.flush()
+            print(out == data)
+            """));
+
+    [Fact]
+    public void Decompressobj_raises_zlib_error_on_a_wbits_mismatch_on_the_first_call()
+        // Regression for real httpx's own DeflateDecoder fallback pattern: feeding zlib-wrapped
+        // bytes to a raw-deflate (negative wbits) decompressor must fail immediately on the first
+        // call so the caller can retry with the other wbits — not silently swallow the mismatch.
+        => Assert.Equal("caught", Run("""
+            import zlib
+            compressed = zlib.compress(b"hello")
+            d = zlib.decompressobj(-zlib.MAX_WBITS)
+            try:
+                d.decompress(compressed)
+                print("no error")
+            except zlib.error:
+                print("caught")
+            """));
+}
+
+/// <summary>bisect: real bisect_left/bisect_right/insort, direct ports of CPython's own
+/// Lib/bisect.py algorithm. Found via real idna's intranges.py/core.py (a transitive dependency of
+/// httpx). See FASTAPI_PLAN.md.</summary>
+public class BisectTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Bisect_left_and_right_differ_on_duplicate_values()
+        => Assert.Equal("1\n3\n3", Run("""
+            import bisect
+            a = [1, 3, 3, 5, 7]
+            print(bisect.bisect_left(a, 3))
+            print(bisect.bisect_right(a, 3))
+            print(bisect.bisect(a, 3))
+            """));
+
+    [Fact]
+    public void Insort_left_and_right_insert_at_the_correct_sorted_position()
+        => Assert.Equal("[1, 3, 3, 5]\n[1, 3, 3, 4, 5]", Run("""
+            import bisect
+            b = [1, 3, 5]
+            bisect.insort_left(b, 3)
+            print(b)
+            bisect.insort(b, 4)
+            print(b)
+            """));
+}
+
+/// <summary>unicodedata: category()/normalize() are real (backed by .NET's own comprehensive
+/// Unicode Character Database via CharUnicodeInfo/string.Normalize); combining()/bidirectional()/
+/// name() are honestly scoped (correct for ASCII, a documented simplification beyond — see
+/// UnicodedataModule.cs's own doc comment for why this doesn't break real idna's bidi validation for
+/// ASCII-only hostnames). Found via real idna's core.py (a transitive dependency of httpx). See
+/// FASTAPI_PLAN.md.</summary>
+public class UnicodedataTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Category_matches_real_CPython_for_common_ASCII_characters()
+        => Assert.Equal("Lu\nLl\nNd\nZs\nPo", Run("""
+            import unicodedata
+            print(unicodedata.category("A"))
+            print(unicodedata.category("a"))
+            print(unicodedata.category("5"))
+            print(unicodedata.category(" "))
+            print(unicodedata.category("."))
+            """));
+
+    [Fact]
+    public void Bidirectional_never_misclassifies_ASCII_as_a_right_to_left_category()
+        => Assert.Equal("L\nEN", Run("""
+            import unicodedata
+            print(unicodedata.bidirectional("A"))
+            print(unicodedata.bidirectional("5"))
+            """));
+
+    [Fact]
+    public void Normalize_NFC_matches_real_CPython()
+        => Assert.Equal("True", Run("""
+            import unicodedata
+            print(unicodedata.normalize("NFC", "e" + chr(0x0301)) == chr(0xE9))
+            """));
+}
+
+/// <summary>netrc: real machine/login/password/account parsing (a whitespace-tokenized state
+/// machine), scoped to what real httpx's `_utils.py` actually needs (`netrc.netrc(path)`,
+/// `.authenticators(host)`, `netrc.NetrcParseError`) — no `macdef` macro-body support. See
+/// FASTAPI_PLAN.md.</summary>
+public class NetrcTests
+{
+    [Fact]
+    public void Authenticators_returns_the_matching_hosts_tuple_or_none()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "pysharp_netrc_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string file = Path.Combine(dir, "netrc.txt").Replace('\\', '/');
+        File.WriteAllText(file,
+            "machine example.com\nlogin myuser\npassword mypass\naccount myacct\n\n" +
+            "machine other.com\nlogin other_user\npassword other_pass\n");
+        try
+        {
+            var writer = new StringWriter();
+            var engine = new PyEngine(writer);
+            engine.Run($$"""
+                import netrc
+                n = netrc.netrc("{{file}}")
+                print(n.authenticators("example.com"))
+                print(n.authenticators("other.com"))
+                print(n.authenticators("missing.com"))
+                """);
+            Assert.Equal(
+                "('myuser', 'myacct', 'mypass')\n('other_user', None, 'other_pass')\nNone\n",
+                writer.ToString());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void NetrcParseError_is_a_real_catchable_exception_class()
+        => Assert.Equal("caught: bad", Py.Run("""
+            import netrc
+            try:
+                raise netrc.NetrcParseError("bad")
+            except netrc.NetrcParseError as e:
+                print("caught:", e)
+            """).TrimEnd('\n'));
+}
+
+/// <summary>http.cookiejar + urllib.request.Request: real Cookie/CookieJar (RFC 6265-style
+/// domain/path matching, a real Set-Cookie response-header parser) and a real Request exposing the
+/// interface CookieJar's own extract_cookies/add_cookie_header actually drive. Found via real
+/// httpx's `_models.py`'s `Cookies` class (`from http.cookiejar import Cookie, CookieJar`,
+/// `Cookies._CookieCompatRequest(urllib.request.Request)`). See FASTAPI_PLAN.md.</summary>
+public class HttpCookiejarTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Set_cookie_and_add_cookie_header_round_trip_a_wildcard_domain_cookie()
+        => Assert.Equal("1\nsession abc123\nTrue\nsession=abc123", Run("""
+            from http.cookiejar import Cookie, CookieJar
+            from urllib.request import Request
+
+            jar = CookieJar()
+            kwargs = dict(version=0, name="session", value="abc123", port=None, port_specified=False,
+                          domain="", domain_specified=False, domain_initial_dot=False, path="/",
+                          path_specified=True, secure=False, expires=None, discard=True, comment=None,
+                          comment_url=None, rest={"HttpOnly": None}, rfc2109=False)
+            jar.set_cookie(Cookie(**kwargs))
+            print(len(jar))
+            for c in jar:
+                print(c.name, c.value)
+
+            req = Request(url="http://example.com/foo", headers={}, method="GET")
+            jar.add_cookie_header(req)
+            print(req.has_header("Cookie"))
+            print(req.get_header("Cookie"))
+            """));
+
+    [Fact]
+    public void Extract_cookies_parses_real_Set_Cookie_headers_and_respects_domain_path_secure()
+        => Assert.Equal(
+            "3\n['plain=1', 'session=abc123', 'token=xyz']\n['plain=1', 'session=abc123']\nTrue",
+            Run("""
+                from http.cookiejar import Cookie, CookieJar
+                from urllib.request import Request
+                import email.message
+
+                jar = CookieJar()
+                kwargs = dict(version=0, name="session", value="abc123", port=None, port_specified=False,
+                              domain="", domain_specified=False, domain_initial_dot=False, path="/",
+                              path_specified=True, secure=False, expires=None, discard=True, comment=None,
+                              comment_url=None, rest={"HttpOnly": None}, rfc2109=False)
+                jar.set_cookie(Cookie(**kwargs))
+
+                class FakeResponse:
+                    def __init__(self, headers):
+                        self._headers = headers
+                    def info(self):
+                        m = email.message.Message()
+                        for k, v in self._headers:
+                            m[k] = v
+                        return m
+
+                resp = FakeResponse([("Set-Cookie", "token=xyz; Path=/; Domain=example.com; Secure"),
+                                     ("Set-Cookie", "plain=1; Path=/api")])
+                req2 = Request(url="https://example.com/api/items", headers={}, method="GET")
+                jar.extract_cookies(resp, req2)
+                print(len(jar))
+
+                req3 = Request(url="https://example.com/api/items", headers={}, method="GET")
+                jar.add_cookie_header(req3)
+                print(sorted(req3.get_header("Cookie").split("; ")))
+
+                # secure cookie must not be sent over plain http
+                req4 = Request(url="http://example.com/api/items", headers={}, method="GET")
+                jar.add_cookie_header(req4)
+                print(sorted(req4.get_header("Cookie").split("; ")))
+
+                print(email.message.Message().get_all("Set-Cookie", []) == [])
+                """));
 }

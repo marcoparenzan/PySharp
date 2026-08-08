@@ -22,6 +22,7 @@ public static class SysModule
         d["platform"] = OperatingSystem.IsWindows() ? "win32"
             : OperatingSystem.IsMacOS() ? "darwin" : "linux";
         d["maxsize"] = new BigInteger(long.MaxValue);
+        d["maxunicode"] = new BigInteger(0x10FFFF);
         d["argv"] = new PyList(interp.Argv.Select(x => (object)x));
         d["modules"] = importer.Modules;
         // A live PyList, not a snapshot: kept on the Importer too (PythonSysPath) so a script's

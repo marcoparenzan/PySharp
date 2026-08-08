@@ -1817,6 +1817,131 @@ Continuing straight past 4.1.4's `httpx` wall.
   `Set-Cookie` header parsing, plus a real `urllib.request.Request` base class), deliberately not
   started this round; the concrete next step for whoever picks this back up.
 
+### 4.1.6 — `import httpx` succeeds, `TestClient` gets close: a long chain of real gaps, ending at a genuine regex-engine Unicode limitation
+
+The author's go-ahead ("procedi pure") to keep chasing `httpx` past 4.1.5's wall. This round closed
+a long, varied chain of real gaps — stdlib modules, core interpreter/typing behavior, and PyPI
+dependency installs — reaching **`import httpx` succeeds** before hitting a genuinely deep new wall.
+
+- **`http.cookiejar`** (new `HttpCookiejarModule.cs`): real `Cookie` (generic `**kwargs` storage,
+  matching real CPython's own always-fully-keyworded construction) and real `CookieJar` — RFC 6265
+  §5.1.3/§5.1.4 domain-match/path-match (including real CPython's own extension: an empty cookie
+  domain matches every request host, since `str.endswith("")` is always true in real CPython's own
+  `domain_return_ok`), a real `Set-Cookie` response-header parser (`Domain=`/`Path=`/`Expires=`/
+  `Max-Age=`/`Secure`), `set_cookie`/iteration/`len`/`clear`/`extract_cookies(response, request)`/
+  `add_cookie_header(request)`. Deliberately scoped to the *interface* real httpx's `Cookies` class
+  drives, not CPython's internal architecture (no `CookiePolicy` object, no RFC 2965/2109 legacy
+  attributes) — the same "real observable behavior, not a byte-identical internal port" standard
+  `re` already uses. Found via real httpx's `_models.py` (`from http.cookiejar import Cookie,
+  CookieJar`).
+- **`urllib.request.Request`** (UrllibModule.cs): real `get_full_url`/`get_method`/`get_type`/
+  `get_host`/`get_origin_req_host`/`is_unverifiable`/`has_header`/`get_header`/`add_header`/
+  `add_unredirected_header`/`header_items` — scoped to exactly what `CookieJar`'s own
+  `add_cookie_header`/`extract_cookies` call (no proxy/redirect machinery). Found via real httpx's
+  `Cookies._CookieCompatRequest(urllib.request.Request)`.
+- **`email.message.Message.get_all`** (EmailModule.cs): didn't exist — needed by `CookieJar.
+  extract_cookies` to read every repeated `Set-Cookie` header, not just the first.
+- **`zlib`** (new `ZlibModule.cs`): real `compress`/`decompress`/`decompressobj`, backed by .NET's
+  own `ZLibStream`/`DeflateStream`/`GZipStream`. .NET's compression streams are pull-based, not
+  zlib's own push-based "feed a chunk, drain what's decodable so far" shape, so the incremental
+  `Decompress` object re-decompresses the full byte history accumulated so far on every call and
+  returns only the newly-available tail — correct for the common case (a handful of chunks), not a
+  literal port of zlib's internal streaming state machine. Two real bugs caught during manual
+  verification: separate `GetCharCount`+`GetChars` calls (the obvious-looking approach) corrupt a
+  multi-byte/partial-block sequence held over between calls — the *exact same bug class* as the
+  4.1.5 `codecs` fix, caught the same way, fixed the same way (`Decoder.Convert`, this time via
+  `Decoder.Convert`'s streaming-compression analogue: feeding the accumulated buffer through fresh
+  each time and diffing against what was already emitted). Found via real httpx's `_decoders.py`.
+- **Real enum member tuple-value unpacking + `int.__new__`** (Interp.cs `ConvertToEnum` /
+  `TryGetAttr`'s `PyBuiltinFunction` case): a member's value given as a tuple, combined with a
+  class-defined `__new__`, now unpacks the tuple as that `__new__`'s positional args (real CPython
+  semantics) — previously the raw tuple was stored as the member's `value`, so any later `int()`/
+  hash/comparison on the member raised `TypeError: enum value: expected int, got tuple`. Needed a
+  new `int.__new__(cls, value)` (constructing a real `PyInstance(cls)` for an arbitrary subclass,
+  not just a bare `int`) since the real pattern's own `__new__` body calls it directly. Found via
+  real httpx's own transitive dependency, `httpx._status_codes.codes(IntEnum)`
+  (`OK = 200, "OK"` + `def __new__(cls, value, phrase=""): obj = int.__new__(cls, value); ...`),
+  which the module ends with `for code in codes: setattr(codes, code._name_.lower(), int(code))` —
+  exactly the call pattern that surfaced the bug.
+- **Real `typing.TypedDict` subclass construction** (MiscModules.cs): `class Foo(TypedDict): ...;
+  Foo(a=1)` raised `TypeError: Foo() takes no arguments` — TypedDict is erased at runtime in real
+  CPython, so calling a TypedDict subclass must return a *plain dict*, never build an instance of
+  the subclass. Fixed with a `__new__` on the base `TypedDict` placeholder returning a `PyDict`
+  directly — `Interp.Instantiate` already implements the real CPython rule that `__init__` is
+  skipped when `__new__` returns something that isn't an instance of `cls` (added in an earlier
+  round for typing_extensions' backported `TypeVar`), so this needed no interpreter change at all.
+  Found via real starlette's own `testclient.py`: `class _AsyncBackend(TypedDict): ...`.
+- **Real functional-syntax `typing.NamedTuple`** (Interp.cs `ConvertToNamedTuple` made `internal`,
+  called from a new `__new__` on the `NamedTuple` placeholder in MiscModules.cs): `NamedTuple("Name",
+  [("field", type), ...])` (the functional form, not `class Foo(NamedTuple):`) raised the same
+  "takes no arguments" error — only the class-based syntax was wired up. Fixed by building a real
+  class with a synthetic `__annotations__` from the given field list and reusing the exact same
+  `ConvertToNamedTuple` the class-based syntax already uses. Found via real httpx's `_types.py`:
+  `RawURL = NamedTuple("RawURL", [("scheme", bytes), ("host", bytes), ("port", int)])`.
+- **`urllib.parse.parse_qs`** (UrllibModule.cs): didn't exist — built on top of the existing
+  `parse_qsl` helper, grouping repeated keys into lists. Found via idna/rfc3986 (httpx's own
+  transitive dependencies).
+- **`bisect`** (new `BisectModule.cs`): real `bisect_left`/`bisect_right`(`bisect`)/`insort_left`/
+  `insort_right`(`insort`) — direct ports of CPython's own `Lib/bisect.py` algorithm. Found via real
+  idna's `intranges.py`/`core.py`.
+- **`unicodedata`** (new `UnicodedataModule.cs`): `category()`/`normalize()` are real, backed by
+  .NET's own genuinely comprehensive Unicode Character Database (`CharUnicodeInfo`/
+  `string.Normalize`) — not approximations. `combining()`/`bidirectional()`/`name()` have no .NET
+  equivalent (the BCL doesn't expose canonical combining class, bidi category, or character names as
+  queryable per-character data) and are honestly scoped: correct for the ASCII range, a documented
+  simplification beyond it. Verified this doesn't silently break real idna's own bidi validation for
+  ASCII-only hostnames: idna's `check_bidi` short-circuits to `True` for any label containing no
+  RTL-category character (RFC 5893) — as long as ASCII never gets misclassified as RTL (it doesn't
+  here, by construction), ASCII-only hostnames validate correctly even without a full bidi-category
+  table; only genuine RTL-script (Hebrew/Arabic) domains would see a real functional gap. Found via
+  real idna's `core.py`.
+- **`netrc`** (new `NetrcModule.cs`): real `netrc`/`NetrcParseError` — a whitespace-tokenized parser
+  for the real `.netrc` file format, scoped to the common case (no `macdef` macro-body support).
+  Found via real httpx's `_utils.py`.
+- **A builtin function can now carry arbitrary extra attributes** (`PyBuiltinFunction.Attributes`,
+  a new `PyDict`, mirroring `PyFunction.Attributes`; wired into `Interp.SetAttr`/`TryGetAttr`): real
+  Python-level functions could already do this, but a PyBuiltinFunction (this interpreter's
+  implementation detail for some names that real CPython represents as plain functions) previously
+  raised `AttributeError: 'function' object has no settable attribute '__module__'`. Found via real
+  httpx's own `__init__.py`: `for __name in __all__: setattr(__locals[__name], "__module__",
+  "httpx")`.
+- **`sys.maxunicode`** (SysModule.cs): didn't exist — the trivial, well-known constant
+  `0x10FFFF`.
+- **PyPI dependencies installed** (unpinned, pure-Python, no version conflicts found): `idna`,
+  `sniffio`, `rfc3986`.
+- **A real version-compatibility wall, resolved by re-pinning, not by an interpreter change**: real
+  `starlette==0.27.0`'s `TestClient.__init__` calls `super().__init__(app=self.app, ...)` — the
+  `app=` convenience parameter on `httpx.Client`/`AsyncClient` that auto-wraps it into an ASGI
+  transport, present in older httpx but removed in modern releases. The initial unpinned
+  `httpx==0.28.1` install doesn't have it (`TypeError: _AsyncBackend() takes no arguments` — actually
+  a `TypedDict`-construction symptom that surfaced first, then after fixing *that*, the real `app=`
+  incompatibility appeared as `TypeError: __init__() got an unexpected keyword argument 'app'`).
+  Re-pinned to `httpx==0.23.3` (which still has `app=`), matching the same "pin to what the era's
+  other pinned packages actually expect" discipline as `fastapi==0.99.1`/`starlette==0.27.0`/
+  `pydantic==1.10.13`.
+- **`import httpx` succeeds.** Verified directly and repeatedly.
+- **The wall this round actually stopped at, found while constructing a real `TestClient` against a
+  real `FastAPI()` app**: real, unmodified `rfc3986` (an httpx transitive dependency) compiles a
+  large generated regex for RFC 3986 URI validation whose character classes include literal
+  supplementary-plane (astral) Unicode codepoints — real CPython's `re` engine operates on full
+  Unicode codepoints, but PySharp's `re` module is backed by .NET's
+  `System.Text.RegularExpressions`, which operates on UTF-16 *code units*. An astral codepoint
+  becomes a surrogate pair in .NET's UTF-16 string representation, and .NET's character-class range
+  syntax (`[X-Y]`) parses surrogate-pair-encoded range boundaries as individual UTF-16 code units
+  rather than full codepoints — producing `error: Invalid pattern ... [x-y] range in reverse order`
+  for a pattern that's completely valid, unremarkable Python `re` syntax. This is a genuine,
+  general-purpose regex-engine limitation (not scoped to rfc3986 or httpx at all — *any* real
+  pattern with an astral-plane character-class range would hit it), and fixing it properly needs
+  either a codepoint-aware preprocessing pass over character-class ranges before handing patterns to
+  .NET's engine, or a deeper change to the `re` module's matching strategy. Deliberately not
+  attempted this round — it's a substantial, separate investigation in its own right, not a quick
+  fix, and a well-justified stopping point after this round's already-long chain of real gaps.
+- 18 tests added: `M6_Stdlib/StdlibTests.cs` gained `EnumTupleValueTests` (2),
+  `TypedDictAndNamedTupleFunctionalTests` (2), `BuiltinFunctionAttributeTests` (1), `ZlibTests` (3),
+  `BisectTests` (2), `UnicodedataTests` (3), `NetrcTests` (2), `HttpCookiejarTests` (2), plus a
+  `Parse_qs_...` case added to `UrlSplitTests` (1). Full suite green throughout, confirmed stable
+  across repeated runs: 956/956 by the end of this round, up from 938 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

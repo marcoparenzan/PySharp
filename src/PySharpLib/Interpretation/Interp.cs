@@ -626,8 +626,10 @@ public sealed class Interp
         }
     }
 
-    /// <summary>Generates __init__/__repr__/__getitem__/__iter__/__len__ for a typing.NamedTuple.</summary>
-    private void ConvertToNamedTuple(PyClass cls)
+    /// <summary>Generates __init__/__repr__/__getitem__/__iter__/__len__ for a typing.NamedTuple.
+    /// Internal (not private): also called directly by MiscModules' functional-syntax
+    /// `NamedTuple("Name", [("field", type), ...])` support.</summary>
+    internal void ConvertToNamedTuple(PyClass cls)
     {
         if (!cls.Dict.TryGet("__annotations__", out var annObj) || annObj is not PyDict ann)
             return;
@@ -689,6 +691,11 @@ public sealed class Interp
     {
         var members = new PyDict();
         var nextAuto = BigInteger.One;
+        // Real CPython: `NAME = value_tuple` + a class-defined `__new__(cls, *args)` unpacks the
+        // tuple as that __new__'s positional args (e.g. httpx's real `codes(IntEnum)`:
+        // `OK = 200, "OK"` with `def __new__(cls, value, phrase=""): obj = int.__new__(cls, value);
+        // obj.phrase = phrase; return obj`) — found via real httpx's `_status_codes.py`.
+        bool hasCustomNew = cls.Dict.TryGet("__new__", out var customNew) && customNew is PyFunction;
         foreach (var key in cls.Dict.Keys.OfType<string>().ToList())
         {
             if (key.StartsWith("__", StringComparison.Ordinal))
@@ -699,14 +706,27 @@ public sealed class Interp
 
             if (value is PyInstance autoInst && autoInst.Class.Name == "auto")
                 value = nextAuto;
-            if (value is BigInteger bi)
+
+            PyInstance member;
+            object resolvedValue;
+            if (hasCustomNew && value is PyTuple tup)
+            {
+                member = (PyInstance)Call(customNew!, new object[] { cls }.Concat(tup.Items).ToArray());
+                resolvedValue = member.Dict.TryGet("_value_", out var v) ? v : value;
+            }
+            else
+            {
+                member = new PyInstance(cls);
+                resolvedValue = value;
+            }
+
+            if (resolvedValue is BigInteger bi)
                 nextAuto = bi + 1;
 
-            var member = new PyInstance(cls);
             member.Dict["name"] = key;
             member.Dict["_name_"] = key;
-            member.Dict["value"] = value;
-            member.Dict["_value_"] = value;
+            member.Dict["value"] = resolvedValue;
+            member.Dict["_value_"] = resolvedValue;
             cls.Dict[key] = member;
             members[key] = member;
         }
@@ -2678,6 +2698,11 @@ public sealed class Interp
                 return false;
 
             case PyBuiltinFunction bfn:
+                if (bfn.Attributes.TryGet(name, out var bfnAttr))
+                {
+                    value = bfnAttr;
+                    return true;
+                }
                 switch (name)
                 {
                     case "__name__" or "__qualname__":
@@ -2692,6 +2717,25 @@ public sealed class Interp
                     // (_utils.py), reached for a bound method (e.g. the default 404 handler).
                     case "__call__":
                         value = obj;
+                        return true;
+                    // `int.__new__(cls, value)`: real CPython's IntEnum-with-mixed-in-tuple-value
+                    // pattern (`OK = 200, "OK"` + a custom `__new__(cls, value, phrase="")` that does
+                    // `obj = int.__new__(cls, value)`) needs this to actually construct the member —
+                    // found via real httpx's own `_status_codes.py`. Scoped to `int` only (nothing
+                    // reachable does this for str/float/etc. yet).
+                    case "__new__" when bfn.Name == "int":
+                        value = new PyBuiltinFunction("int.__new__", (interp, a, kwargs) =>
+                        {
+                            var targetCls = a.Length > 0 ? a[0] as PyClass : null;
+                            var ctorArgs = a.Skip(1).ToArray();
+                            object raw = interp.Call(bfn, ctorArgs, kwargs);
+                            if (targetCls is null)
+                                return raw;
+                            var inst = new PyInstance(targetCls);
+                            inst.Dict["value"] = raw;
+                            inst.Dict["_value_"] = raw;
+                            return inst;
+                        });
                         return true;
                 }
                 // other attributes (e.g. builtin type methods like str.upper): normal path
@@ -2967,6 +3011,9 @@ public sealed class Interp
                 return;
             case PyFunction fn:
                 fn.Attributes[name] = value;
+                return;
+            case PyBuiltinFunction bfn:
+                bfn.Attributes[name] = value;
                 return;
             case ClrObject clr:
                 if (!ClrBinder.TrySetMember(clr.Instance, clr.Type, name, value, isStatic: false))

@@ -19,18 +19,150 @@ public static class UrllibModule
         return urllib;
     }
 
-    /// <summary>urllib.request: getproxies (a stub — just what paho needs) plus a real
-    /// `parse_http_list` (RFC 2616 §4.2/§14.45 comma-separated header-value-list parsing, respecting
-    /// quoted commas) — found via real httpx's `_auth.py` (`from urllib.request import
-    /// parse_http_list`), used to split a `WWW-Authenticate`-style header into its comma-separated
-    /// auth-challenge fields.</summary>
+    /// <summary>urllib.request: getproxies (a stub — just what paho needs), a real `parse_http_list`
+    /// (RFC 2616 §4.2/§14.45 comma-separated header-value-list parsing, respecting quoted commas) —
+    /// found via real httpx's `_auth.py` (`from urllib.request import parse_http_list`), used to
+    /// split a `WWW-Authenticate`-style header into its comma-separated auth-challenge fields — and a
+    /// real `Request` (found via real httpx's `_models.py`'s `Cookies._CookieCompatRequest`, which
+    /// subclasses it to give `http.cookiejar.CookieJar` the interface it expects).</summary>
     public static PyModule CreateRequest()
     {
         var m = new PyModule("urllib.request");
         m.Dict["getproxies"] = new PyBuiltinFunction("getproxies", (_, _, _) => new PyDict());
         m.Dict["parse_http_list"] = new PyBuiltinFunction("parse_http_list", (_, a, _) =>
             new PyList(ParseHttpList((string)a[0]).Cast<object>().ToList()));
+        m.Dict["Request"] = RequestClass;
         return m;
+    }
+
+    public static readonly PyClass RequestClass = BuildRequestClass();
+
+    private static object Arg(object[] a, Dictionary<string, object>? kwargs, string name, int pos, object def)
+        => pos < a.Length ? a[pos] : kwargs is not null && kwargs.TryGetValue(name, out var v) ? v : def;
+
+    private static bool DictTryGetCI(PyDict d, string name, out object value)
+    {
+        foreach (var e in d.Entries)
+        {
+            if (e.Key is string k && string.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = e.Value;
+                return true;
+            }
+        }
+        value = PyNone.Instance;
+        return false;
+    }
+
+    /// <summary>Real (not stubbed) urllib.request.Request — scoped to the interface
+    /// http.cookiejar.CookieJar's add_cookie_header/extract_cookies actually calls (get_full_url,
+    /// get_method, get_type, get_host, get_origin_req_host, is_unverifiable, has_header, get_header,
+    /// add_header, add_unredirected_header, header_items), not the full real class (no proxy/redirect
+    /// machinery — nothing reachable here uses it).</summary>
+    private static PyClass BuildRequestClass()
+    {
+        var cls = new PyClass("Request", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"Request.{n}", fn);
+
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            object urlArg = Arg(a, kwargs, "url", 1, PyNone.Instance);
+            if (urlArg is PyNone)
+                throw PyErr.TypeError("Request() missing required argument: 'url'");
+            string url = (string)urlArg;
+            object data = Arg(a, kwargs, "data", 2, PyNone.Instance);
+            object headersObj = Arg(a, kwargs, "headers", 3, PyNone.Instance);
+            object origin = Arg(a, kwargs, "origin_req_host", 4, PyNone.Instance);
+            object unverifiable = Arg(a, kwargs, "unverifiable", 5, false);
+            object method = Arg(a, kwargs, "method", 6, PyNone.Instance);
+
+            var (scheme, netloc, _, _, _) = SplitUrl(url, true);
+
+            inst.Dict["full_url"] = url;
+            inst.Dict["type"] = scheme;
+            inst.Dict["host"] = netloc;
+            var hdrs = new PyDict();
+            if (headersObj is PyDict hd)
+                foreach (var e in hd.Entries)
+                    hdrs[e.Key] = e.Value;
+            inst.Dict["headers"] = hdrs;
+            inst.Dict["unredirected_hdrs"] = new PyDict();
+            inst.Dict["origin_req_host"] = origin is PyNone ? netloc : origin;
+            inst.Dict["unverifiable"] = unverifiable;
+            inst.Dict["data"] = data;
+            inst.Dict["method"] = method is PyNone ? (data is PyNone ? "GET" : "POST") : method;
+            return PyNone.Instance;
+        });
+
+        Add("get_full_url", (_, a, _) => ((PyInstance)a[0]).Dict["full_url"]);
+        Add("get_method", (_, a, _) => ((PyInstance)a[0]).Dict["method"]);
+        Add("get_type", (_, a, _) => ((PyInstance)a[0]).Dict["type"]);
+        Add("get_host", (_, a, _) => ((PyInstance)a[0]).Dict["host"]);
+        Add("get_origin_req_host", (_, a, _) => ((PyInstance)a[0]).Dict["origin_req_host"]);
+        Add("is_unverifiable", (_, a, _) => ((PyInstance)a[0]).Dict["unverifiable"]);
+
+        Add("has_header", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string name = (string)a[1];
+            return DictTryGetCI((PyDict)inst.Dict["headers"], name, out _)
+                || DictTryGetCI((PyDict)inst.Dict["unredirected_hdrs"], name, out _);
+        });
+
+        Add("get_header", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string name = (string)a[1];
+            object def = a.Length > 2 ? a[2] : PyNone.Instance;
+            if (DictTryGetCI((PyDict)inst.Dict["headers"], name, out var v1))
+                return v1;
+            return DictTryGetCI((PyDict)inst.Dict["unredirected_hdrs"], name, out var v2) ? v2 : def;
+        });
+
+        Add("add_header", (_, a, _) =>
+        {
+            ((PyDict)((PyInstance)a[0]).Dict["headers"])[a[1]] = a[2];
+            return PyNone.Instance;
+        });
+
+        Add("add_unredirected_header", (_, a, _) =>
+        {
+            ((PyDict)((PyInstance)a[0]).Dict["unredirected_hdrs"])[a[1]] = a[2];
+            return PyNone.Instance;
+        });
+
+        Add("header_items", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var items = new List<object>();
+            foreach (var e in ((PyDict)inst.Dict["headers"]).Entries)
+                items.Add(new PyTuple(new object[] { e.Key, e.Value }));
+            foreach (var e in ((PyDict)inst.Dict["unredirected_hdrs"]).Entries)
+                items.Add(new PyTuple(new object[] { e.Key, e.Value }));
+            return new PyList(items);
+        });
+
+        return cls;
+    }
+
+    private static List<(string Key, string Value)> ParseQsl(string qs, bool keepBlank)
+    {
+        var result = new List<(string, string)>();
+        foreach (var pair in qs.Split('&', ';'))
+        {
+            if (pair.Length == 0)
+                continue;
+            int eq = pair.IndexOf('=');
+            string key = eq >= 0 ? pair[..eq] : pair;
+            string value = eq >= 0 ? pair[(eq + 1)..] : "";
+            if (eq < 0 && !keepBlank)
+                continue;
+            if (value.Length == 0 && !keepBlank && eq >= 0)
+                continue;
+            result.Add((Unquote(key.Replace('+', ' ')), Unquote(value.Replace('+', ' '))));
+        }
+        return result;
     }
 
     /// <summary>Direct port of CPython's own urllib.request.parse_http_list.</summary>
@@ -177,21 +309,23 @@ public static class UrllibModule
         {
             string qs = (string)a[0];
             bool keepBlank = kwargs is not null && kwargs.TryGetValue("keep_blank_values", out var kb) && PyOps.Truthy(interp, kb);
-            var result = new List<object>();
-            foreach (var pair in qs.Split('&', ';'))
+            var pairs = ParseQsl(qs, keepBlank);
+            return new PyList(pairs.Select(p => (object)new PyTuple(new object[] { p.Key, p.Value })).ToList());
+        });
+
+        d["parse_qs"] = new PyBuiltinFunction("parse_qs", (interp, a, kwargs) =>
+        {
+            string qs = (string)a[0];
+            bool keepBlank = kwargs is not null && kwargs.TryGetValue("keep_blank_values", out var kb) && PyOps.Truthy(interp, kb);
+            var dict = new PyDict();
+            foreach (var (key, value) in ParseQsl(qs, keepBlank))
             {
-                if (pair.Length == 0)
-                    continue;
-                int eq = pair.IndexOf('=');
-                string key = eq >= 0 ? pair[..eq] : pair;
-                string value = eq >= 0 ? pair[(eq + 1)..] : "";
-                if (eq < 0 && !keepBlank)
-                    continue;
-                if (value.Length == 0 && !keepBlank && eq >= 0)
-                    continue;
-                result.Add(new PyTuple(new object[] { Unquote(key.Replace('+', ' ')), Unquote(value.Replace('+', ' ')) }));
+                if (dict.TryGet(key, out var existing) && existing is PyList list)
+                    list.Items.Add(value);
+                else
+                    dict[key] = new PyList(new List<object> { value });
             }
-            return new PyList(result);
+            return dict;
         });
 
         return m;
@@ -202,7 +336,7 @@ public static class UrllibModule
     /// (no RFC-3986 percent-encoded-scheme edge cases, no scheme-specific netloc allowlist). Found
     /// via starlette's real `urlsplit`/`SplitResult` usage (datastructures.URL). See
     /// FASTAPI_PLAN.md.</summary>
-    private static (string Scheme, string Netloc, string Path, string Query, string Fragment) SplitUrl(string url, bool allowFragments)
+    internal static (string Scheme, string Netloc, string Path, string Query, string Fragment) SplitUrl(string url, bool allowFragments)
     {
         string scheme = "", netloc = "", query = "", fragment = "";
 

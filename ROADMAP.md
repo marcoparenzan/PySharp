@@ -394,15 +394,30 @@ in scenario 1).
   `PyEventLoop._running`'s deliberately process-wide static — fixed by tagging both, confirmed via
   36 consecutive clean full-suite runs afterward (24 under deliberately heavy concurrent CPU
   contention against the still-broken baseline, which failed nearly every time under the same load).
-  **Current frontier**: `httpx` itself needs `http.cookiejar` (real `Cookie`/`CookieJar`,
-  RFC-6265-style domain/path matching) and a real `urllib.request.Request`, neither started. Phase
-  4.2 (a real target sample app) not started. 6/7/8 to do; native cross-cutting partial.
-- Stdlib modules: **~60 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
+  **`import httpx` now succeeds** — real `http.cookiejar` (Cookie/CookieJar, RFC 6265-style
+  domain/path matching, real Set-Cookie parsing), real `urllib.request.Request`, real `zlib`
+  (compress/decompress/decompressobj over .NET's own compression streams), real enum member
+  tuple-value unpacking via a class-defined `__new__` (plus a new `int.__new__(cls, value)`), real
+  `typing.TypedDict` subclass construction (returns a plain dict, matching real CPython's runtime
+  erasure) and real functional-syntax `typing.NamedTuple`, `urllib.parse.parse_qs`, `bisect`,
+  `unicodedata` (category/normalize fully real via .NET's own UCD; combining/bidirectional/name
+  honestly scoped to ASCII), `netrc`, arbitrary attributes on builtin functions
+  (`PyBuiltinFunction.Attributes`), and `sys.maxunicode` — plus 3 PyPI installs (`idna`, `sniffio`,
+  `rfc3986`) and a real version-pin fix (`httpx==0.23.3`, since `starlette==0.27.0`'s `TestClient`
+  needs the old `Client(app=...)` convenience param modern httpx removed). **Current frontier**: a
+  genuine .NET-regex-engine limitation — real `rfc3986`'s validation regex uses character-class
+  ranges spanning astral-plane Unicode codepoints, which .NET's `System.Text.RegularExpressions`
+  parses as UTF-16 code-unit ranges (via surrogate pairs) rather than full codepoints, producing
+  `[x-y] range in reverse order` for ordinary, valid `re` syntax — a general limitation, not scoped
+  to this one package, needing either codepoint-aware preprocessing of character-class ranges or a
+  deeper `re` engine change. Phase 4.2 (a real target sample app) not started. 6/7/8 to do; native
+  cross-cutting partial.
+- Stdlib modules: **~65 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
-  `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`, `html`, `traceback`, `mimetypes`,
-  `secrets`, `array`, `queue`, `codecs`; `typing`/`dataclasses` upgraded from stubs to real
-  implementations).
+  `subprocess`, `tempfile`, `http`, `http.cookies`, `http.cookiejar`, `email.utils`, `html`,
+  `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `codecs`, `zlib`, `bisect`, `unicodedata`,
+  `netrc`; `typing`/`dataclasses` upgraded from stubs to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅ (incl. real
@@ -496,7 +511,28 @@ in scenario 1).
   `PyEventLoop._running`'s deliberately process-wide static; confirmed pre-existing (not introduced
   by this round) via an isolated baseline-commit worktree that failed 13/15 runs under the same
   load; fixed by tagging both, confirmed via 36 consecutive clean full-suite runs afterward.
-- Tests: **938 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  **`import httpx` now succeeds** too: real `http.cookiejar` ✅ (`Cookie`/`CookieJar`, RFC
+  6265-style domain/path matching, a real Set-Cookie parser); real `urllib.request.Request` ✅
+  (scoped to what `CookieJar` itself drives); real `zlib` ✅ (compress/decompress/decompressobj,
+  backed by .NET's own compression streams — the same GetCharCount+GetChars-vs-Convert incremental-
+  state bug class as `codecs` caught again, fixed again); real enum tuple-value member unpacking ✅
+  via a class-defined `__new__` (plus a new `int.__new__(cls, value)`, found via
+  `httpx._status_codes.codes(IntEnum)`); real `typing.TypedDict` subclass construction ✅ (returns a
+  plain dict — real runtime erasure) and real functional-syntax `typing.NamedTuple` ✅
+  (`NamedTuple("Name", [...])`, not just the class-based form); `urllib.parse.parse_qs` ✅; real
+  `bisect` ✅ (CPython's own algorithm, ported); real `unicodedata` ✅ (category/normalize fully
+  real via .NET's own Unicode Character Database; combining/bidirectional/name honestly scoped to
+  ASCII — verified this doesn't break real idna's own bidi validation for ASCII-only hostnames);
+  real `netrc` ✅; a builtin function can now carry arbitrary extra attributes ✅
+  (`PyBuiltinFunction.Attributes`, matching real Python-level functions); `sys.maxunicode` ✅. Plus
+  3 PyPI installs (`idna`, `sniffio`, `rfc3986`) and a real version-pin fix
+  (`httpx==0.23.3`, since `starlette==0.27.0`'s `TestClient` needs the `Client(app=...)`
+  convenience param modern httpx removed). **New frontier**: a genuine .NET-regex-engine limitation
+  — real `rfc3986`'s validation regex has character-class ranges spanning astral-plane Unicode
+  codepoints, which .NET's regex engine parses as UTF-16 code-unit ranges (surrogate pairs) rather
+  than full codepoints, producing a spurious "range in reverse order" error for ordinary, valid `re`
+  syntax — a general limitation worth its own dedicated round, not a quick fix.
+- Tests: **956 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

@@ -43,6 +43,10 @@ public static class StdlibModules
         importer.RegisterBuiltin("base64", _ => CryptoModules.CreateBase64());
         importer.RegisterBuiltin("binascii", _ => BinasciiModule.Create());
         importer.RegisterBuiltin("codecs", _ => CodecsModule.Create());
+        importer.RegisterBuiltin("zlib", _ => ZlibModule.Create());
+        importer.RegisterBuiltin("bisect", _ => BisectModule.Create());
+        importer.RegisterBuiltin("unicodedata", _ => UnicodedataModule.Create());
+        importer.RegisterBuiltin("netrc", _ => NetrcModule.Create());
         importer.RegisterBuiltin("urllib", _ => UrllibModule.Create());
         importer.RegisterBuiltin("urllib.parse", _ => UrllibModule.CreateParse());
         importer.RegisterBuiltin("urllib.request", _ => UrllibModule.CreateRequest());
@@ -79,6 +83,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("http", interp => HttpModule.Create(interp));
         importer.RegisterBuiltin("http.client", _ => HttpModule.CreateClient());
         importer.RegisterBuiltin("http.cookies", interp => CookiesModule.Create(interp));
+        importer.RegisterBuiltin("http.cookiejar", _ => HttpCookiejarModule.Create());
         importer.RegisterBuiltin("html", _ => HtmlModule.Create());
         importer.RegisterBuiltin("traceback", interp => TracebackModule.Create(interp));
         importer.RegisterBuiltin("email", _ => EmailModule.Create());

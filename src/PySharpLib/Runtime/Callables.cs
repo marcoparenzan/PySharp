@@ -16,6 +16,12 @@ public sealed class PyBuiltinFunction
     public string Name { get; }
     public BuiltinFn Fn { get; }
 
+    /// <summary>Attributes assigned to the function (e.g. `setattr(fn, "__module__", "httpx")`,
+    /// found via real httpx's own `__init__.py` doing exactly that to every `__all__` export —
+    /// including names that resolve to a PyBuiltinFunction in this interpreter even though real
+    /// CPython's equivalent is a plain Python-level function). Mirrors PyFunction.Attributes.</summary>
+    public PyDict Attributes { get; } = new();
+
     public PyBuiltinFunction(string name, BuiltinFn fn)
     {
         Name = name;

@@ -138,6 +138,18 @@ public static class EmailModule
             return TryGetHeader((PyInstance)a[0], (string)a[1], out var v) ? v : def;
         });
 
+        Add("get_all", (_, a, _) =>
+        {
+            string name = (string)a[1];
+            object def = a.Length > 2 ? a[2] : PyNone.Instance;
+            var values = Headers((PyInstance)a[0]).Items
+                .Select(item => (PyTuple)item)
+                .Where(t => string.Equals((string)t.Items[0], name, StringComparison.OrdinalIgnoreCase))
+                .Select(t => t.Items[1])
+                .ToList();
+            return values.Count > 0 ? new PyList(values) : def;
+        });
+
         Add("get_content_type", (_, a, _) =>
         {
             var inst = (PyInstance)a[0];

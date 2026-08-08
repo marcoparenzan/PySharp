@@ -169,6 +169,47 @@ public static class MiscModules
         {
             d[name] = new PyClass(name, new List<PyClass>());
         }
+        // Real functional-syntax typing.NamedTuple: `RawURL = NamedTuple("RawURL", [("scheme",
+        // str), ("host", str)])` builds and returns a real class (reusing the exact same
+        // __init__/__repr__/__getitem__/etc. generation the class-based `class Foo(NamedTuple):`
+        // syntax already gets via Interp.ConvertToNamedTuple) — found via real httpx's `_types.py`
+        // (`RawURL = NamedTuple("RawURL", [...])`).
+        ((PyClass)d["NamedTuple"]).Dict["__new__"] = new PyBuiltinFunction("NamedTuple.__new__", (i, a, _) =>
+        {
+            string typename = (string)a[1];
+            var ann = new PyDict();
+            if (a.Length > 2)
+                foreach (var item in PyOps.Iterate(i, a[2]))
+                {
+                    var pair = PyOps.Iterate(i, item).ToList();
+                    ann[(string)pair[0]] = pair.Count > 1 ? pair[1] : PyNone.Instance;
+                }
+            var newCls = new PyClass(typename, new List<PyClass>());
+            newCls.Dict["__annotations__"] = ann;
+            i.ConvertToNamedTuple(newCls);
+            return newCls;
+        });
+
+        // Real TypedDict instantiation: `class Foo(TypedDict): ...; Foo(a=1, b=2)` must return a
+        // plain dict `{"a": 1, "b": 2}` in real CPython — TypedDict is erased at runtime, purely a
+        // type-checking construct, so calling a TypedDict subclass never actually builds an
+        // instance of it. A __new__ returning something that isn't an instance of cls skips
+        // __init__ entirely (Interp.Instantiate already implements that real CPython rule — used
+        // elsewhere for typing_extensions' backported TypeVar). Found via real starlette's
+        // testclient.py: `class _AsyncBackend(TypedDict): ...` then
+        // `self.async_backend = _AsyncBackend(backend=backend, backend_options=...)`.
+        ((PyClass)d["TypedDict"]).Dict["__new__"] = new PyBuiltinFunction("TypedDict.__new__", (_, a, kwargs) =>
+        {
+            var dict = new PyDict();
+            if (a.Length > 1 && a[1] is PyDict src)
+                foreach (var e in src.Entries)
+                    dict[e.Key] = e.Value;
+            if (kwargs is not null)
+                foreach (var kv in kwargs)
+                    dict[kv.Key] = kv.Value;
+            return dict;
+        });
+
         // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a
         // bare placeholder, so isinstance(List[int], typing._GenericAlias) is correct too.
         d["_GenericAlias"] = GenericAliasModule.GenericAliasClass;
