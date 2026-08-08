@@ -1743,6 +1743,80 @@ registering routes — the next frontier flagged at the end of 4.1.3.
   stable across 6 repeated full-suite runs this round: 932/932 by the end of it, up from 928 at the
   start.
 
+### 4.1.5 — `httpx` install, real async comprehensions (a genuine language-feature gap), `codecs`, `urllib.request.parse_http_list`, and a real pre-existing flaky-suite bug root-caused
+
+Continuing straight past 4.1.4's `httpx` wall.
+
+- **`httpx==0.28.1` installed** (real PyPI, unpinned — no pydantic/starlette version coupling here).
+  `import httpx` immediately hit two real gaps in sequence.
+- **PEP 530 async comprehensions (`[x async for x in y]`) didn't parse at all** — a genuine
+  language-feature gap, not a stdlib gap: `ParseCompFors` (Parser.cs) only ever recognized a bare
+  `for` token, and every comprehension-start check site (list/set/dict literals, a generator
+  expression as a call's sole argument) only tested for `Cur.Is(Keyword, "for")`, so `async` there
+  fell through to plain-list-literal parsing and blew up on the unexpected `async` token. Found via
+  real httpx's own `_models.py` (`self._content = b"".join([part async for part in self.stream])`).
+  Fixed by adding `CompFor.IsAsync` (Ast.cs), a shared `AtCompForStart()` predicate consulted at all
+  5 comprehension-start sites, and reusing `ExecAsyncFor`'s existing `__aiter__`/`__anext__`/
+  `StopAsyncIteration` handshake in a new `Interp.IterateAsync` helper, called from `RunCompFors`
+  when the clause is async. No new threading needed: comprehensions are plain C# `yield`-based
+  iterators (not PySharp's own dedicated-thread `PyGenerator`), so they run inline on whatever
+  thread the enclosing coroutine's body is already executing on — `Await()` already knows how to
+  suspend/resume there. Verified manually against real CPython semantics (iteration, an `if` clause,
+  nesting inside `sum()`/`"".join()`) before trusting it.
+- **`urllib.request.parse_http_list` didn't exist** — `ImportError`, found via real httpx's
+  `_auth.py` (`from urllib.request import parse_http_list`, used to split a `WWW-Authenticate`-style
+  header into its comma-separated auth-challenge fields). Direct port of CPython's own algorithm
+  (RFC 2616 §4.2/§14.45: split on commas, but not commas inside a quoted string, including a
+  backslash-escaped quote). Verified against 3 hand-traced cases (plain list, a quoted value
+  containing a comma, nested escaped quotes) before trusting it.
+- **`codecs` module didn't exist at all** — `ModuleNotFoundError`, found via real httpx's
+  `_models.py` (`codecs.lookup(encoding)`, validating a response's charset) and `_decoders.py`'s
+  `TextDecoder` (`codecs.getincrementaldecoder(encoding)(errors="replace")`, incrementally decoding
+  a streamed HTTP response body). Implemented for real, backed by .NET's own `Decoder` — "real"
+  because .NET's `Decoder` already correctly buffers a multi-byte sequence split across chunk
+  boundaries, which is exactly what "incremental" means here. Two real bugs were caught during
+  manual verification (no local Python interpreter is available in this environment, so behavior
+  was hand-derived and cross-checked): (1) calling `Decoder.GetCharCount` then `Decoder.GetChars`
+  separately — the obvious-looking approach — double-processes any multi-byte sequence held over
+  from a prior call, silently corrupting it; switched to `Decoder.Convert`, the API .NET actually
+  documents as safe for incremental/streaming use; (2) `errors="strict"/"replace"/"ignore"` map
+  cleanly onto .NET's `DecoderFallback.ExceptionFallback`/`DecoderReplacementFallback("�")`/
+  `DecoderReplacementFallback("")` respectively, built against the already-resolved base encoding's
+  `CodePage` (reusing `StrModules.GetEncoding`, not a second alias table).
+- **A real, reproduced, pre-existing intermittent full-suite hang — root-caused, not a bug in any
+  of the above.** Running the suite repeatedly (this project's standing discipline after 4.1.3's
+  `GenericPlaceholder` bug) turned up an intermittent hang again. VSTest's
+  `--blame-hang-dump-type full` caught it directly: the in-flight test was
+  `AsyncioAdditionsTests.Task_is_a_real_importable_class_and_is_also_a_Future` — a test that predates
+  this round entirely. Grepping every `asyncio.run`-calling test class turned up exactly two missing
+  `[Collection("asyncio-run")]` tags: `AsyncioAdditionsTests` (`M6_Stdlib/StdlibTests.cs`) and
+  `AsgiServerSampleTests` (`M16_FastApi/AsgiServerSampleTests.cs`) — every other such class already
+  has the tag. `PyEventLoop._running` (Runtime/Async.cs) is a deliberately process-wide, not
+  thread-local, static (a coroutine body runs on its own dedicated OS thread but must still see
+  which loop is driving it), so any two tests that each drive their own event loop race on it unless
+  xUnit is told never to run them concurrently — exactly what the `"asyncio-run"` collection exists
+  to guarantee, and these two classes had silently fallen outside it. **Confirmed pre-existing, not
+  introduced by this round's changes**, by building an isolated git worktree at the prior commit
+  (before this round's async-comprehension/codecs work) and running its suite repeatedly: 13
+  failures and 2 hangs across 15 runs, an even higher rate than newly observed here — this round's
+  extra async-heavy tests just made the already-broken race easier to hit, they didn't create it.
+  Fixed by adding the two missing tags. **Confirmed fixed**: 36 consecutive clean full-suite runs
+  afterward (24 of them run concurrently against the still-broken baseline worktree under heavy CPU
+  contention — deliberately worse conditions than normal — plus 12 more sequential runs with no
+  contention), 0 failures, 0 hangs, versus the baseline's near-100% failure rate under the same
+  concurrent load.
+- 6 tests added: new `M10_Async/AsyncComprehensionTests.cs` (2, `[Collection("asyncio-run")]`);
+  `M6_Stdlib/StdlibTests.cs` gained `CodecsTests` (3) and a `Parse_http_list_...` case added to
+  `UrlSplitTests` (1). The flaky-suite fix itself added no new tests — the existing tests in
+  `AsyncioAdditionsTests`/`AsgiServerSampleTests` already exercised the buggy path; the fix is to
+  how they're scheduled, not what they assert. Full suite green throughout, confirmed stable per
+  the 36-consecutive-clean-run count above: 938/938 by the end of this round, up from 932 at the
+  start.
+- **`httpx` itself still doesn't fully import past this round** — genuinely large scope left
+  (`http.cookiejar`: real `Cookie`/`CookieJar` with RFC 6265-style domain/path matching and
+  `Set-Cookie` header parsing, plus a real `urllib.request.Request` base class), deliberately not
+  started this round; the concrete next step for whoever picks this back up.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

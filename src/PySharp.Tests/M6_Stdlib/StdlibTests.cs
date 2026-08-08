@@ -1212,6 +1212,65 @@ public class UrlSplitTests
                 for base, url in cases:
                     print(urljoin(base, url))
                 """));
+
+    [Fact]
+    public void Parse_http_list_splits_on_commas_respecting_quoted_strings()
+        // Regression: urllib.request.parse_http_list didn't exist at all — found via real httpx's
+        // _auth.py (`from urllib.request import parse_http_list`), used to split a WWW-Authenticate-
+        // style header into its comma-separated auth-challenge fields. Direct port of CPython's own
+        // algorithm (RFC 2616 §4.2/§14.45): a comma inside a quoted string (including one escaped
+        // with a backslash) doesn't split the list.
+        => Assert.Equal("['a', 'b', 'c']\n['a=\"b,c\"', 'd']", Run("""
+            from urllib.request import parse_http_list
+            print(parse_http_list('a, b, c'))
+            print(parse_http_list('a="b,c", d'))
+            """));
+}
+
+/// <summary>codecs: real `lookup`/`getincrementaldecoder`, backed by .NET's own `Decoder` — found via
+/// real httpx's `_models.py` (`codecs.lookup`) and `_decoders.py`'s `TextDecoder`
+/// (`codecs.getincrementaldecoder(encoding)(errors="replace")`, used to decode a streamed HTTP
+/// response body). See FASTAPI_PLAN.md.</summary>
+public class CodecsTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Lookup_resolves_a_known_encoding_and_raises_LookupError_for_an_unknown_one()
+        => Assert.Equal("utf-8\nLookupError: unknown encoding: no-such-encoding", Run("""
+            import codecs
+            print(codecs.lookup("utf-8").name)
+            try:
+                codecs.lookup("no-such-encoding")
+            except LookupError as e:
+                print("LookupError:", e)
+            """));
+
+    [Fact]
+    public void Incremental_decoder_correctly_buffers_a_multibyte_sequence_split_across_calls()
+        // Regression: an earlier implementation called Decoder.GetCharCount then Decoder.GetChars
+        // separately, which double-processes any multi-byte sequence a stateful .NET Decoder is
+        // holding over from a prior call — verified wrong by hand (a UTF-8 sequence split across two
+        // decode() calls came back as U+FFFD instead of the real character) before switching to
+        // Decoder.Convert, the API .NET documents as safe for incremental/streaming use.
+        => Assert.Equal("caf\nTrue", Run("""
+            import codecs
+            dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            part1 = dec.decode(b"caf" + bytes([0xC3]))
+            part2 = dec.decode(bytes([0xA9]) + b"!", True)
+            print(part1)
+            print(part1 + part2 == "caf" + chr(0xE9) + "!")
+            """));
+
+    [Fact]
+    public void Incremental_decoder_replaces_invalid_bytes_when_errors_is_replace()
+        => Assert.Equal("4\nTrue", Run("""
+            import codecs
+            dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            out = dec.decode(bytes([0xFF, 0xFE]) + b"ok", True)
+            print(len(out))
+            print(out == chr(0xFFFD) + chr(0xFFFD) + "ok")
+            """));
 }
 
 /// <summary>contextvars: real get/set/reset/Context/copy_context — scoped to a single current value
@@ -2599,7 +2658,16 @@ public class QueueModuleTests
 /// isinstance(task, Future) fix it uncovered — Task genuinely IS-A Future in real CPython, but the
 /// flat type-name comparison used for builtin-name isinstance checks couldn't see through PyTask's
 /// real C# inheritance from PyFuture on its own). All found via anyio's real dependency chain
-/// (_backends/_asyncio.py), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+/// (_backends/_asyncio.py), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.
+/// <c>[Collection("asyncio-run")]</c>: PyEventLoop._running is a process-wide (not thread-local)
+/// static — see Runtime/Async.cs's own doc comment on why — so any two tests that each drive their
+/// own event loop must never run concurrently with each other. This class was missing the tag
+/// (found by hand-deriving it from a real, reproduced intermittent full-suite hang: VSTest's
+/// --blame-hang-dump-type full caught this exact class's Task_is_a_real_importable_class_and_
+/// is_also_a_Future mid-flight when the suite hung, and it's the only asyncio.run-calling class in
+/// this file without the tag) — every other asyncio.run call site in the test suite already has
+/// it.</summary>
+[Collection("asyncio-run")]
 public class AsyncioAdditionsTests
 {
     private static string Run(string body) => Py.Run(body).TrimEnd('\n');

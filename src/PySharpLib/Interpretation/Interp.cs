@@ -1519,7 +1519,8 @@ public sealed class Interp
             yield break;
         }
         var f = fors[index];
-        foreach (var item in PyOps.Iterate(this, Eval(f.Iter, compEnv)))
+        var items = f.IsAsync ? IterateAsync(Eval(f.Iter, compEnv)) : PyOps.Iterate(this, Eval(f.Iter, compEnv));
+        foreach (var item in items)
         {
             AssignTo(f.Target, item, compEnv);
             if (f.Ifs.All(cond => PyOps.Truthy(this, Eval(cond, compEnv))))
@@ -1527,6 +1528,31 @@ public sealed class Interp
                 foreach (var x in RunCompFors(fors, index + 1, compEnv))
                     yield return x;
             }
+        }
+    }
+
+    /// <summary>Real `async for` iteration (PEP 530 async comprehensions: `[x async for x in y]`) —
+    /// mirrors ExecAsyncFor's own __aiter__/__anext__/StopAsyncIteration handshake, reused here so a
+    /// comprehension's `async for` clause behaves identically to a real `async for` statement. Found
+    /// via real httpx's own `_models.py` (`b"".join([part async for part in self.stream])`).</summary>
+    private IEnumerable<object> IterateAsync(object iterable)
+    {
+        var iterator = TryCallMethod(iterable, "__aiter__", Array.Empty<object>(), out var ait) ? ait : iterable;
+        while (true)
+        {
+            object? item = null;
+            bool done = false;
+            try
+            {
+                item = Await(CallMethod(iterator, "__anext__", Array.Empty<object>()));
+            }
+            catch (PyRaise ex) when (PyErr.Matches(ex.Value, PyErr.StopAsyncIterationClass))
+            {
+                done = true;
+            }
+            if (done)
+                yield break;
+            yield return item!;
         }
     }
 

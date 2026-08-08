@@ -42,6 +42,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("hmac", _ => CryptoModules.CreateHmac());
         importer.RegisterBuiltin("base64", _ => CryptoModules.CreateBase64());
         importer.RegisterBuiltin("binascii", _ => BinasciiModule.Create());
+        importer.RegisterBuiltin("codecs", _ => CodecsModule.Create());
         importer.RegisterBuiltin("urllib", _ => UrllibModule.Create());
         importer.RegisterBuiltin("urllib.parse", _ => UrllibModule.CreateParse());
         importer.RegisterBuiltin("urllib.request", _ => UrllibModule.CreateRequest());

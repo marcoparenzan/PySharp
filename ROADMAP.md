@@ -379,15 +379,30 @@ in scenario 1).
   constructs, real route registration (incl. path parameters) works, and `app.openapi()` (real
   schema generation) works — `inspect.isroutine`, `inspect.Parameter.__init__` accepting
   `name`/`kind` as keywords, and a real `urllib.parse.urljoin` (ported from CPython's own
-  algorithm) all fixed along the way. **Current frontier**: `starlette.testclient.TestClient`
-  imports `httpx`, which isn't installed at all — a real, independent HTTP client library with its
-  own dependency tree, not yet pulled in. Phase 4.2 (a real target sample app) not started. 6/7/8
-  to do; native cross-cutting partial.
-- Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
+  algorithm) all fixed along the way. `httpx==0.28.1` now installs and import gets past two real
+  gaps: **PEP 530 async comprehensions** (`[x async for x in y]`) ✅ — a genuine language-feature
+  gap (the parser only ever recognized a bare `for`), reusing `async for`'s existing
+  `__aiter__`/`__anext__` handshake, no new threading needed since comprehensions are plain C#
+  iterators running inline on the enclosing coroutine's own thread; real **`codecs`** ✅
+  (`lookup`/`getincrementaldecoder`, backed by .NET's own `Decoder.Convert` — the incremental-safe
+  API, not the naively-obvious `GetCharCount`+`GetChars` pairing, which corrupts a multi-byte
+  sequence split across chunk boundaries); real **`urllib.request.parse_http_list`** ✅ (ported from
+  CPython). Along the way, root-caused a real, reproduced, **pre-existing** intermittent full-suite
+  hang (confirmed pre-existing via an isolated baseline-commit worktree, not introduced by this
+  round): two test classes drove their own `asyncio.run` event loop without the
+  `[Collection("asyncio-run")]` tag every other such class already carries, racing on
+  `PyEventLoop._running`'s deliberately process-wide static — fixed by tagging both, confirmed via
+  36 consecutive clean full-suite runs afterward (24 under deliberately heavy concurrent CPU
+  contention against the still-broken baseline, which failed nearly every time under the same load).
+  **Current frontier**: `httpx` itself needs `http.cookiejar` (real `Cookie`/`CookieJar`,
+  RFC-6265-style domain/path matching) and a real `urllib.request.Request`, neither started. Phase
+  4.2 (a real target sample app) not started. 6/7/8 to do; native cross-cutting partial.
+- Stdlib modules: **~60 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
   `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`, `html`, `traceback`, `mimetypes`,
-  `secrets`, `array`, `queue`; `typing`/`dataclasses` upgraded from stubs to real implementations).
+  `secrets`, `array`, `queue`, `codecs`; `typing`/`dataclasses` upgraded from stubs to real
+  implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅ (incl. real
@@ -470,8 +485,18 @@ in scenario 1).
   positionally (real fastapi's `get_typed_signature` calls it entirely by keyword — unblocked real
   route registration, incl. path parameters, and `app.openapi()` schema generation); real
   **`urllib.parse.urljoin`** ✅ (a direct port of CPython's own RFC-3986 relative-resolution
-  algorithm — didn't exist at all before).
-- Tests: **932 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  algorithm — didn't exist at all before). Then, chasing `httpx`: real **PEP 530 async
+  comprehensions** ✅ (`[x async for x in y]` — a genuine parser/language gap, not a stdlib one; the
+  parser only ever recognized a bare `for` at every comprehension-start site); real **`codecs`** ✅
+  (`lookup`/`getincrementaldecoder`, backed by .NET's own incremental-safe `Decoder.Convert`); real
+  **`urllib.request.parse_http_list`** ✅ (ported from CPython, RFC 2616 §4.2/§14.45); and **a
+  fourth real concurrency bug, this time in the test suite itself** ✅ — two `asyncio.run`-driving
+  test classes (`AsyncioAdditionsTests`, `AsgiServerSampleTests`) were missing the
+  `[Collection("asyncio-run")]` tag every other such class carries, racing on
+  `PyEventLoop._running`'s deliberately process-wide static; confirmed pre-existing (not introduced
+  by this round) via an isolated baseline-commit worktree that failed 13/15 runs under the same
+  load; fixed by tagging both, confirmed via 36 consecutive clean full-suite runs afterward.
+- Tests: **938 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

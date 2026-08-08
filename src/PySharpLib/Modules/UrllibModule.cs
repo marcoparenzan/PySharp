@@ -19,12 +19,61 @@ public static class UrllibModule
         return urllib;
     }
 
-    /// <summary>urllib.request stub: only what paho needs (getproxies).</summary>
+    /// <summary>urllib.request: getproxies (a stub — just what paho needs) plus a real
+    /// `parse_http_list` (RFC 2616 §4.2/§14.45 comma-separated header-value-list parsing, respecting
+    /// quoted commas) — found via real httpx's `_auth.py` (`from urllib.request import
+    /// parse_http_list`), used to split a `WWW-Authenticate`-style header into its comma-separated
+    /// auth-challenge fields.</summary>
     public static PyModule CreateRequest()
     {
         var m = new PyModule("urllib.request");
         m.Dict["getproxies"] = new PyBuiltinFunction("getproxies", (_, _, _) => new PyDict());
+        m.Dict["parse_http_list"] = new PyBuiltinFunction("parse_http_list", (_, a, _) =>
+            new PyList(ParseHttpList((string)a[0]).Cast<object>().ToList()));
         return m;
+    }
+
+    /// <summary>Direct port of CPython's own urllib.request.parse_http_list.</summary>
+    private static List<string> ParseHttpList(string s)
+    {
+        var res = new List<string>();
+        var part = new StringBuilder();
+        bool escape = false, quote = false;
+
+        foreach (char cur in s)
+        {
+            if (escape)
+            {
+                part.Append(cur);
+                escape = false;
+                continue;
+            }
+            if (quote)
+            {
+                if (cur == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+                if (cur == '"')
+                    quote = false;
+                part.Append(cur);
+                continue;
+            }
+            if (cur == ',')
+            {
+                res.Add(part.ToString());
+                part.Clear();
+                continue;
+            }
+            if (cur == '"')
+                quote = true;
+            part.Append(cur);
+        }
+        if (part.Length > 0)
+            res.Add(part.ToString());
+
+        return res.Select(p => p.Trim()).ToList();
     }
 
     public static PyModule CreateParse()

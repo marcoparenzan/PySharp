@@ -13,7 +13,14 @@ namespace PySharp.Tests.M16_FastApi;
 /// exercising the exact ASGI-callable logic `serve()` drives over a real socket (verified
 /// separately, manually, over real HTTP via curl — see FASTAPI_PLAN.md Phase 3.2). Also confirms
 /// the module imports cleanly without starting the server (the `if __name__ == "__main__"` guard).
+/// <c>[Collection("asyncio-run")]</c>: PyEventLoop._running is a process-wide static (see
+/// Runtime/Async.cs), so tests that each drive their own event loop via `asyncio.run` must never
+/// run concurrently with each other or with any other asyncio.run-calling test class. This class
+/// was missing the tag — found via a real, reproduced intermittent full-suite hang, root-caused
+/// with VSTest's --blame-hang-dump-type full to a race on that static between two asyncio.run
+/// calls in different, concurrently-scheduled test classes.
 /// </summary>
+[Collection("asyncio-run")]
 public class AsgiServerSampleTests
 {
     // bin/Debug/net10.0 -> Debug -> bin -> PySharp.Tests -> src -> repo root -> samples

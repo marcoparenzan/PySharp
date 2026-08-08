@@ -67,7 +67,7 @@ public sealed record FStringValue(Expr Value, char Conversion, List<FStringPart>
 public sealed record FStringExpr(List<FStringPart> Parts) : Expr;
 
 public enum ComprehensionKind { List, Set, Dict, Generator }
-public sealed record CompFor(Expr Target, Expr Iter, List<Expr> Ifs);
+public sealed record CompFor(Expr Target, Expr Iter, List<Expr> Ifs, bool IsAsync = false);
 /// <summary>Element for list/set/gen; for dict Key+Value.</summary>
 public sealed record ComprehensionExpr(
     ComprehensionKind Kind, Expr? Element, Expr? Key, Expr? Value, List<CompFor> Fors) : Expr;

@@ -1196,7 +1196,7 @@ public sealed class Parser
             else
             {
                 var value = ParseNamedTest();
-                if (Cur.Is(TokenKind.Keyword, "for"))
+                if (AtCompForStart())
                 {
                     // generator expression as the sole argument: f(x for x in y)
                     var fors = ParseCompFors();
@@ -1546,7 +1546,7 @@ public sealed class Parser
 
         var first = ParseTestOrStar();
 
-        if (Cur.Is(TokenKind.Keyword, "for"))
+        if (AtCompForStart())
         {
             var fors = ParseCompFors();
             Expect(TokenKind.Op, ")");
@@ -1581,7 +1581,7 @@ public sealed class Parser
         }
 
         var first = ParseTestOrStar();
-        if (Cur.Is(TokenKind.Keyword, "for"))
+        if (AtCompForStart())
         {
             var fors = ParseCompFors();
             Expect(TokenKind.Op, "]");
@@ -1630,7 +1630,7 @@ public sealed class Parser
         {
             Next();
             var firstValue = ParseTest();
-            if (Cur.Is(TokenKind.Keyword, "for"))
+            if (AtCompForStart())
             {
                 var fors = ParseCompFors();
                 Expect(TokenKind.Op, "}");
@@ -1649,7 +1649,7 @@ public sealed class Parser
         }
 
         // set
-        if (Cur.Is(TokenKind.Keyword, "for"))
+        if (AtCompForStart())
         {
             var fors = ParseCompFors();
             Expect(TokenKind.Op, "}");
@@ -1676,12 +1676,21 @@ public sealed class Parser
         return (key, ParseTest());
     }
 
+    /// <summary>True at the start of a comprehension's `for`/`async for` clause — used to
+    /// distinguish `[x for x in y]`/`[x async for x in y]` from a plain list/set/dict/call-arg
+    /// literal.</summary>
+    private bool AtCompForStart()
+        => Cur.Is(TokenKind.Keyword, "for") || (Cur.Is(TokenKind.Keyword, "async") && PeekNext.Is(TokenKind.Keyword, "for"));
+
     private List<CompFor> ParseCompFors()
     {
         var fors = new List<CompFor>();
-        while (Cur.Is(TokenKind.Keyword, "for"))
+        while (AtCompForStart())
         {
-            Next();
+            bool isAsync = Cur.Is(TokenKind.Keyword, "async");
+            if (isAsync)
+                Next();
+            Expect(TokenKind.Keyword, "for");
             var target = ParseTargetList();
             ValidateTarget(target);
             Expect(TokenKind.Keyword, "in");
@@ -1692,7 +1701,7 @@ public sealed class Parser
                 Next();
                 ifs.Add(ParseOr());
             }
-            fors.Add(new CompFor(target, iter, ifs));
+            fors.Add(new CompFor(target, iter, ifs, isAsync));
         }
         return fors;
     }
