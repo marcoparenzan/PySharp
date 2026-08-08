@@ -280,7 +280,7 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 | Supported | Missing (out of scope for v1) |
 |---|---|
-| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch), **`match`/`case` structural pattern matching** (PEP 634 — real soft-keyword parsing + full pattern semantics: literal/capture/wildcard/value/sequence/mapping/class/or/as patterns, guards), real `object.__eq__`/`__ne__`/`__hash__`/`__repr__`/`__str__` default dunders (directly/unbound-accessible, not just hardcoded fallbacks), **real recursion-depth guard** (runaway recursion raises `RecursionError`, matching CPython's default limit, instead of crashing the process), real `memoryview` (bytearray-backed views share real underlying storage), `isinstance`/`issubclass` accepting a real union type (`X | Y`) as the 2nd argument | `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, async generators (`yield` in `async def` — also blocks *entering* a `contextlib.asynccontextmanager`-wrapped function, though defining/decorating one works), dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not), real `class X(dict):` subclass storage (instances of a `dict` subclass aren't backed by real dict storage unless the subclass defines its own `__getitem__`/`__setitem__`) |
+| arbitrary ints, floats, str/bytes, list/tuple/dict/set + comprehensions, f-strings, functions (defaults/`*args`/`**kwargs`/kw-only/decorators/closures/`global`/`nonlocal`), classes (C3 MRO, `super`, dunders, property, static/classmethod), exceptions, `with`, generators (`yield`/`yield from`), **`async`/`await`/`async for`/`async with` (coroutines)**, **real async generators** (`async def` with `yield` — a hybrid `PyAsyncGenerator` combining generator-style yield-suspension with coroutine-style await-suspension on one dedicated thread; real `__aiter__`/`__anext__`/`athrow`-driven `StopAsyncIteration`, and `contextlib.asynccontextmanager` can now actually be *entered*, not just defined), import system, function introspection (`__annotations__`, `__code__`), complex numbers (`complex`, not the `1j` literal), **custom metaclasses** (real, simplified — `class X(Y, metaclass=M)` calls `M.__new__`; no multi-metaclass conflict resolution, no metaclass `__init__` dispatch), **`match`/`case` structural pattern matching** (PEP 634 — real soft-keyword parsing + full pattern semantics: literal/capture/wildcard/value/sequence/mapping/class/or/as patterns, guards), real `object.__eq__`/`__ne__`/`__hash__`/`__repr__`/`__str__` default dunders (directly/unbound-accessible, not just hardcoded fallbacks), **real recursion-depth guard** (runaway recursion raises `RecursionError`, matching CPython's default limit, instead of crashing the process), real `memoryview` (bytearray-backed views share real underlying storage), `isinstance`/`issubclass` accepting a real union type (`X \| Y`) as the 2nd argument | `exec()`/`eval()`, `1j` complex literal syntax, exception groups (`except*`), `generator.send(v)` with a value, dunders as attributes of builtin *types*, real `__slots__` (separate per-slot storage — every instance attribute lives in the same dict today, slotted or not), real `class X(dict):` subclass storage (instances of a `dict` subclass aren't backed by real dict storage unless the subclass defines its own `__getitem__`/`__setitem__`) |
 
 ### Axis B — Stdlib
 
@@ -378,8 +378,12 @@ in scenario 1).
   `content-type`/`etag`/`last-modified` headers) and correctly 404s a missing one — 7 more real gaps
   closed along the way (`importlib.util`/`find_spec`, `os.stat`/`os.path.normpath`/`realpath`/
   `commonpath`, `NotADirectoryError`/`IsADirectoryError`, and a real `collections.abc.Mapping.get`
-  mixin with `MutableMapping` now properly deriving from `Mapping`). Next: WebSockets remain entirely
-  unexercised; 3.2 (ASGI server) not started; 4/6/7/8 to do; native cross-cutting partial.
+  mixin with `MutableMapping` now properly deriving from `Mapping`). **WebSockets verified**: the core
+  protocol (`accept`/`receive_text`/`send_text`/`close`, `WebSocketDisconnect`, manual streaming
+  loops) works end to end with zero bugs found. **Real async generators now implemented** (author
+  go-ahead): `WebSocket.iter_text()`/`iter_bytes()`/`iter_json()` work for real against real
+  starlette — full WebSocket streaming-helper parity. 3.2 (ASGI server) not started; 4/6/7/8 to do;
+  native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -426,8 +430,16 @@ in scenario 1).
   `Importer.FindModuleSpec` (locates a module without importing/executing it); real
   **`collections.abc.Mapping.get`** mixin ✅ (the ABC previously had no real methods at all — a
   documented v1 simplification, closed once a real scenario needed it), with `MutableMapping` now
-  properly deriving from `Mapping` (previously two unrelated placeholder classes).
-- Tests: **892 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  properly deriving from `Mapping` (previously two unrelated placeholder classes); real **async
+  generators** ✅ (`async def` with `yield` — a new `PyAsyncGenerator` hybridizing generator-style
+  yield-suspension with coroutine-style await-suspension on one dedicated thread; real `__aiter__`/
+  `__anext__`/`athrow`-driven `StopAsyncIteration`); real **`contextlib.asynccontextmanager`
+  entering** ✅ (`__aenter__`/`__aexit__` previously raised `NotImplementedError` unconditionally,
+  a direct consequence of the async-generator gap — now real, driven by `PyAsyncGenerator`); real
+  **`isasyncgenfunction`/`isasyncgen`** ✅ (previously hardcoded `False`), and
+  `iscoroutinefunction` now correctly excludes async generator functions (mutually exclusive
+  categories in real CPython).
+- Tests: **901 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

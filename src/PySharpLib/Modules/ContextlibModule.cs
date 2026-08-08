@@ -140,17 +140,80 @@ public static class ContextlibModule
     private static PyGenerator Gen(object self) =>
         (PyGenerator)((PyInstance)self).Dict[GenKey];
 
+    private const string AsyncGenKey = "__agen__";
+
+    /// <summary>
+    /// Real __aenter__/__aexit__, driving a real PyAsyncGenerator (Runtime/Async.cs) — mirrors
+    /// BuildGeneratorContextManagerClass's sync __enter__/__exit__ exactly (MoveNext/ThrowInto
+    /// there ↔ ANext/AThrow here), just wrapped in the Future-continuation shape every async
+    /// builtin here uses instead of blocking the calling thread. Previously __aenter__/__aexit__
+    /// raised NotImplementedError since PySharp had no real async generators to drive — now it
+    /// does (see AsyncGeneratorTests.cs), so this is real, not a stub.
+    /// </summary>
     private static PyClass BuildAsyncGeneratorContextManagerClass()
     {
         var cls = new PyClass("_AsyncGeneratorContextManager", new List<PyClass>());
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"_AsyncGeneratorContextManager.{name}", fn);
 
-        PyRaise NotSupported() => new(PyErr.MakeInstance(PyErr.NotImplementedErrorClass,
-            "PySharp doesn't support async generators yet, so an @asynccontextmanager-wrapped " +
-            "function can't actually be entered (defining/decorating it works; driving it doesn't)."));
+        Add("__aenter__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var genFn = inst.Dict[AsyncFnKey];
+            var args = (object[])inst.Dict[AsyncArgsKey];
+            var callKwargs = inst.Dict[AsyncKwargsKey] is Dictionary<string, object> kw ? kw : null;
+            var agen = (PyAsyncGenerator)interp.Call(genFn, args, callKwargs);
+            inst.Dict[AsyncGenKey] = agen;
 
-        Add("__aenter__", (_, _, _) => throw NotSupported());
-        Add("__aexit__", (_, _, _) => throw NotSupported());
+            var inner = agen.ANext(interp);
+            var outer = new PyFuture { Loop = PyEventLoop.Running };
+            inner.AddNativeCallback(() =>
+            {
+                if (inner.Exception is { } stop && PyErr.Matches(stop.Value, PyErr.StopAsyncIterationClass))
+                    outer.SetException(new PyRaise(PyErr.MakeInstance(PyErr.RuntimeErrorClass, "generator didn't yield")));
+                else if (inner.Exception is { } ex)
+                    outer.SetException(ex);
+                else
+                    outer.SetResult(inner.GetResult());
+            });
+            return outer;
+        });
+
+        Add("__aexit__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            var agen = (PyAsyncGenerator)inst.Dict[AsyncGenKey];
+            var outer = new PyFuture { Loop = PyEventLoop.Running };
+
+            if (a[1] is PyNone)
+            {
+                var inner = agen.ANext(interp);
+                inner.AddNativeCallback(() =>
+                {
+                    if (inner.Exception is { } stop && PyErr.Matches(stop.Value, PyErr.StopAsyncIterationClass))
+                        outer.SetResult(false);
+                    else if (inner.Exception is { } ex)
+                        outer.SetException(ex);
+                    else
+                        outer.SetException(new PyRaise(PyErr.MakeInstance(PyErr.RuntimeErrorClass, "generator didn't stop")));
+                });
+                return outer;
+            }
+
+            var excInstance = (PyInstance)a[2];
+            var thrown = agen.AThrow(interp, new PyRaise(excInstance));
+            thrown.AddNativeCallback(() =>
+            {
+                if (thrown.Exception is { } stop && PyErr.Matches(stop.Value, PyErr.StopAsyncIterationClass))
+                    outer.SetResult(true); // caught inside the body, which then returned: suppress
+                else if (thrown.Exception is { } same && ReferenceEquals(same.Value, excInstance))
+                    outer.SetResult(false); // let the same exception propagate unchanged: don't suppress
+                else if (thrown.Exception is { } different)
+                    outer.SetException(different); // a different exception replaces the original
+                else
+                    outer.SetException(new PyRaise(PyErr.MakeInstance(PyErr.RuntimeErrorClass, "generator didn't stop after athrow()")));
+            });
+            return outer;
+        });
 
         return cls;
     }

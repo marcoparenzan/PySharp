@@ -1032,6 +1032,8 @@ public sealed class Interp
     /// <summary><c>await expr</c> from within a C#-driven statement (async for/with).</summary>
     private object Await(object awaitable)
     {
+        if (PyAsyncGenerator.Current is { } agen)
+            return agen.RunAwait(this, awaitable);
         var coro = PyCoroutine.Current
                    ?? throw PyErr.SyntaxLike("'async for'/'async with' outside async function");
         return coro.RunAwait(this, awaitable);
@@ -1361,6 +1363,14 @@ public sealed class Interp
 
             case YieldExpr y:
             {
+                var agen = PyAsyncGenerator.Current;
+                if (agen is not null)
+                {
+                    if (y.IsFrom)
+                        throw PyErr.SyntaxLike("'yield from' inside async function");
+                    var aval = y.Value is null ? PyNone.Instance : Eval(y.Value, env);
+                    return agen.Yield(aval);
+                }
                 var gen = PyGenerator.Current
                           ?? throw PyErr.SyntaxLike("'yield' outside function");
                 if (y.IsFrom)
@@ -1376,6 +1386,9 @@ public sealed class Interp
 
             case AwaitExpr aw:
             {
+                var agen = PyAsyncGenerator.Current;
+                if (agen is not null)
+                    return agen.RunAwait(this, Eval(aw.Value, env));
                 var coro = PyCoroutine.Current
                            ?? throw PyErr.SyntaxLike("'await' outside async function");
                 return coro.RunAwait(this, Eval(aw.Value, env));
@@ -1652,6 +1665,8 @@ public sealed class Interp
     public object CallFunction(PyFunction fn, object[] args, Dictionary<string, object>? kwargs = null)
     {
         var env = BindParameters(fn, args, kwargs);
+        if (fn.IsAsync && fn.IsGenerator)
+            return new PyAsyncGenerator(fn, env);
         if (fn.IsAsync)
             return new PyCoroutine(fn, env);
         if (fn.IsGenerator)

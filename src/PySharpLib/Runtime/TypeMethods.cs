@@ -63,6 +63,7 @@ public static class TypeMethods
             // Task derives from Future and shares its method surface.
             PyFuture => Modules.AsyncioModule.FutureTable,
             PyCoroutine => Modules.AsyncioModule.CoroutineTable,
+            PyAsyncGenerator => Modules.AsyncioModule.AsyncGeneratorTable,
             PyEventLoop => Modules.AsyncioModule.EventLoopTable,
             ConcurrentFuture => Modules.ConcurrentModule.FutureTable,
             _ => null,

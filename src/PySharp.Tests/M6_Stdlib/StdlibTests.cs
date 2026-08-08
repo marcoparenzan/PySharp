@@ -1954,8 +1954,11 @@ public class TracebackTests
 /// async generators yet (see ROADMAP.md), rather than hanging or misbehaving silently. Found via
 /// starlette's real `@asynccontextmanager async def create_collapsing_task_group(): ... yield tg
 /// ...` (_utils.py), reachable from `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+[Collection("asyncio-run")]
 public class AsyncContextManagerTests
 {
+    private static string Run(string body) => Py.Run("import asyncio\n" + body).TrimEnd('\n');
+
     [Fact]
     public void Decorating_an_async_generator_function_works_at_definition_time()
         => Assert.Equal("True", Py.Run("""
@@ -1967,6 +1970,65 @@ public class AsyncContextManagerTests
 
             print(callable(foo))
             """).TrimEnd('\n'));
+
+    [Fact]
+    public void Async_with_actually_enters_and_exits_the_body_now()
+        // Regression: __aenter__/__aexit__ previously raised NotImplementedError unconditionally
+        // (PySharp had no real async generators to drive them with) — now real, driven by
+        // PyAsyncGenerator.ANext/AThrow. Mirrors the sync _GeneratorContextManager test shape.
+        => Assert.Equal("['enter', 'body:value', 'exit']", Run(
+            "from contextlib import asynccontextmanager\n" +
+            "@asynccontextmanager\n" +
+            "async def cm(log):\n" +
+            "    log.append('enter')\n" +
+            "    try:\n" +
+            "        yield 'value'\n" +
+            "    finally:\n" +
+            "        log.append('exit')\n" +
+            "async def main():\n" +
+            "    log = []\n" +
+            "    async with cm(log) as v:\n" +
+            "        log.append(f'body:{v}')\n" +
+            "    return log\n" +
+            "print(asyncio.run(main()))"));
+
+    [Fact]
+    public void Async_with_propagates_an_uncaught_exception_after_running_cleanup()
+        => Assert.Equal("['enter', 'body', 'exit', 'caught']", Run(
+            "from contextlib import asynccontextmanager\n" +
+            "@asynccontextmanager\n" +
+            "async def cm(log):\n" +
+            "    log.append('enter')\n" +
+            "    try:\n" +
+            "        yield\n" +
+            "    finally:\n" +
+            "        log.append('exit')\n" +
+            "async def main():\n" +
+            "    log = []\n" +
+            "    try:\n" +
+            "        async with cm(log):\n" +
+            "            log.append('body')\n" +
+            "            raise ValueError('boom')\n" +
+            "    except ValueError:\n" +
+            "        log.append('caught')\n" +
+            "    return log\n" +
+            "print(asyncio.run(main()))"));
+
+    [Fact]
+    public void Async_with_suppresses_an_exception_the_body_catches_internally()
+        => Assert.Equal("suppressed", Run(
+            "from contextlib import asynccontextmanager\n" +
+            "@asynccontextmanager\n" +
+            "async def suppressing():\n" +
+            "    try:\n" +
+            "        yield\n" +
+            "    except ValueError:\n" +
+            "        pass\n" +
+            "async def main():\n" +
+            "    async with suppressing():\n" +
+            "        raise ValueError('x')\n" +
+            "    return 'suppressed'\n" +
+            "print(asyncio.run(main()))"));
 }
 
 /// <summary>Generic alias re-subscription (`SomeAlias[T][Concrete]`): a real TypeVar-substitution

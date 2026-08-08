@@ -325,8 +325,10 @@ public static class AsyncioModule
         // Unwraps a bound method to its underlying function first — real CPython does the same, and
         // a bound async instance method (e.g. starlette's real `self.http_exception`) is still a
         // coroutine function. See InspectModule.cs's matching fix for the full story.
+        // Real CPython: mutually exclusive from an async generator function (IsGenerator: true) —
+        // see InspectModule.cs's matching iscoroutinefunction/isasyncgenfunction for the full story.
         d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
-            InspectModule.UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true });
+            InspectModule.UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true, IsGenerator: false });
 
         return m;
     }
@@ -734,6 +736,16 @@ public static class AsyncioModule
     {
         ["close"] = new PyBuiltinFunction("coroutine.close", (_, _, _) => PyNone.Instance),
         ["__await__"] = new PyBuiltinFunction("coroutine.__await__", (_, a, _) => a[0]),
+    };
+
+    // __aiter__/__anext__: the real async-iterator protocol `async for` drives (Interp.ExecAsyncFor).
+    // __anext__ returns a real Future (PyAsyncGenerator.ANext) — `await`ing it is handled for free
+    // by RunAwait's existing PyFuture case, no special-casing needed there.
+    public static readonly Dictionary<string, PyBuiltinFunction> AsyncGeneratorTable = new()
+    {
+        ["__aiter__"] = new PyBuiltinFunction("async_generator.__aiter__", (_, a, _) => a[0]),
+        ["__anext__"] = new PyBuiltinFunction("async_generator.__anext__", (interp, a, _) =>
+            ((PyAsyncGenerator)a[0]).ANext(interp)),
     };
 
     public static readonly Dictionary<string, PyBuiltinFunction> EventLoopTable = BuildLoopTable();

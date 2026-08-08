@@ -47,6 +47,7 @@ public static class PyOps
         PyModule => "module",
         PyIterator or PyGenerator => "iterator",
         PyCoroutine => "coroutine",
+        PyAsyncGenerator => "async_generator",
         PyTask => "Task",
         PyFuture => "Future",
         PyEventLoop => "AbstractEventLoop",

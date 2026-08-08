@@ -69,12 +69,18 @@ public static class InspectModule
         // run_in_threadpool path instead, producing an un-awaited coroutine object.
         d["isgeneratorfunction"] = new PyBuiltinFunction("isgeneratorfunction", (_, a, _) =>
             UnwrapBoundMethod(a[0]) is PyFunction { IsGenerator: true, IsAsync: false });
+        // Real CPython: coroutine functions and async generator functions are mutually exclusive
+        // categories (an `async def` with `yield` is only an async-gen function, never also a
+        // coroutine function) — isasyncgenfunction now real (previously always False, a documented
+        // limitation from before real async generators existed; found via starlette's real
+        // WebSocket.iter_text/iter_bytes/iter_json, each `async def ...(self): yield ...`).
         d["iscoroutinefunction"] = new PyBuiltinFunction("iscoroutinefunction", (_, a, _) =>
-            UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true });
-        d["isasyncgenfunction"] = new PyBuiltinFunction("isasyncgenfunction", (_, _, _) => false);
+            UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true, IsGenerator: false });
+        d["isasyncgenfunction"] = new PyBuiltinFunction("isasyncgenfunction", (_, a, _) =>
+            UnwrapBoundMethod(a[0]) is PyFunction { IsAsync: true, IsGenerator: true });
         d["isgenerator"] = new PyBuiltinFunction("isgenerator", (_, a, _) => a[0] is PyGenerator);
         d["iscoroutine"] = new PyBuiltinFunction("iscoroutine", (_, a, _) => a[0] is PyCoroutine);
-        d["isasyncgen"] = new PyBuiltinFunction("isasyncgen", (_, _, _) => false);
+        d["isasyncgen"] = new PyBuiltinFunction("isasyncgen", (_, a, _) => a[0] is PyAsyncGenerator);
         d["isawaitable"] = new PyBuiltinFunction("isawaitable", (_, a, _) => a[0] switch
         {
             PyCoroutine or PyFuture => true, // PyTask derives from PyFuture

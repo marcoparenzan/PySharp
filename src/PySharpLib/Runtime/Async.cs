@@ -248,6 +248,281 @@ public sealed class PyCoroutine
 }
 
 /// <summary>
+/// Object produced by calling an <c>async def</c> function whose body also contains <c>yield</c>
+/// (real CPython's async generator). Runs its body on its own dedicated thread, same producer/
+/// consumer technique as PyGenerator/PyCoroutine — but this body can suspend at *either* a
+/// <c>yield</c> or an <c>await</c>, so the handshake carries a tag saying which one just happened
+/// (see <see cref="SuspendKind"/>), and YieldExpr/AwaitExpr evaluation (Interp.cs) checks
+/// <see cref="Current"/> first, ahead of PyGenerator.Current/PyCoroutine.Current.
+///
+/// <c>__anext__()</c> (driven by <c>async for</c>, see Interp.ExecAsyncFor) mirrors PyTask's
+/// relationship to PyCoroutine: it returns a fresh Future and steps the body once; if the body
+/// yields, that Future resolves with the yielded value; if the body awaits a still-pending Future,
+/// stepping resumes (via that Future's AddNativeCallback) once it resolves — recursively, until a
+/// yield, a real return (StopAsyncIteration), or an uncaught exception settles the outer Future.
+/// Found via starlette's real `WebSocket.iter_text`/`iter_bytes`/`iter_json` (websockets.py),
+/// each `async def ...(self): while True: yield await self.receive_...()` — real async generators,
+/// not stoppable via a manual loop workaround the way `websocket.receive_text()` itself is.
+/// </summary>
+public sealed class PyAsyncGenerator
+{
+    public enum SuspendKind { Yielded, Awaiting }
+    public enum StepResult { Suspended, Done }
+
+    private const int BigStackSize = 64 * 1024 * 1024;
+
+    private readonly PyFunction _fn;
+    private readonly Env _env;
+    private readonly SemaphoreSlim _resume = new(0, 1);
+    private readonly SemaphoreSlim _produced = new(0, 1);
+
+    private Thread? _thread;
+    private SuspendKind _kind;
+    private object _payload = PyNone.Instance;
+    private object _sentValue = PyNone.Instance;
+    private PyRaise? _sentError;
+    private bool _finished;
+    private PyRaise? _error;
+
+    [ThreadStatic]
+    private static PyAsyncGenerator? _current;
+
+    /// <summary>The async generator currently running on this thread (used to evaluate
+    /// <c>yield</c>/<c>await</c> inside its body).</summary>
+    public static PyAsyncGenerator? Current => _current;
+
+    public string Name => _fn.Name;
+
+    public PyAsyncGenerator(PyFunction fn, Env env)
+    {
+        _fn = fn;
+        _env = env;
+    }
+
+    /// <summary>Called from the async generator's own thread on <c>yield value</c>.</summary>
+    public object Yield(object value) => SuspendWith(SuspendKind.Yielded, value);
+
+    /// <summary>Called from the async generator's own thread on <c>await fut</c> for a real
+    /// still-pending Future.</summary>
+    public object Suspend(PyFuture fut) => SuspendWith(SuspendKind.Awaiting, fut);
+
+    private object SuspendWith(SuspendKind kind, object payload)
+    {
+        _kind = kind;
+        _payload = payload;
+        _produced.Release();
+        _resume.Wait();
+        if (_sentError is not null)
+        {
+            var e = _sentError;
+            _sentError = null;
+            throw e;
+        }
+        return _sentValue;
+    }
+
+    /// <summary>Resolve an awaitable to its value, suspending this async generator as needed.
+    /// Same shape as PyCoroutine.RunAwait — see that method's doc comment.</summary>
+    public object RunAwait(Interp interp, object awaitable)
+    {
+        switch (awaitable)
+        {
+            case PyFuture f:
+                return f.IsDone ? f.GetResult() : Suspend(f);
+
+            case PyCoroutine inner:
+                return DelegateTo(interp, inner);
+
+            default:
+                if (interp.TryGetAttr(awaitable, "__await__", out var awaitMethod))
+                    return DriveIterator(interp, interp.Call(awaitMethod, Array.Empty<object>()));
+                throw PyErr.TypeError(
+                    $"object {PyOps.TypeName(awaitable)} can't be used in 'await' expression");
+        }
+    }
+
+    private object DelegateTo(Interp interp, PyCoroutine inner)
+    {
+        object send = PyNone.Instance;
+        PyRaise? err = null;
+        while (true)
+        {
+            var status = inner.Resume(interp, send, err, out var awaited);
+            if (status == PyCoroutine.StepResult.Done)
+            {
+                if (inner.Error is not null)
+                    throw inner.Error;
+                return inner.ReturnValue;
+            }
+            try
+            {
+                send = Suspend((PyFuture)awaited);
+                err = null;
+            }
+            catch (PyRaise ex)
+            {
+                err = ex;
+                send = PyNone.Instance;
+            }
+        }
+    }
+
+    private object DriveIterator(Interp interp, object iterator)
+    {
+        object send = PyNone.Instance;
+        PyRaise? err = null;
+        while (true)
+        {
+            object awaited;
+            try
+            {
+                awaited = err is not null
+                    ? interp.CallMethod(iterator, "throw", new object[] { err.Value.Class, err.Value })
+                    : interp.CallMethod(iterator, "send", new[] { send });
+            }
+            catch (PyRaise ex) when (PyErr.Matches(ex.Value, PyErr.StopIterationClass))
+            {
+                return ex.Value.Dict.TryGet("value", out var v) ? v : PyNone.Instance;
+            }
+            try
+            {
+                send = Suspend((PyFuture)awaited);
+                err = null;
+            }
+            catch (PyRaise ex)
+            {
+                err = ex;
+                send = PyNone.Instance;
+            }
+        }
+    }
+
+    /// <summary>Advance the body by one step (driver side) — same shape as PyCoroutine.Resume.</summary>
+    private StepResult Resume(Interp interp, object sendValue, PyRaise? throwErr, out SuspendKind kind, out object payload)
+    {
+        if (_finished)
+        {
+            kind = default;
+            payload = PyNone.Instance;
+            return StepResult.Done;
+        }
+
+        if (_thread is null)
+        {
+            var callerLogicalThread = LogicalThread.Current;
+            _thread = new Thread(() =>
+            {
+                LogicalThread.Adopt(callerLogicalThread);
+                _current = this;
+                _resume.Wait();
+                try
+                {
+                    interp.ExecFunctionBody(_fn, _env);
+                }
+                catch (ReturnSignal)
+                {
+                    // real CPython: bare `return` in an async generator ends iteration
+                }
+                catch (PyRaise ex)
+                {
+                    _error = ex;
+                }
+                catch (Exception ex)
+                {
+                    _error = new PyRaise(PyErr.MakeInstance(PyErr.RuntimeErrorClass, ex.Message));
+                }
+                finally
+                {
+                    _finished = true;
+                    _produced.Release();
+                }
+            }, BigStackSize)
+            {
+                IsBackground = true,
+                Name = $"pyagen-{_fn.Name}",
+            };
+            _thread.Start();
+        }
+
+        _sentValue = sendValue;
+        _sentError = throwErr;
+        _resume.Release();
+        _produced.Wait();
+
+        if (_finished)
+        {
+            kind = default;
+            payload = PyNone.Instance;
+            return StepResult.Done;
+        }
+        kind = _kind;
+        payload = _payload;
+        return StepResult.Suspended;
+    }
+
+    /// <summary>__anext__: drives the body to its next yield (resolves with that value), to a real
+    /// return/exhaustion (resolves with StopAsyncIteration), or to an uncaught exception (resolves
+    /// with it) — recursing through any real `await` the body performs along the way, exactly like
+    /// PyTask.Step drives PyCoroutine.Resume.</summary>
+    public PyFuture ANext(Interp interp)
+    {
+        var outer = new PyFuture { Loop = PyEventLoop.Running };
+        Step(interp, outer, PyNone.Instance, null);
+        return outer;
+    }
+
+    /// <summary>Real CPython's agen.athrow(exc): resumes the body by raising <paramref name="err"/>
+    /// at its suspended `yield` point — the same "deliver a pending error to Yield/Suspend" path
+    /// Resume's throwErr parameter already drives for internal await-chain propagation, reused here
+    /// for real. Used by contextlib.asynccontextmanager's real __aexit__.</summary>
+    public PyFuture AThrow(Interp interp, PyRaise err)
+    {
+        var outer = new PyFuture { Loop = PyEventLoop.Running };
+        Step(interp, outer, PyNone.Instance, err);
+        return outer;
+    }
+
+    private void Step(Interp interp, PyFuture outer, object sendValue, PyRaise? throwErr)
+    {
+        StepResult status;
+        SuspendKind kind;
+        object payload;
+        try
+        {
+            status = Resume(interp, sendValue, throwErr, out kind, out payload);
+        }
+        catch (PyRaise ex)
+        {
+            outer.SetException(ex);
+            return;
+        }
+
+        if (status == StepResult.Done)
+        {
+            outer.SetException(_error ?? new PyRaise(PyErr.MakeInstance(PyErr.StopAsyncIterationClass)));
+            return;
+        }
+
+        if (kind == SuspendKind.Yielded)
+        {
+            outer.SetResult(payload);
+            return;
+        }
+
+        var inner = (PyFuture)payload;
+        inner.AddNativeCallback(() =>
+        {
+            if (inner.Exception is not null)
+                Step(interp, outer, PyNone.Instance, inner.Exception);
+            else
+                Step(interp, outer, inner.GetResult(), null);
+        });
+    }
+
+    public override string ToString() => $"<async_generator object {_fn.Name}>";
+}
+
+/// <summary>
 /// A Future: the result of an asynchronous operation. Awaiting a pending future suspends
 /// the running coroutine until <see cref="SetResult"/>/<see cref="SetException"/> is called.
 /// </summary>
