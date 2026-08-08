@@ -41,6 +41,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("hashlib", _ => CryptoModules.CreateHashlib());
         importer.RegisterBuiltin("hmac", _ => CryptoModules.CreateHmac());
         importer.RegisterBuiltin("base64", _ => CryptoModules.CreateBase64());
+        importer.RegisterBuiltin("binascii", _ => BinasciiModule.Create());
         importer.RegisterBuiltin("urllib", _ => UrllibModule.Create());
         importer.RegisterBuiltin("urllib.parse", _ => UrllibModule.CreateParse());
         importer.RegisterBuiltin("urllib.request", _ => UrllibModule.CreateRequest());
@@ -75,6 +76,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("subprocess", interp => SubprocessModule.Create(interp));
         importer.RegisterBuiltin("tempfile", _ => TempfileModule.Create());
         importer.RegisterBuiltin("http", interp => HttpModule.Create(interp));
+        importer.RegisterBuiltin("http.client", _ => HttpModule.CreateClient());
         importer.RegisterBuiltin("http.cookies", interp => CookiesModule.Create(interp));
         importer.RegisterBuiltin("html", _ => HtmlModule.Create());
         importer.RegisterBuiltin("traceback", interp => TracebackModule.Create(interp));

@@ -16,6 +16,7 @@ namespace PySharpLib.Modules;
 public static class GenericAliasModule
 {
     public static readonly PyClass GenericAliasClass = BuildGenericAliasClass();
+    public static readonly PyClass ForwardRefClass = BuildForwardRefClass();
 
     /// <summary>Typing placeholder -> its real-world origin (e.g. typing.List -> the `list`
     /// builtin), so `get_origin(List[int]) is list` matches CPython. Unmapped classes (arbitrary
@@ -41,10 +42,28 @@ public static class GenericAliasModule
     public static bool TryGetOrigin(PyClass typingClass, out object origin) =>
         OriginMap.TryGetValue(typingClass, out origin!);
 
+    // [ThreadStatic], not a plain static: MiscModules.CreateTyping builds a *fresh* "Generic"
+    // PyClass on every `import typing` (one per Interp instance, since each test/script gets its
+    // own typing module) — a single shared static here meant whichever test's `import typing` ran
+    // *last* under real parallel test execution silently overwrote every other concurrently-running
+    // test's own Generic identity, so their later `class Foo(Generic[T]):` de-duplication check
+    // (below) compared against the wrong (some other test's) Generic class and could leave a
+    // genuine duplicate `Generic` in the resolved bases, breaking MRO computation outright — a real,
+    // intermittent flaky-suite bug, not a hang or a wrong-answer-every-time bug, which is why it
+    // took several full-suite reruns to catch. Each PyEngine.Run() executes its script on its own
+    // dedicated OS thread (see BigStack.Run), so [ThreadStatic] correctly scopes this per test/
+    // script the same way PyGenerator.Current/PyCoroutine.Current already do for analogous state.
+    [ThreadStatic]
+    private static PyClass? _genericPlaceholder;
+
     /// <summary>The `typing.Generic` placeholder class, set once by MiscModules.CreateTyping —
     /// __mro_entries__ needs to recognize it by identity to de-duplicate redundant `Generic[T]`
     /// bases (see below).</summary>
-    public static PyClass? GenericPlaceholder { get; set; }
+    public static PyClass? GenericPlaceholder
+    {
+        get => _genericPlaceholder;
+        set => _genericPlaceholder = value;
+    }
 
     /// <summary>`typing.TypeVar("T")`/`ParamSpec`/`TypeVarTuple` each build a fresh, uniquely-named
     /// `PyClass` (real CPython gives each call a distinct object too) — marked with this key so
@@ -86,10 +105,32 @@ public static class GenericAliasModule
     public static PyInstance Subscript(PyClass cls, object index)
     {
         var origin = OriginMap.TryGetValue(cls, out var mapped) ? mapped : cls;
-        var args = index is PyTuple t ? t.Items : new[] { index };
+        var args = (index is PyTuple t ? t.Items : new[] { index }).Select(WrapForwardRef).ToArray();
         if (ArgsTransform.TryGetValue(cls, out var transform))
             args = transform(args);
         return MakeAlias(origin, args);
+    }
+
+    /// <summary>Real CPython's `_type_check` auto-wraps a bare string type argument into a real
+    /// `ForwardRef` (e.g. `Optional["SomeType"]`) — PySharp evaluates annotations eagerly (no
+    /// deferred string mode), but a string used *as* a type argument still needs this real wrapping,
+    /// or downstream code that specifically checks `isinstance(x, ForwardRef)` (real pydantic v1's
+    /// own `update_field_forward_refs`) never recognizes it as something to resolve later. Found via
+    /// fastapi's real `openapi/models.py`: `Optional["SchemaOrBool"]`-shaped genuinely
+    /// self-referential fields, resolved via `Schema.update_forward_refs()` after the class body
+    /// (once `SchemaOrBool` is actually defined). See FASTAPI_PLAN.md Phase 4.</summary>
+    private static object WrapForwardRef(object arg)
+    {
+        if (arg is not string s)
+            return arg;
+        var inst = new PyInstance(ForwardRefClass);
+        inst.Dict["__forward_arg__"] = s;
+        inst.Dict["__forward_evaluated__"] = false;
+        inst.Dict["__forward_value__"] = PyNone.Instance;
+        inst.Dict["__forward_is_argument__"] = true;
+        inst.Dict["__forward_module__"] = PyNone.Instance;
+        inst.Dict["__forward_is_class__"] = false;
+        return inst;
     }
 
     /// <summary>
@@ -227,6 +268,79 @@ public static class GenericAliasModule
             }
             return new PyTuple(new object[] { origin });
         });
+
+        return cls;
+    }
+
+    /// <summary>
+    /// Real CPython's typing.ForwardRef: a real `__init__` (storing the forward-ref string plus the
+    /// real bookkeeping fields real code inspects directly — pydantic v1's own
+    /// `update_field_forward_refs` checks `field.type_.__class__ == ForwardRef`), and a real
+    /// `_evaluate(globalns, localns, recursive_guard=None)` that resolves the string via the real
+    /// `eval()` builtin (Builtins.cs) — genuinely evaluating it as a Python expression against the
+    /// given namespaces, caching the result exactly like real CPython. `__eq__`/`__hash__` compare
+    /// by the forward-ref string, matching real CPython (two ForwardRef('X') instances are equal).
+    /// v1 scope: no `recursive_guard`-based infinite-recursion protection (nothing in the reachable
+    /// path recurses through the same forward ref twice) — the parameter is accepted for real
+    /// call-signature compatibility but not consulted.
+    /// </summary>
+    private static PyClass BuildForwardRefClass()
+    {
+        var cls = new PyClass("ForwardRef", new List<PyClass>());
+        cls.Dict["__slots__"] = new PyTuple(new object[]
+        {
+            "__forward_arg__", "__forward_code__", "__forward_evaluated__", "__forward_value__",
+            "__forward_is_argument__", "__forward_is_class__", "__forward_module__",
+        });
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"ForwardRef.{name}", fn);
+
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict["__forward_arg__"] = a.Length > 1
+                ? a[1]
+                : throw PyErr.TypeError("ForwardRef() missing required argument: 'arg'");
+            inst.Dict["__forward_evaluated__"] = false;
+            inst.Dict["__forward_value__"] = PyNone.Instance;
+            inst.Dict["__forward_is_argument__"] = a.Length > 2 ? a[2]
+                : kwargs is not null && kwargs.TryGetValue("is_argument", out var ia) ? ia : true;
+            inst.Dict["__forward_module__"] =
+                kwargs is not null && kwargs.TryGetValue("module", out var mod) ? mod : PyNone.Instance;
+            inst.Dict["__forward_is_class__"] =
+                kwargs is not null && kwargs.TryGetValue("is_class", out var ic) ? ic : false;
+            return PyNone.Instance;
+        });
+
+        Add("_evaluate", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            if (!(inst.Dict.TryGet("__forward_evaluated__", out var already) && already is true))
+            {
+                object globalns = a.Length > 1 ? a[1] : PyNone.Instance;
+                object localns = a.Length > 2 ? a[2] : PyNone.Instance;
+                if (globalns is PyNone && localns is PyNone)
+                    globalns = localns = new PyDict();
+                else if (globalns is PyNone)
+                    globalns = localns;
+                else if (localns is PyNone)
+                    localns = globalns;
+
+                string source = (string)inst.Dict["__forward_arg__"];
+                var evalFn = interp.BuiltinsModule.Dict["eval"];
+                var value = interp.Call(evalFn, new object[] { source, globalns, localns });
+                inst.Dict["__forward_value__"] = value;
+                inst.Dict["__forward_evaluated__"] = true;
+            }
+            return inst.Dict["__forward_value__"];
+        });
+
+        Add("__repr__", (interp, a, _) =>
+            $"ForwardRef('{((PyInstance)a[0]).Dict["__forward_arg__"]}')");
+        Add("__eq__", (_, a, _) =>
+            a[1] is PyInstance y && y.Class == ForwardRefClass
+            && Equals(((PyInstance)a[0]).Dict["__forward_arg__"], y.Dict["__forward_arg__"]));
+        Add("__hash__", (_, a, _) =>
+            new System.Numerics.BigInteger(((string)((PyInstance)a[0]).Dict["__forward_arg__"]).GetHashCode()));
 
         return cls;
     }

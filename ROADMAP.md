@@ -358,51 +358,26 @@ in scenario 1).
 
 ## Progress indicators
 
-- Scenarios: **1, 1b, 5, 9 complete**; **2** well underway (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic v1
-  `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); **3** 🟡 in progress —
-  **3.1 done**: `import starlette` succeeds completely (`applications`/`routing`/`responses`/
-  `requests`), and a real `Starlette(routes=[Route(...)])` app constructs end to end (~51
-  stdlib/interpreter gaps closed plus `match`/`case` across 5 probe-driven rounds); **3.1b under
-  way**: real ASGI request dispatch verified end to end (index route + a path-parameter route + real
-  exception propagation for an app-level error), surfacing and fixing several significant,
-  previously-silent correctness bugs (see below) — **the 404-not-found fallback path is now fully
-  closed**: a real, unmodified `Starlette` app correctly returns 200 for a matched route, 404
-  (`"Not Found"`) for an unmatched one, and correctly propagates an uncaught exception from a route
-  handler, all verified together in one run. Bugs found and fixed along the way:
-  `asyncio.current_task()` (always `None`), `Future[T]()` PEP 585 subscript-then-call, a `Future`/
-  `Task` private `_loop` attribute, a structural `threading.local`-across-`@contextmanager` bug, and
-  `iscoroutinefunction`/`isgeneratorfunction` not seeing through a bound method (misdetecting
-  starlette's real bound `async def` 404 handler as non-async). Custom exception handlers and
-  path-parameter routes are now verified too (zero new bugs). **`staticfiles.py` is now closed**: a
-  real `StaticFiles`-mounted directory correctly serves a file (200, real bytes + real
-  `content-type`/`etag`/`last-modified` headers) and correctly 404s a missing one — 7 more real gaps
-  closed along the way (`importlib.util`/`find_spec`, `os.stat`/`os.path.normpath`/`realpath`/
-  `commonpath`, `NotADirectoryError`/`IsADirectoryError`, and a real `collections.abc.Mapping.get`
-  mixin with `MutableMapping` now properly deriving from `Mapping`). **WebSockets verified**: the core
-  protocol (`accept`/`receive_text`/`send_text`/`close`, `WebSocketDisconnect`, manual streaming
-  loops) works end to end with zero bugs found. **Real async generators now implemented** (author
-  go-ahead): `WebSocket.iter_text()`/`iter_bytes()`/`iter_json()` work for real against real
-  starlette — full WebSocket streaming-helper parity. Lifespan events and `StaticFiles(packages=
-  [...])` verified too, zero bugs found. **3.2 done**: `samples/asgi_server.py`, a real, minimal,
-  reusable ASGI/3 HTTP server bridging raw HTTP/1.1 to the real scope/receive/send protocol,
-  verified over real HTTP (curl) against both its own demo app and a real, unmodified `Starlette`
-  app — found and fixed a real, general bug along the way (`sys.path` was a disconnected snapshot
-  copy; `sys.path.insert(...)` from Python code had zero effect on actual import resolution).
-  **Phase 3 (starlette + anyio + a real ASGI server) is now substantially complete end to end.**
-  **Phase 4 underway**: `import fastapi` needs version pinning (`fastapi==0.99.1`+
-  `starlette==0.27.0`+`pydantic==1.10.13` — the last pydantic-v1-only combo; the default `install
-  fastapi` resolves pydantic v2/Rust). Found and fixed a serious, general deadlock in the import
-  system (a module-level generator expression evaluated during an import could spawn a real OS
-  thread that blocked forever on a lock the importing thread wouldn't release until that same
-  generator finished). Root-caused two more real bugs in pydantic v1 field-validator internals:
-  `typing.NoneType`/`Optional[X]`'s implicit `None` member wasn't the same object `type(None)`
-  returns, and `issubclass(list, typing.List)`-style checks against typing generics didn't delegate
-  to their real origin — plus a second real concurrency bug the `issubclass` fix itself exposed
-  (`GenericAliasModule`'s origin-mapping dictionaries weren't thread-safe, causing the test suite to
-  hang intermittently under real parallel execution; fixed with `ConcurrentDictionary`). **Current
-  frontier is a real language-feature wall**: real `eval()` (Axis A, documented, never previously
-  exercised), needed for `Schema.update_forward_refs()`'s genuinely self-referential string forward
-  refs. 6/7/8 to do; native cross-cutting partial.
+- Scenarios: **1, 1b, 5, 9 complete**; **2** well underway — **3.1/3.1b/3.2 all done**: `import
+  starlette` succeeds completely and a real `Starlette` app works end to end over a real, minimal
+  ASGI HTTP server (`samples/asgi_server.py`) — routing, exception handling (default + custom),
+  static files, WebSockets (incl. real async-generator-backed streaming), and lifespan events all
+  verified against real, unmodified starlette and anyio, with ~15 real interpreter/stdlib bugs found
+  and fixed along the way (full history in `FASTAPI_PLAN.md` Phase 3). **Phase 3 (starlette, anyio
+  and a real ASGI server) is substantially complete end to end.**
+  **Phase 4.1 done: `import fastapi` succeeds** — pinned to `fastapi==0.99.1`/
+  `starlette==0.27.0`/`pydantic==1.10.13` (the last combination built purely against pydantic v1;
+  the default `install fastapi` resolves pydantic v2/Rust, the wall this plan avoids). Along the
+  way: two serious, general concurrency bugs found and fixed (an import-system deadlock — a
+  module-level generator expression evaluated during an import could spawn a real OS thread
+  blocked forever on a lock the importing thread wouldn't release; and a flaky-suite MRO-computation
+  race from a shared mutable static identity, fixed with `[ThreadStatic]`, confirmed via 41
+  consecutive clean full-suite runs); real `eval()` (expression evaluation) and real
+  `typing.ForwardRef`/`typing_extensions._AnnotatedAlias`, implemented to resolve fastapi's real,
+  genuinely self-referential JSON-Schema-shaped forward refs; and ~15 smaller real stdlib/typing
+  gaps. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4. **Current frontier**: `FastAPI()`
+  construction hits a missing `inspect.isroutine` — Phase 4.2 (a real target sample app) not
+  started. 6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -474,8 +449,18 @@ in scenario 1).
   (didn't exist); **fixed a second real concurrency bug** ✅ (`GenericAliasModule.OriginMap`/
   `ArgsTransform` were plain, non-thread-safe `Dictionary`s written on every `import typing` and
   read on every `issubclass` call — under real parallel test execution this could corrupt their
-  internal state; switched to `ConcurrentDictionary`).
-- Tests: **914 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  internal state; switched to `ConcurrentDictionary`); real **`eval()`** ✅ (expression evaluation,
+  real CPython's own full scope for it — previously raised `NotImplementedError`, an Axis A gap
+  never before exercised by a real scenario); real **`typing.ForwardRef`** ✅ (real `__init__`/
+  `_evaluate`/`__eq__`/`__hash__`; bare string type arguments now auto-wrap into one, matching
+  CPython's `_type_check`); real **`typing_extensions._AnnotatedAlias`** ✅ (real `__init__`
+  storing `__origin__`/`__metadata__`/`__args__`); **fixed a third real concurrency bug** ✅
+  (`GenericAliasModule.GenericPlaceholder`, a single shared mutable static overwritten by every
+  concurrent `import typing`, causing an intermittent flaky-suite MRO failure — fixed with
+  `[ThreadStatic]`); real **`hash()` dunder dispatch** ✅ (never consulted a `PyInstance`'s own
+  `__hash__`, unlike `==`); `email.message.Message`, `binascii.Error`, `http.client.responses`
+  didn't exist. **`import fastapi` now succeeds.**
+- Tests: **928 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

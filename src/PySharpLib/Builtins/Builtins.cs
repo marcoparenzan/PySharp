@@ -454,7 +454,14 @@ public static class BuiltinsFactory
                 PyOps.AsBigInt(args[2], "mod"))
             : interp.BinaryOp("**", args[0], args[1]));
 
-        Add("hash", (_, args, _) => new BigInteger(PyOps.PyHash(args[0])));
+        // Real CPython: hash(x) calls a real __hash__ dunder if the instance's class defines one —
+        // PyOps.PyHash (used for the builtin types) has no Interp to call one with, so a PyInstance
+        // with a real __hash__ (e.g. ForwardRef, comparing/hashing by its forward-ref string) needs
+        // to be checked here first, the same way `==`/RichEquals already consults a real __eq__.
+        Add("hash", (interp, args, _) =>
+            args[0] is PyInstance inst && inst.Class.TryLookup("__hash__", out var hashMethod)
+                ? interp.Call(new PyBoundMethod(inst, hashMethod), Array.Empty<object>())
+                : new BigInteger(PyOps.PyHash(args[0])));
         Add("id", (_, args, _) => new BigInteger(
             System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(args[0])));
 
@@ -607,7 +614,47 @@ public static class BuiltinsFactory
         });
 
         Add("exec", (interp, args, _) => throw PyErr.NotImplementedError("exec() not supported"));
-        Add("eval", (interp, args, _) => throw PyErr.NotImplementedError("eval() not supported"));
+        // Real eval(source, globals=None, locals=None): parses `source` as a single expression
+        // (real CPython's eval — unlike exec — only ever handles an expression, never statements,
+        // so this is genuinely eval()'s full real scope, not a narrowed subset) and evaluates it
+        // against the given namespaces. With no globals given, evaluates in the caller's own real
+        // live environment (Interp.InnermostFrame), matching real CPython's frame-introspecting
+        // default. Found via real pydantic v1's own forward-ref resolution (ForwardRef._evaluate /
+        // typing.get_type_hints, itself needed by fastapi's real `Schema.update_forward_refs()` on
+        // genuinely self-referential JSON-Schema-shaped models — `SchemaOrBool = Union[Schema,
+        // bool]`, referenced as the *string* "SchemaOrBool" throughout Schema's own fields) — a
+        // documented, previously-unexercised Axis A gap until this was the first real scenario to
+        // need it. See FASTAPI_PLAN.md Phase 4.
+        Add("eval", (interp, args, kwargs) =>
+        {
+            if (args.Length == 0 || args[0] is not string source)
+                throw PyErr.TypeError("eval() arg 1 must be a string");
+            var expr = Parsing.Parser.ParseExpression(source);
+
+            object? globalsArg = args.Length > 1 ? args[1]
+                : kwargs is not null && kwargs.TryGetValue("globals", out var g) ? g : null;
+            if (globalsArg is null or PyNone)
+            {
+                var callerEnv = Interp.InnermostFrame?.Env
+                                 ?? throw PyErr.RuntimeError("eval(): no current frame");
+                return interp.Eval(expr, callerEnv);
+            }
+
+            var globalsDict = globalsArg as PyDict ?? throw PyErr.TypeError("eval() globals must be a dict");
+            var evalModule = new PyModule("<string>", globalsDict) { Builtins = interp.BuiltinsModule };
+
+            object? localsArg = args.Length > 2 ? args[2]
+                : kwargs is not null && kwargs.TryGetValue("locals", out var l) ? l : null;
+            if (localsArg is null or PyNone || ReferenceEquals(localsArg, globalsDict))
+                return interp.Eval(expr, new Env(evalModule) { IsGlobalScope = true });
+
+            var localsDict = localsArg as PyDict ?? throw PyErr.TypeError("eval() locals must be a dict");
+            var localEnv = new Env(evalModule);
+            foreach (var kv in localsDict.Entries)
+                if (kv.Key is string k)
+                    localEnv.Set(k, kv.Value);
+            return interp.Eval(expr, localEnv);
+        });
 
         Add("open", (interp, args, kwargs) => FileObject.Open(interp, args, kwargs));
 

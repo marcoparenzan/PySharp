@@ -130,4 +130,15 @@ public sealed class PyModule
         Name = name;
         Dict["__name__"] = name;
     }
+
+    /// <summary>Wraps an *existing* dict as this module's namespace (instead of a fresh one) —
+    /// used by eval()'s globals argument, so evaluating an expression against a real dict the
+    /// caller passed in shares that same object (mutations from the expression, e.g. a walrus
+    /// assignment, are visible to the caller afterward), matching real CPython's `eval(expr,
+    /// globals_dict)` exactly.</summary>
+    public PyModule(string name, PyDict dict)
+    {
+        Name = name;
+        Dict = dict;
+    }
 }

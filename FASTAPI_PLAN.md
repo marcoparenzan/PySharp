@@ -1448,9 +1448,13 @@ scoping down explicitly rather than silently.
 
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
-- [ ] 4.1 `import fastapi` succeeds. 🟡 in progress (4.1.1 below) — a serious real deadlock found and
-  fixed, plus several smaller real gaps; progressed well into real pydantic v1's field-validator
-  machinery before hitting the current frontier (see 4.1.1).
+- [x] 4.1 `import fastapi` succeeds. **Done** (4.1.1–4.1.3): pinned to the last real
+  `fastapi==0.99.1`/`starlette==0.27.0`/`pydantic==1.10.13` combination built purely against
+  pydantic v1; found and fixed two serious real concurrency bugs (an import-system deadlock, and a
+  flaky-suite MRO race), implemented real `eval()`/`typing.ForwardRef`/
+  `typing_extensions._AnnotatedAlias`, and closed ~15 smaller real stdlib/typing gaps along the way.
+  `from fastapi import FastAPI` resolves the real class; `FastAPI()` construction is the next
+  frontier (`inspect.isroutine` missing), not yet started.
 - [ ] 4.2 Write the first real target sample (mirrors scenario 1's/1b's "the script is the test
   bench"): a small real FastAPI app — path params, a pydantic request model, JSON response — run
   under PySharp with an ASGI server (starlette's own dev server, or a minimal one over the C#
@@ -1592,6 +1596,89 @@ via direct probing (constructing the exact failing expression in isolation, comp
   runs after the fix. No dedicated regression test (a genuine cross-thread race isn't reliably
   reproducible in one deterministic test the way the import deadlock was); the fix itself is the
   correctness fix, verified by the suite's now-consistent behavior under real parallel execution.
+
+### 4.1.3 — `import fastapi` succeeds: real `eval()`/`ForwardRef`, a second flaky-suite deadlock, then the milestone
+
+The author's explicit go-ahead ("procedi") to implement real `eval()` — the wall 4.1.2 stopped at.
+This round closed it out completely and reached Phase 4.1's actual target.
+
+- **Real `eval(source, globals=None, locals=None)`** (Builtins.cs): parses `source` via the
+  existing `Parser.ParseExpression` (already used for f-strings) and evaluates it against the given
+  namespaces. With no `globals`, evaluates against the caller's own real live environment
+  (`Interp.InnermostFrame`), matching real CPython's frame-introspecting default. A new
+  `PyModule(name, PyDict)` constructor overload lets the given `globals` dict back the eval
+  environment *directly* (not a copy), so mutations during evaluation stay visible to the caller
+  afterward — real CPython's exact semantics. Verified manually against known-correct behavior
+  first (simple expressions, tuple expressions, no-globals against the caller's scope, explicit
+  globals, separate globals+locals) before writing tests. `exec()` (statements, not just an
+  expression) stays out of scope — genuinely unneeded here, since `eval()` is real CPython's own
+  full scope for a single expression too.
+- **Real `typing.ForwardRef`** (`GenericAliasModule.BuildForwardRefClass`): a real `__init__`
+  (storing `__forward_arg__` and the rest of the real bookkeeping fields pydantic v1's own
+  `update_field_forward_refs` inspects directly via `field.type_.__class__ == ForwardRef`), a real
+  `_evaluate(globalns, localns, recursive_guard)` resolving the string via the real `eval()` just
+  built, and real `__eq__`/`__hash__`/`__repr__` (two `ForwardRef('X')` instances compare and hash
+  equal, matching real CPython). `GenericAliasModule.Subscript` now auto-wraps a bare string type
+  argument into one (`Optional["SchemaOrBool"]`) — real CPython's `_type_check` does the same;
+  without it, pydantic's `isinstance(type_, ForwardRef)` checks never recognized the string as
+  something to defer, and `find_validators`' `issubclass(type_, val_type)` loop raised a real
+  `TypeError` trying to `issubclass` a bare string.
+- **Real `typing_extensions._AnnotatedAlias`** (MiscModules.cs): a real `__init__` storing
+  `__origin__`/`__metadata__`/`__args__` (previously a bare placeholder, raising "takes no
+  arguments" — real pydantic v1's own `convert_generics`, pydantic/typing.py, constructs one
+  *directly* while recursively replacing bare string type arguments inside `Annotated[...]` with
+  real `ForwardRef`s). Merges metadata when wrapping an already-`_AnnotatedAlias` origin
+  (`Annotated[Annotated[X, a], b]` flattens to one alias with combined metadata), matching real
+  CPython.
+- **A real, separate, general gap found while verifying `ForwardRef.__hash__`**: `hash(x)` never
+  consulted a `PyInstance`'s own `__hash__` dunder at all — `==`/`RichEquals` already did this for
+  `__eq__`, but `hash()` (`Builtins.cs`) always fell back to raw CLR identity hashing regardless of
+  any real `__hash__` override. Fixed by checking `inst.Class.TryLookup("__hash__", ...)` first,
+  the same way `RichEquals` already does for `__eq__` — a real fix well beyond `ForwardRef`, since
+  *any* user-defined class overriding `__hash__` was silently ignored by the builtin before this.
+- **A second real, intermittent flaky-suite bug — the same class as 4.1.2's `OriginMap` race, one
+  instance missed the first time**: `GenericAliasModule.GenericPlaceholder` (identifying
+  `typing.Generic` by identity, to de-duplicate a redundant `Generic[T]` base in a class's resolved
+  MRO) was a single plain `public static` field — but `MiscModules.CreateTyping` builds a *fresh*
+  "Generic" `PyClass` on every `import typing` (one per `Interp` instance, i.e. one per test/
+  script), so under real parallel test execution, whichever test's `import typing` ran *last*
+  silently overwrote every other concurrently-running test's own Generic identity. A later test's
+  `class Foo(Generic[T]):` de-duplication check then compared against the *wrong* (some other
+  test's) Generic class, leaving a genuine duplicate `Generic` in the resolved bases and breaking
+  MRO computation outright (`TypeError: Cannot create a consistent MRO`) — intermittently, not
+  every run, which is why it survived the 4.1.2 fix undetected until a fresh round of repeated
+  full-suite runs caught it (twice: once as an outright hang, once as 2 real test failures). Fixed
+  with `[ThreadStatic]`, matching the same pattern `PyGenerator.Current`/`PyCoroutine.Current`
+  already use for analogous per-execution-context state — each `PyEngine.Run()` executes its
+  script on its own dedicated OS thread (`BigStack.Run`), so this correctly scopes the placeholder
+  per test/script without the cross-thread interference. **Confirmed with 41 consecutive clean
+  full-suite runs afterward** (25 immediately after this specific fix, 8 more with this round's
+  remaining gaps fixed, 8 more with the final test additions) — the flakiness genuinely stopped, not
+  just didn't happen to reproduce.
+- **Four more small, real stdlib gaps closed reaching the actual milestone**: `email.message.Message`
+  didn't exist (real header storage + `get_content_type`/`get_content_maintype`/`get_content_subtype`,
+  found via fastapi's real `routing.py` checking whether a request body is JSON-shaped);
+  `typing.TypeGuard`/`AsyncGenerator` didn't exist (bare placeholders, matching the rest of the list);
+  `binascii` didn't exist at all (just `Error`, a real `ValueError` subclass — found via fastapi's
+  real `security/http.py`, `except (ValueError, UnicodeDecodeError, binascii.Error):` around a
+  `base64.b64decode` call); `http.client` didn't exist as an importable submodule (just `responses`,
+  a real status-code → reason-phrase dict built from the same data `http.HTTPStatus` already
+  carries — found via fastapi's real `openapi/utils.py` defaulting a response description from the
+  real reason phrase).
+- **`import fastapi` succeeds.** Verified directly and repeatedly (manually, then via a new
+  deterministic regression test): `import fastapi; print(fastapi.__name__)` runs clean against the
+  real, pinned `fastapi==0.99.1`/`starlette==0.27.0`/`pydantic==1.10.13` combination, and
+  `from fastapi import FastAPI` resolves the real class. **This is Phase 4.1's target milestone.**
+  New frontier found immediately past it (not chased this round): `FastAPI()` *construction* hits
+  `AttributeError: 'module' object has no attribute 'isroutine'` (`inspect.isroutine` doesn't exist)
+  — a small, concrete, well-scoped next gap, deliberately left for the next round rather than
+  chasing indefinitely past this round's actual target.
+- 14 tests added: `M6_Stdlib/StdlibTests.cs` gained `EvalBuiltinTests` (4), `ForwardRefTests` (3),
+  `AnnotatedAliasTests` (2), `HashDunderTests` (1), `BinasciiAndHttpClientTests` (2); new
+  `M16_FastApi/FastApiInstallFixture.cs` + `FastApiSmokeTests.cs` (2, using the same
+  `IClassFixture`-based real-PyPI-install pattern as the existing `PydanticSmokeTests`). Full suite
+  green throughout, confirmed stable across dozens of repeated runs: 928/928 by the end of this
+  round, up from 914 at the start of it.
 
 ## Phase 5 — docs
 
@@ -1863,10 +1950,16 @@ this could corrupt their internal state (surfacing as the suite hanging intermit
 switching to `ConcurrentDictionary`. 914/914 tests green (up from 911), confirmed stable across
 multiple consecutive full-suite runs.
 
-**Current frontier: a real language-feature wall, not a gap-fill.** `import fastapi` now reaches
-`Schema.update_forward_refs()` resolving genuinely self-referential forward-ref strings
-(`"SchemaOrBool"`), which fundamentally needs real `eval()` — a documented, existing Axis A gap,
-never previously exercised by any real scenario. Implementing it (even scoped to expression
-evaluation, all `eval()` itself ever does) is a new language capability, the same class of decision
-as the async-generator round — a natural point to check in with the author. Full blow-by-blow in
-4.1.2.
+**`import fastapi` succeeds — Phase 4.1 is done (4.1.3).** Real `eval()` (expression evaluation,
+real CPython's own full scope for it) and real `typing.ForwardRef`/`typing_extensions._AnnotatedAlias`
+were implemented to resolve fastapi's real, genuinely self-referential JSON-Schema-shaped forward
+refs (`SchemaOrBool = Union[Schema, bool]`). Along the way: a real, general `hash()` fix (never
+consulted a `PyInstance`'s own `__hash__`), a second serious flaky-suite concurrency bug
+(`GenericAliasModule.GenericPlaceholder`, the same class of bug as 4.1.2's `OriginMap` race — fixed
+with `[ThreadStatic]`, confirmed via 41 consecutive clean full-suite runs), and ~4 more small stdlib
+gaps (`email.message.Message`, `binascii.Error`, `http.client.responses`, a couple of bare typing
+placeholders). 14 tests added, including a real `import fastapi` regression test against the pinned
+PyPI packages. 928/928 tests green (up from 914).
+
+**New frontier**: `FastAPI()` construction hits `inspect.isroutine` (missing). Not started — a
+natural next step for Phase 4.2 (writing the first real target FastAPI sample app).

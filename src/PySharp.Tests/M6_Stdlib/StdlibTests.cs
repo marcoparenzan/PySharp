@@ -1808,6 +1808,170 @@ public class TypingIdentityTests
             """));
 }
 
+/// <summary>Real `eval()` (Builtins.cs) — expression evaluation, scoped exactly the way real
+/// CPython's own eval() is (it only ever handles a single expression, never statements — that's
+/// what exec() is for). Found via real pydantic v1's own forward-ref resolution
+/// (`ForwardRef._evaluate`), itself needed by fastapi's real `Schema.update_forward_refs()` on
+/// genuinely self-referential JSON-Schema-shaped models. A documented, previously-unexercised
+/// Axis A gap until this was the first real scenario to need it. See FASTAPI_PLAN.md Phase 4.</summary>
+public class EvalBuiltinTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Eval_evaluates_simple_expressions()
+        => Assert.Equal("3\nab\n[0, 2, 4]\n(1, 2, 3)", Run("""
+            print(eval("1 + 2"))
+            print(eval("'a' + 'b'"))
+            print(eval("[x*2 for x in range(3)]"))
+            print(eval("1, 2, 3"))
+            """));
+
+    [Fact]
+    public void Eval_with_no_globals_resolves_against_the_callers_own_scope()
+        => Assert.Equal("15", Run("""
+            x = 10
+            def f():
+                y = 5
+                return eval("x + y")
+            print(f())
+            """));
+
+    [Fact]
+    public void Eval_with_explicit_globals_reads_from_the_given_dict()
+        => Assert.Equal("101", Run("""
+            g = {"a": 100}
+            print(eval("a + 1", g))
+            """));
+
+    [Fact]
+    public void Eval_with_separate_globals_and_locals_resolves_both()
+        => Assert.Equal("3", Run("""
+            g = {"a": 1}
+            l = {"b": 2}
+            print(eval("a + b", g, l))
+            """));
+}
+
+/// <summary>Real `typing.ForwardRef`: a real `__init__`/`_evaluate` (using the real `eval()`
+/// builtin) and real `__eq__`/`__hash__` by forward-ref string — previously a bare placeholder.
+/// `GenericAliasModule.Subscript` now auto-wraps a bare string type argument into one, matching
+/// real CPython's `_type_check`. Found via fastapi's real `openapi/models.py`:
+/// `Optional["SchemaOrBool"]`-shaped genuinely self-referential fields. See FASTAPI_PLAN.md
+/// Phase 4.</summary>
+public class ForwardRefTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void A_bare_string_type_argument_is_auto_wrapped_into_a_real_ForwardRef()
+        => Assert.Equal("<class 'ForwardRef'>\nTrue\nint\nFalse", Run("""
+            from typing import Optional, ForwardRef, get_args
+            member = [a for a in get_args(Optional["int"]) if a is not type(None)][0]
+            print(type(member))
+            print(member.__class__ is ForwardRef)
+            print(member.__forward_arg__)
+            print(member.__forward_evaluated__)
+            """));
+
+    [Fact]
+    public void ForwardRef_evaluate_resolves_the_string_via_real_eval_and_caches_it()
+        => Assert.Equal("<built-in function int>\nTrue\nTrue", Run("""
+            from typing import Optional, get_args
+            member = [a for a in get_args(Optional["int"]) if a is not type(None)][0]
+            resolved = member._evaluate({"int": int}, None, set())
+            print(resolved)
+            print(resolved is int)
+            print(member.__forward_evaluated__)
+            """));
+
+    [Fact]
+    public void ForwardRef_equality_and_hash_are_by_the_forward_ref_string()
+        => Assert.Equal("True\nTrue", Run("""
+            from typing import ForwardRef
+            a = ForwardRef("Foo")
+            b = ForwardRef("Foo")
+            print(a == b)
+            print(hash(a) == hash(b))
+            """));
+}
+
+/// <summary>Real `typing_extensions._AnnotatedAlias.__init__`: stores `__origin__`/`__metadata__`/
+/// `__args__` for real (previously a bare placeholder, raising "takes no arguments" when
+/// constructed directly). Merges metadata when wrapping an already-`_AnnotatedAlias` origin,
+/// matching real CPython. Found via real pydantic v1's own `convert_generics`
+/// (`pydantic/typing.py`), constructing one directly while recursively replacing bare string type
+/// arguments inside an `Annotated[...]` with real `ForwardRef`s. See FASTAPI_PLAN.md Phase 4.</summary>
+public class AnnotatedAliasTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Direct_construction_stores_origin_metadata_and_args()
+        => Assert.Equal("<built-in function int>\n('meta1', 'meta2')\n(<built-in function int>,)", Run("""
+            from typing import _AnnotatedAlias
+            a = _AnnotatedAlias(int, ("meta1", "meta2"))
+            print(a.__origin__)
+            print(a.__metadata__)
+            print(a.__args__)
+            """));
+
+    [Fact]
+    public void Wrapping_an_existing_AnnotatedAlias_merges_metadata()
+        => Assert.Equal("<built-in function int>\n('meta1', 'meta2', 'meta3')", Run("""
+            from typing import _AnnotatedAlias
+            a = _AnnotatedAlias(int, ("meta1", "meta2"))
+            b = _AnnotatedAlias(a, ("meta3",))
+            print(b.__origin__)
+            print(b.__metadata__)
+            """));
+}
+
+/// <summary>Real `hash()` consulting a `PyInstance`'s own `__hash__` dunder — previously always
+/// fell back to raw CLR identity hashing (`==`/RichEquals already consulted a real `__eq__`, but
+/// `hash()` had no equivalent path). Found while implementing ForwardRef's real `__eq__`/
+/// `__hash__` (two `ForwardRef("Foo")` instances must be equal *and* hash equal). See
+/// FASTAPI_PLAN.md Phase 4.</summary>
+public class HashDunderTests
+{
+    [Fact]
+    public void Hash_calls_a_real_user_defined_dunder_hash()
+        => Assert.Equal("True", Py.Run("""
+            class C:
+                def __init__(self, key):
+                    self.key = key
+                def __eq__(self, other):
+                    return self.key == other.key
+                def __hash__(self):
+                    return hash(self.key)
+            print(hash(C("x")) == hash(C("x")))
+            """).TrimEnd('\n'));
+}
+
+/// <summary>binascii.Error (a real ValueError subclass) and http.client.responses (a real
+/// status-code -> reason-phrase dict, the same data http.HTTPStatus already carries) — both
+/// previously missing entirely. Found via fastapi's real `security/http.py` (`import binascii`)
+/// and `openapi/utils.py` (`import http.client`). See FASTAPI_PLAN.md Phase 4.</summary>
+public class BinasciiAndHttpClientTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Binascii_error_is_a_real_ValueError_subclass()
+        => Assert.Equal("True", Run("""
+            import binascii
+            print(issubclass(binascii.Error, ValueError))
+            """));
+
+    [Fact]
+    public void Http_client_responses_maps_status_codes_to_real_reason_phrases()
+        => Assert.Equal("OK\nNot Found", Run("""
+            import http.client
+            print(http.client.responses[200])
+            print(http.client.responses[404])
+            """));
+}
+
 /// <summary>subprocess: real process spawning (System.Diagnostics.Process) — Popen with real
 /// pipes, run()/check_output(), CalledProcessError on nonzero exit with check=True. Found via
 /// anyio's real `from subprocess import PIPE, CalledProcessError, CompletedProcess`

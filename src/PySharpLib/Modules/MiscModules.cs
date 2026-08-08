@@ -154,14 +154,14 @@ public static class MiscModules
             "Type", "TypeVar", "Generic", "ClassVar", "Final", "Literal", "Protocol",
             "NamedTuple", "TypedDict", "cast", "overload", "IO", "BinaryIO", "TextIO",
             "Deque", "DefaultDict", "OrderedDict", "Counter", "ChainMap", "Awaitable",
-            "Coroutine", "AsyncIterator", "AsyncIterable", "Generator", "AbstractSet",
+            "Coroutine", "AsyncIterator", "AsyncIterable", "AsyncGenerator", "Generator", "AbstractSet",
             "MutableSequence", "MutableSet", "Hashable", "Sized", "Container", "Collection",
             "Reversible", "SupportsInt", "SupportsFloat", "SupportsAbs", "SupportsRound",
             "SupportsComplex", "SupportsBytes", "SupportsIndex",
             "ByteString", "AnyStr", "NoReturn", "Never", "Text", "Concatenate", "Self", "TypeAlias",
             "TypeGuard", "Unpack", "Annotated",
             "Match", "Pattern",
-            "ForwardRef", "_Final", "_BaseGenericAlias",
+            "_Final", "_BaseGenericAlias",
             "_SpecialGenericAlias", "_AnnotatedAlias", "_UnionGenericAlias",
             "_ConcatenateGenericAlias", "_ProtocolMeta", "_TypedDictMeta",
             "ContextManager", "AsyncContextManager",
@@ -175,13 +175,37 @@ public static class MiscModules
         // So __mro_entries__ can recognize `Generic[T]` by identity and de-duplicate it when
         // redundant (see GenericAliasModule.OriginBringsInGeneric).
         GenericAliasModule.GenericPlaceholder = (PyClass)d["Generic"];
-        // Real CPython's ForwardRef declares __slots__ (typing_extensions checks for the presence
-        // of '__forward_is_class__' in it at import time, e.g. `typing.ForwardRef.__slots__`) —
-        // give our stub the same shape so that check doesn't crash.
-        ((PyClass)d["ForwardRef"]).Dict["__slots__"] = new PyTuple(new object[]
+        // Real ForwardRef (see GenericAliasModule.BuildForwardRefClass): a real __init__/_evaluate
+        // using the real eval() builtin, not a bare placeholder — needed once a real string type
+        // argument (`Optional["SomeType"]`) is auto-wrapped into one (GenericAliasModule.Subscript)
+        // for real forward-ref resolution (real pydantic v1's own `update_forward_refs()`).
+        d["ForwardRef"] = GenericAliasModule.ForwardRefClass;
+        // Real CPython's typing._AnnotatedAlias (re-exported as typing_extensions._AnnotatedAlias):
+        // a real __init__ storing __origin__/__metadata__, not a bare placeholder — pydantic v1's
+        // own `convert_generics` (pydantic/typing.py) constructs one *directly*
+        // (`_AnnotatedAlias(convert_generics(args[0]), args[1:])`) while recursively replacing bare
+        // string type arguments with real ForwardRefs inside an `Annotated[...]` — found via
+        // fastapi's real `openapi/models.py` reaching this path. Real CPython's version also merges
+        // metadata when wrapping an already-`_AnnotatedAlias` origin (`Annotated[Annotated[X, a], b]`
+        // flattens to one alias with combined metadata) — real behavior, not a simplification.
+        ((PyClass)d["_AnnotatedAlias"]).Dict["__init__"] = new PyBuiltinFunction("_AnnotatedAlias.__init__", (_, a, _) =>
         {
-            "__forward_arg__", "__forward_code__", "__forward_evaluated__", "__forward_value__",
-            "__forward_is_argument__", "__forward_is_class__", "__forward_module__",
+            var inst = (PyInstance)a[0];
+            object origin = a[1];
+            var metadata = a[2] is PyTuple mt ? mt.Items : new[] { a[2] };
+            if (origin is PyInstance originInst && originInst.Class == (PyClass)d["_AnnotatedAlias"])
+            {
+                var innerMeta = ((PyTuple)originInst.Dict["__metadata__"]).Items;
+                metadata = innerMeta.Concat(metadata).ToArray();
+                origin = originInst.Dict["__origin__"];
+            }
+            inst.Dict["__origin__"] = origin;
+            inst.Dict["__metadata__"] = new PyTuple(metadata);
+            // Real CPython: _AnnotatedAlias.__args__ is `(origin,)` — real code (pydantic v1's own
+            // get_args: `tp.__args__ + tp.__metadata__`) concatenates the two tuples to rebuild the
+            // full `(origin, *metadata)` shape `Annotated[...]` subscripting produced.
+            inst.Dict["__args__"] = new PyTuple(new[] { origin });
+            return PyNone.Instance;
         });
         // TYPE_CHECKING is False at runtime
         d["TYPE_CHECKING"] = false;
