@@ -193,6 +193,24 @@ public static class AsyncioModule
         d["get_running_loop"] = new PyBuiltinFunction("get_running_loop", (_, _, _) => RunningLoop());
         d["new_event_loop"] = new PyBuiltinFunction("new_event_loop", (interp, _, _) => new PyEventLoop(interp));
         d["set_event_loop"] = new PyBuiltinFunction("set_event_loop", (_, _, _) => PyNone.Instance);
+        // A bare placeholder — real event loop objects are the native PyEventLoop (never wrapped
+        // as a PyInstance of this), so isinstance(loop, AbstractEventLoop) wouldn't recognize a
+        // real loop; nothing in scope needs that, only the name itself as a type hint. Found via
+        // anyio's real `from asyncio import ... AbstractEventLoop, ...` (_backends/_asyncio.py),
+        // used purely in annotations (`loop: AbstractEventLoop`), reachable from `import starlette`.
+        d["AbstractEventLoop"] = new PyClass("AbstractEventLoop", new List<PyClass>());
+        // Real CPython tracks every live Task in a per-loop registry; PySharp's PyEventLoop doesn't
+        // keep one, so this always reports "no other tasks" rather than the true live set — an
+        // honest limitation (not pretending otherwise), safe here since nothing in scope actually
+        // asserts on its contents (real callers use it for bulk cancellation/cleanup on shutdown,
+        // a no-op over an empty set). Found via anyio's real `from asyncio import ... all_tasks,
+        // ...` (_backends/_asyncio.py), reachable from `import starlette`.
+        d["all_tasks"] = new PyBuiltinFunction("all_tasks", (_, _, _) => new PySet(Array.Empty<object>()));
+        // Same honest limitation as all_tasks above: PySharp doesn't track "the currently running
+        // task" per thread, so this always reports None rather than the real running PyTask.
+        // Found via anyio's real `from asyncio import ... current_task, ...`
+        // (_backends/_asyncio.py), reachable from `import starlette`.
+        d["current_task"] = new PyBuiltinFunction("current_task", (_, _, _) => PyNone.Instance);
 
         d["Future"] = new PyBuiltinFunction("Future", (interp, _, _) =>
             new PyFuture { Loop = PyEventLoop.Running ?? new PyEventLoop(interp) });

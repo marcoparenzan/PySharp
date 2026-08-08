@@ -46,7 +46,17 @@ public static class InspectModule
         // generators aren't a construct PySharp can produce at all (see ROADMAP.md), so
         // isasyncgenfunction/isasyncgen are real in the sense that they correctly always report
         // False, not a stub pretending otherwise. See FASTAPI_PLAN.md.
-        d["isfunction"] = new PyBuiltinFunction("isfunction", (_, a, _) => a[0] is PyFunction { IsGenerator: false, IsAsync: false });
+        //
+        // A real bug fix: isfunction previously excluded generator *and* async functions, but real
+        // CPython's isfunction is purely "is this a FunctionType" — it doesn't care whether the
+        // function happens to be async or a generator (those are what iscoroutinefunction/
+        // isgeneratorfunction are for). Found via starlette's real `Route.__init__`
+        // (`if inspect.isfunction(endpoint_handler) or inspect.ismethod(endpoint_handler): self.app
+        // = request_response(endpoint)` — routing.py): every `async def` endpoint handler failed
+        // this check, so Route treated the plain handler function as if it were already a raw ASGI
+        // app, calling it with `(scope, receive, send)` instead of wrapping it via
+        // `request_response()` to call it correctly with just `(request)`.
+        d["isfunction"] = new PyBuiltinFunction("isfunction", (_, a, _) => a[0] is PyFunction);
         d["ismethod"] = new PyBuiltinFunction("ismethod", (_, a, _) => a[0] is PyBoundMethod);
         d["isclass"] = new PyBuiltinFunction("isclass", (_, a, _) => a[0] is PyClass);
         d["ismodule"] = new PyBuiltinFunction("ismodule", (_, a, _) => a[0] is PyModule);

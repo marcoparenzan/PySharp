@@ -613,7 +613,14 @@ long session once the author said "procedi" to continue past Phase 1's completio
   by this probe — real usage of either may still turn up further gaps.
 - [ ] 3.1b Exercise more of starlette's real surface beyond construction — routing dispatch,
   request/response handling, middleware, `staticfiles.py`, WebSockets — to find the *next* real
-  gaps before Phase 3.2's ASGI server work begins.
+  gaps before Phase 3.2's ASGI server work begins. **In progress** (3.1.6 below) — real ASGI request
+  dispatch through a constructed `Starlette` app now works end to end (verified with a raw ASGI
+  `scope`/`receive`/`send` triple, matching what a real server would send): the index route and a
+  path-parameter route (`/items/{item_id}`) both return correct, real HTTP response messages. This
+  round surfaced (and fixed) **two significant, previously-silent correctness bugs** — see 3.1.6.
+  The 404/exception-handling path is not yet closed (it now needs `asyncio.base_events
+  ._run_until_complete_cb`, a private CPython-internal symbol — a deliberate stopping point for this
+  round); `staticfiles.py`/WebSockets remain unexercised.
 - [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
   `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
   where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
@@ -953,6 +960,62 @@ and `Starlette(routes=[Route("/", homepage)])` constructs for real.
   `import anyio.from_thread`/`to_thread`, and `Starlette(routes=[Route("/", homepage)])` — all
   succeed for real, not just "doesn't crash at import time."
 
+### 3.1.6 — 3.1b begins: real ASGI request dispatch, and two significant correctness bugs found
+
+With `import starlette` and app construction both done, the natural next step (the author's plain
+"procedi") was to actually **exercise** the constructed app — send it a real ASGI request, the way
+a real server would, using a raw `scope`/`receive`/`send` triple built by hand (no real ASGI server
+exists yet — that's Phase 3.2). This immediately surfaced two bugs far more consequential than a
+missing module: both would have silently broken *any* real FastAPI/starlette app.
+
+- **`inspect.isfunction` incorrectly excluded async (and generator) functions** —
+  `a[0] is PyFunction { IsGenerator: false, IsAsync: false }`. Real CPython's `isfunction` is purely
+  "is this a `FunctionType`"; async-ness/generator-ness are what `iscoroutinefunction`/
+  `isgeneratorfunction` are for, not `isfunction` itself. This silently broke **every `async def`
+  route handler**: starlette's real `Route.__init__` does `if inspect.isfunction(endpoint_handler)
+  or inspect.ismethod(endpoint_handler): self.app = request_response(endpoint)` (routing.py) —
+  since virtually every real endpoint handler is `async def`, this check failed for essentially all
+  of them, so `Route` treated the plain handler function as if it were *already* a raw ASGI app,
+  calling it directly with `(scope, receive, send)` instead of wrapping it via `request_response()`
+  to call it correctly with just `(request)` — `TypeError: homepage() takes 1 positional arguments
+  but 3 were given`. Fixed by removing the exclusions entirely; verified against sync/async/
+  generator/async-generator functions and lambdas before writing the regression test.
+- **`re.Match.groups(default=None)` only read `default` from kwargs, never positionally** — a
+  normal positional-or-keyword parameter in real CPython, not keyword-only. This silently broke
+  **any route with a path parameter that omits an explicit type** (the overwhelming majority of
+  real routes, e.g. `/items/{item_id}` vs. the less common `/items/{item_id:int}`): starlette's real
+  `compile_path` (routing.py) does `param_name, convertor_type = match.groups("str")`, passing
+  `"str"` *positionally* to default the optional `:type` capture group to `"str"` instead of `None`
+  when a route parameter has no explicit type. `AttributeError: 'NoneType' object has no attribute
+  'lstrip'` resulted from the un-defaulted `None` reaching `convertor_type.lstrip(":")` next.
+- **`callable.__call__` didn't exist as an attribute at all**, for functions, bound methods, or
+  builtins — real CPython: any callable's `.__call__` is itself callable (a bound method-wrapper
+  around the same underlying call). Found via starlette's real `is_async_callable`'s own fallback
+  branch, `iscoroutinefunction(obj) or (callable(obj) and iscoroutinefunction(obj.__call__))`
+  (`_utils.py`) — reached for a bound method (the default 404 handler is one), where
+  `iscoroutinefunction(obj)` alone returns `False` since a `PyBoundMethod` isn't a `PyFunction`.
+- **`array`**: a real (if simplified) compact typed array — real per-typecode byte width (`b`/`B`/
+  `h`/`H`/`i`/`I`/`l`/`L`/`q`/`Q`/`f`/`d`), real `tobytes`/`frombytes` round-tripping (verified
+  against int and float typecodes before writing tests), not a stub. Found via anyio's real `import
+  array` (`_backends/_asyncio.py`, for Unix file-descriptor-passing ancillary data).
+- **`asyncio.AbstractEventLoop`/`all_tasks`/`current_task`**: added as real names for real CPython
+  API surface anyio imports at module level — `AbstractEventLoop` is a bare placeholder (real event
+  loop objects are the native `PyEventLoop`, never wrapped as an instance of it; nothing in scope
+  does `isinstance(loop, AbstractEventLoop)`), and `all_tasks`/`current_task` are honest, documented
+  limitations (PySharp's event loop doesn't keep a live-task registry, so they report "no other
+  tasks"/`None` rather than the true values) — not stubs pretending otherwise, and safe here since
+  nothing in the reachable path asserts on their contents.
+- **Verified real, correct ASGI responses end to end** for both the index route and a
+  path-parameter route (`/items/{item_id}` → real JSON `{"item_id": "42"}` with correct
+  `content-length`/`content-type` headers) using a hand-built `scope`/`receive`/`send` triple — the
+  same shape a real ASGI server sends. The 404/exception-handling path goes one layer deeper into
+  anyio's real `_backends/_asyncio.py` and currently needs `from asyncio.base_events import
+  _run_until_complete_cb` — a private, underscore-prefixed CPython-internal symbol, not real public
+  API — a deliberate stopping point for this round rather than chasing CPython internals.
+- 6 tests added (`M6_Stdlib/StdlibTests.cs`: `ArrayTests`, `CallAttributeTests`, plus regression
+  tests added to the existing `InspectTests`/`ReTests` classes for the two significant bugs). Full
+  suite green throughout: 868/868 by the end of this round, up from 862 at the start of it.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1101,9 +1164,24 @@ green (up from 857). **Verified end to end, not just at import time**: `starlett
 `routing`/`responses` all import cleanly, and a real `Starlette(routes=[Route("/", homepage)])` app
 now genuinely constructs.
 
-**Current frontier for Phase 3**: not yet probed further — 3.1b (routing dispatch, request/response
-handling, middleware, `staticfiles.py`, WebSockets) is the natural next step before Phase 3.2's ASGI
-server work begins, but hasn't been started.
+**3.1b under way: real ASGI request dispatch works, and two significant correctness bugs found.**
+Sending a constructed `Starlette` app a real, hand-built ASGI request (the same `scope`/`receive`/
+`send` shape a real server sends) surfaced two bugs far more consequential than a missing module —
+both would have silently broken *any* real FastAPI/starlette app, not just this probe:
+**`inspect.isfunction` incorrectly excluded async functions** (so `Route.__init__`'s real
+`isfunction(endpoint_handler) or ismethod(endpoint_handler)` check failed for essentially every real
+`async def` route handler, treating it as an already-ASGI-shaped app and calling it with the wrong
+arguments), and **`re.Match.groups(default=...)` only read `default` from kwargs, never
+positionally** (breaking any path route with an untyped parameter, e.g. `/items/{item_id}` — the
+common case). Also closed: `array` (real per-typecode round-tripping), a real `.__call__` attribute
+on every callable, and `asyncio.AbstractEventLoop`/`all_tasks`/`current_task`. **Verified real,
+correct ASGI responses end to end** for the index route and a path-parameter route. Full blow-by-blow
+in 3.1.6. 868/868 tests green (up from 862).
+
+**Current frontier for Phase 3**: the 404/exception-handling ASGI path, which needs `from
+asyncio.base_events import _run_until_complete_cb` — a private, underscore-prefixed CPython-internal
+symbol, not real public API. A deliberate stopping point rather than chasing CPython internals;
+`staticfiles.py`/WebSockets also remain unexercised. Not started.
 
 Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
 probing.

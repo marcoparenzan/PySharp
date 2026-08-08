@@ -81,6 +81,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("email.utils", _ => EmailModule.CreateUtils());
         importer.RegisterBuiltin("mimetypes", _ => MimetypesModule.Create());
         importer.RegisterBuiltin("secrets", _ => SecretsModule.Create());
+        importer.RegisterBuiltin("array", _ => ArrayModule.Create());
         importer.RegisterBuiltin("pickle", _ => PickleModule.Create());
         importer.RegisterBuiltin("io", _ => IoModule.Create());
         importer.RegisterBuiltin("asyncio", _ => AsyncioModule.Create());

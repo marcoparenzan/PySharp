@@ -2632,6 +2632,13 @@ public sealed class Interp
                     case "__module__":
                         value = "builtins";
                         return true;
+                    // Real CPython: any callable's `.__call__` is itself callable (a bound
+                    // method-wrapper around the same underlying call). Found via starlette's real
+                    // `is_async_callable`'s fallback branch `iscoroutinefunction(obj.__call__)`
+                    // (_utils.py), reached for a bound method (e.g. the default 404 handler).
+                    case "__call__":
+                        value = obj;
+                        return true;
                 }
                 // other attributes (e.g. builtin type methods like str.upper): normal path
                 return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
@@ -2711,6 +2718,9 @@ public sealed class Interp
                     case "__dict__":
                         value = fn.Attributes;
                         return true;
+                    case "__call__":
+                        value = obj;
+                        return true;
                     // Universal fallback (matches the same case for PyBuiltinFunction/other builtin
                     // values, see TypeMethods.TryGetBuiltinAttr): `v.__class__` for a real (non-
                     // builtin) function. Found via pydantic's real `v.__class__.__name__ ==
@@ -2761,6 +2771,9 @@ public sealed class Interp
                         return true;
                     case "__name__" when bm.Function is PyBuiltinFunction bf:
                         value = bf.Name;
+                        return true;
+                    case "__call__":
+                        value = obj;
                         return true;
                 }
                 value = PyNone.Instance;

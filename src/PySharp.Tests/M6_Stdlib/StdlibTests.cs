@@ -377,6 +377,32 @@ public class InspectTests
             print(inspect.iscoroutine(coro()))
             print(inspect.isasyncgenfunction(plain))
             """));
+
+    [Fact]
+    public void Isfunction_is_true_for_async_and_generator_functions_too()
+        // Regression: isfunction previously excluded async and generator functions entirely
+        // (`PyFunction { IsGenerator: false, IsAsync: false }`), but real CPython's isfunction is
+        // purely "is this a FunctionType" — async-ness/generator-ness are what
+        // iscoroutinefunction/isgeneratorfunction are for. Found via starlette's real
+        // `Route.__init__` (`if inspect.isfunction(endpoint_handler) or
+        // inspect.ismethod(endpoint_handler): self.app = request_response(endpoint)` —
+        // routing.py): every `async def` endpoint handler failed this check, so Route treated the
+        // plain handler function as if it were already a raw ASGI app, calling it with
+        // `(scope, receive, send)` instead of wrapping it via `request_response()` to call it
+        // correctly with just `(request)` — silently breaking every async route handler.
+        => Assert.Equal("True\nTrue\nTrue\nTrue", Run("""
+            import inspect
+
+            def sync_fn(): pass
+            async def async_fn(): pass
+            def gen_fn(): yield 1
+            async def async_gen_fn(): yield 1
+
+            print(inspect.isfunction(sync_fn))
+            print(inspect.isfunction(async_fn))
+            print(inspect.isfunction(gen_fn))
+            print(inspect.isfunction(async_gen_fn))
+            """));
 }
 
 /// <summary>itertools (chain/islice/zip_longest) and the collections.Counter/ChainMap additions —
@@ -877,6 +903,35 @@ public class ReTests
             import re
             print(bool(re.fullmatch(r"\d+", "123")))
             print(bool(re.fullmatch(r"\d+", "123a")))
+            """));
+
+    [Fact]
+    public void Pattern_search_honors_the_pos_argument_to_advance_a_scan()
+        // Regression: Pattern.search/match/fullmatch/finditer silently ignored `pos`/`endpos`
+        // entirely, so `pattern.search(s, pos)` always re-matched from position 0 regardless of
+        // `pos` — found via a hand-ported http.cookies._unquote (itself needed for a real
+        // starlette dependency) whose loop advances `pos` between successive `.search(s, pos)`
+        // calls; since `pos` never actually advanced, the loop spun forever.
+        => Assert.Equal("2\nNone", Run("""
+            import re
+            p = re.compile(r"[\\].")
+            s = 'ab\\"c'
+            print(p.search(s, 0).start(0))
+            print(p.search(s, 4))
+            """));
+
+    [Fact]
+    public void Match_groups_accepts_the_default_argument_positionally()
+        // Regression: Match.groups(default=None) is a normal positional-or-keyword parameter in
+        // real CPython, but the implementation only ever read it from kwargs — found via
+        // starlette's real `param_name, convertor_type = match.groups("str")`
+        // (routing.py's compile_path, passed positionally to default an unmatched optional
+        // `:type` group to "str" instead of None).
+        => Assert.Equal("('hello', None)\n('hello', 'str')", Run("""
+            import re
+            m = re.match(r"(\w+)(:\w+)?", "hello")
+            print(m.groups())
+            print(m.groups("str"))
             """));
 }
 
@@ -1897,4 +1952,62 @@ public class MemoryViewTests
             print(isinstance(5, int | str))
             print(issubclass(int, int | float))
             """));
+}
+
+/// <summary>array: a real (if simplified) compact typed array — real per-typecode byte width,
+/// real tobytes/frombytes round-tripping. Found via anyio's real `import array`
+/// (_backends/_asyncio.py, for Unix file-descriptor-passing ancillary data), reachable from
+/// `import starlette`. See FASTAPI_PLAN.md Phase 3.</summary>
+public class ArrayTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Tobytes_and_frombytes_round_trip_for_real()
+        => Assert.Equal("3 [1, 2, 3]\n[1, 2, 3, 4]\n16\n[1, 2, 3, 4]\nTrue\ni 4", Run("""
+            import array
+            a = array.array("i", [1, 2, 3])
+            print(len(a), a.tolist())
+            a.append(4)
+            print(a.tolist())
+            b = a.tobytes()
+            print(len(b))
+            a2 = array.array("i")
+            a2.frombytes(b)
+            print(a2.tolist())
+            print(a == a2)
+            print(a.typecode, a.itemsize)
+            """));
+
+    [Fact]
+    public void Float_typecode_round_trips_too()
+        => Assert.Equal("[1.5, 2.5]", Run("""
+            import array
+            f = array.array("f", [1.5, 2.5])
+            f2 = array.array("f")
+            f2.frombytes(f.tobytes())
+            print(f2.tolist())
+            """));
+}
+
+/// <summary>Every callable's `.__call__` is itself callable (a bound method-wrapper around the
+/// same underlying call), matching real CPython. Found via starlette's real `is_async_callable`
+/// fallback branch `iscoroutinefunction(obj.__call__)` (_utils.py), reached for a bound method
+/// (e.g. the default 404 handler). See FASTAPI_PLAN.md Phase 3.</summary>
+public class CallAttributeTests
+{
+    [Fact]
+    public void Call_attribute_works_on_functions_methods_and_builtins()
+        => Assert.Equal("True\n1\nTrue\n3", Py.Run("""
+            def f(): pass
+            print(f.__call__ is f)
+
+            class C:
+                def m(self): return 1
+            c = C()
+            print(c.m.__call__())
+
+            print(len.__call__ is len)
+            print(len.__call__([1, 2, 3]))
+            """).TrimEnd('\n'));
 }

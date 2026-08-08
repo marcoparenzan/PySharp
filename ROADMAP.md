@@ -284,15 +284,16 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 ### Axis B — Stdlib
 
-Implemented **~57 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+Implemented **~58 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
 `errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio`, `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
 (`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
-`re` (real regex engine, incl. `pos`/`endpos`), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
+`re` (real regex engine, incl. `pos`/`endpos` and `Match.groups(default)` positionally), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
 `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib` (incl. `asynccontextmanager` at
-decoration time), `inspect`, `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`,
+decoration time), `inspect` (incl. a real `isfunction` fix — async/generator functions were
+previously misclassified), `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`,
 `concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`,
-`html`, `traceback`, `mimetypes`, `secrets`; real (not stub) `typing`
+`html`, `traceback`, `mimetypes`, `secrets`, `array`; real (not stub) `typing`
 and `dataclasses`; stub `__future__`.
 
 **High-priority missing**: `sqlite3` (scenario 3).
@@ -361,14 +362,16 @@ in scenario 1).
   `BaseModel` construct/validate/`.dict()` working, 2e ⚪ not started); **3** 🟡 in progress —
   **3.1 done**: `import starlette` succeeds completely (`applications`/`routing`/`responses`/
   `requests`), and a real `Starlette(routes=[Route(...)])` app constructs end to end (~51
-  stdlib/interpreter gaps closed plus `match`/`case` across 5 probe-driven rounds); 3.1b (exercising
-  routing/middleware/staticfiles/WebSockets) and 3.2 (ASGI server) not started; 4/6/7/8 to do; native
-  cross-cutting partial.
-- Stdlib modules: **~57 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
+  stdlib/interpreter gaps closed plus `match`/`case` across 5 probe-driven rounds); **3.1b under
+  way**: real ASGI request dispatch verified end to end (index route + a path-parameter route),
+  surfacing and fixing two significant, previously-silent correctness bugs (see below) — current
+  frontier is the 404/exception-handling path, needing a private CPython-internal asyncio symbol;
+  3.2 (ASGI server) not started; 4/6/7/8 to do; native cross-cutting partial.
+- Stdlib modules: **~58 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
   `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`, `html`, `traceback`, `mimetypes`,
-  `secrets`; `typing`/`dataclasses` upgraded from stubs to real implementations).
+  `secrets`, `array`; `typing`/`dataclasses` upgraded from stubs to real implementations).
 - Language axes: core subset covered; **complete** signature introspection (`__annotations__` ✅ with
   `'return'`, `__code__.co_varnames` ✅, `inspect.signature` ✅); real (simplified) **custom-metaclass
   support** ✅; `complex` ✅ (the type, not the `1j` literal); `async`/`await` ✅; **`match`/`case`
@@ -376,13 +379,17 @@ in scenario 1).
   `__ne__`/`__hash__`/`__repr__`/`__str__` defaults ✅; **real recursion-depth guard** ✅ (runaway
   recursion raises `RecursionError` instead of crashing — this interpreter had no recursion limit at
   all before); real `memoryview` ✅ (bytearray-backed views share real underlying storage); real
-  `isinstance`/`issubclass` acceptance of a genuine `X | Y` union as the 2nd argument ✅; `exec`/
-  `eval` still missing (Axis A); real `__slots__` (separate per-slot storage) still missing; async
-  generators still missing (blocks *entering* `contextlib.asynccontextmanager`-wrapped functions,
-  though defining/decorating them works); real `class X(dict):` subclass storage still missing
-  (instances aren't backed by real dict storage unless the subclass defines its own
-  `__getitem__`/`__setitem__`).
-- Tests: **862 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  `isinstance`/`issubclass` acceptance of a genuine `X | Y` union as the 2nd argument ✅; every
+  callable's real `.__call__` attribute ✅; **`inspect.isfunction` correctness fix** ✅ (previously
+  excluded async/generator functions entirely — a real bug that would have broken every `async def`
+  route handler in any real ASGI framework built on this interpreter); **`re.Match.groups(default)`
+  correctness fix** ✅ (previously only readable via kwargs, not positionally — a real bug that would
+  have broken any path route with an untyped parameter); `exec`/`eval` still missing (Axis A); real
+  `__slots__` (separate per-slot storage) still missing; async generators still missing (blocks
+  *entering* `contextlib.asynccontextmanager`-wrapped functions, though defining/decorating them
+  works); real `class X(dict):` subclass storage still missing (instances aren't backed by real dict
+  storage unless the subclass defines its own `__getitem__`/`__setitem__`).
+- Tests: **868 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
