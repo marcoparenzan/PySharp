@@ -1071,6 +1071,28 @@ public static class BytesMethods
             result.Add(new PyBytes(data[pos..]));
             return new PyList(result);
         });
+        // Real CPython bytes.partition/rpartition — missing entirely (only str had it). Found via
+        // a real HTTP/1.1 request-line split (`b"GET / HTTP/1.1".partition(b" ")`-style parsing) in
+        // a hand-rolled ASGI server sample exercising real socket recv'd bytes. See FASTAPI_PLAN.md
+        // Phase 3.2.
+        Add("partition", (_, a, _) =>
+        {
+            var data = B(a).Data;
+            var sep = ((PyBytes)a[1]).Data;
+            int i = data.AsSpan().IndexOf(sep);
+            return i < 0
+                ? new PyTuple(new object[] { new PyBytes(data), new PyBytes(Array.Empty<byte>()), new PyBytes(Array.Empty<byte>()) })
+                : new PyTuple(new object[] { new PyBytes(data[..i]), new PyBytes(sep), new PyBytes(data[(i + sep.Length)..]) });
+        });
+        Add("rpartition", (_, a, _) =>
+        {
+            var data = B(a).Data;
+            var sep = ((PyBytes)a[1]).Data;
+            int i = data.AsSpan().LastIndexOf(sep);
+            return i < 0
+                ? new PyTuple(new object[] { new PyBytes(Array.Empty<byte>()), new PyBytes(Array.Empty<byte>()), new PyBytes(data) })
+                : new PyTuple(new object[] { new PyBytes(data[..i]), new PyBytes(sep), new PyBytes(data[(i + sep.Length)..]) });
+        });
         Add("join", (interp, a, _) =>
         {
             var sep = B(a).Data;

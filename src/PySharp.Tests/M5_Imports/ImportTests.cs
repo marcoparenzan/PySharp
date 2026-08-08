@@ -241,6 +241,36 @@ public class ImportTests : IDisposable
     }
 
     [Fact]
+    public void Sys_path_insert_from_python_code_actually_changes_where_import_looks()
+    {
+        // Regression: sys.path was built once as a *snapshot copy* of Importer.SearchPaths at
+        // module-creation time (`new PyList(importer.SearchPaths.Select(...))`), so a script's own
+        // `sys.path.insert(...)`/`.append(...)` mutated that disconnected copy and had zero effect
+        // on actual import resolution — a real, general interpreter bug (not just a starlette/
+        // FastAPI-scenario one). Found via a real ASGI server sample script adding a sibling
+        // directory to sys.path to import another sample module, which failed with
+        // ModuleNotFoundError even though the directory genuinely existed and appeared in
+        // `sys.path` from Python's own point of view. Fixed by giving Importer a live reference to
+        // the real sys.path PyList (Importer.PythonSysPath), consulted alongside SearchPaths.
+        string otherDir = Path.Combine(Path.GetTempPath(), "pysharp_test_syspath_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(otherDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(otherDir, "notonpath.py"), "VALUE = 123\n");
+            Assert.Equal("123\n", Run($$"""
+                import sys
+                sys.path.insert(0, r"{{otherDir}}")
+                import notonpath
+                print(notonpath.VALUE)
+                """));
+        }
+        finally
+        {
+            Directory.Delete(otherDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Module_dunder_dict_exposes_its_own_namespace()
     {
         // Regression: a module's `__dict__` attribute wasn't handled at all (fell through to a plain

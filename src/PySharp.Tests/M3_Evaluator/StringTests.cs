@@ -85,6 +85,13 @@ public class StringEvalTests
     [InlineData("len(b'\\x00\\x01')", "2")]
     [InlineData("bytes([77, 81])", "b'MQ'")]
     [InlineData("list(b'AB')", "[65, 66]")]
+    // Regression: bytes.partition/rpartition didn't exist at all (only str had it). Found via a
+    // real HTTP/1.1 request parsed from raw socket-recv'd bytes in a hand-rolled ASGI server
+    // sample (`buf.partition(b"\r\n\r\n")`). See FASTAPI_PLAN.md Phase 3.2.
+    [InlineData("b'a: b'.partition(b': ')", "(b'a', b': ', b'b')")]
+    [InlineData("b'abc'.partition(b'x')", "(b'abc', b'', b'')")]
+    [InlineData("b'a: b: c'.rpartition(b': ')", "(b'a: b', b': ', b'c')")]
+    [InlineData("b'abc'.rpartition(b'x')", "(b'', b'', b'abc')")]
     public void Bytes(string expr, string expected)
         => Assert.Equal(expected, Py.Eval(expr));
 

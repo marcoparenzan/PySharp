@@ -382,9 +382,14 @@ in scenario 1).
   protocol (`accept`/`receive_text`/`send_text`/`close`, `WebSocketDisconnect`, manual streaming
   loops) works end to end with zero bugs found. **Real async generators now implemented** (author
   go-ahead): `WebSocket.iter_text()`/`iter_bytes()`/`iter_json()` work for real against real
-  starlette — full WebSocket streaming-helper parity. **Lifespan events and `StaticFiles(packages=
-  [...])` verified too, zero bugs found — Phase 3.1b is now substantially done.** 3.2 (ASGI server)
-  not started; 4/6/7/8 to do; native cross-cutting partial.
+  starlette — full WebSocket streaming-helper parity. Lifespan events and `StaticFiles(packages=
+  [...])` verified too, zero bugs found. **3.2 done**: `samples/asgi_server.py`, a real, minimal,
+  reusable ASGI/3 HTTP server bridging raw HTTP/1.1 to the real scope/receive/send protocol,
+  verified over real HTTP (curl) against both its own demo app and a real, unmodified `Starlette`
+  app — found and fixed a real, general bug along the way (`sys.path` was a disconnected snapshot
+  copy; `sys.path.insert(...)` from Python code had zero effect on actual import resolution).
+  **Phase 3 (starlette + anyio + a real ASGI server) is now substantially complete end to end.**
+  4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,
@@ -439,8 +444,11 @@ in scenario 1).
   a direct consequence of the async-generator gap — now real, driven by `PyAsyncGenerator`); real
   **`isasyncgenfunction`/`isasyncgen`** ✅ (previously hardcoded `False`), and
   `iscoroutinefunction` now correctly excludes async generator functions (mutually exclusive
-  categories in real CPython).
-- Tests: **901 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  categories in real CPython); **real `sys.path` mutation** ✅ (`sys.path.insert(...)`/`.append(...)`
+  from Python code previously had zero effect on actual import resolution — it mutated a disconnected
+  snapshot copy, not the list the importer actually consults; found via a real ASGI server sample);
+  real **`bytes.partition`/`rpartition`** ✅ (only `str` had them before).
+- Tests: **910 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

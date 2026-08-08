@@ -21,8 +21,30 @@ public sealed class Importer
     /// <summary>Loaded modules, by absolute name (exposed as sys.modules).</summary>
     public PyDict Modules { get; } = new();
 
-    /// <summary>Search paths for .py modules (≈ sys.path).</summary>
+    /// <summary>Search paths for .py modules (≈ sys.path), set up by the CLI/tests before any
+    /// script runs.</summary>
     public List<string> SearchPaths { get; } = new();
+
+    /// <summary>
+    /// The real `sys.path` PyList (set once by SysModule.Create) — kept as a *live* reference, not
+    /// a snapshot, so a script's own `sys.path.insert(...)`/`.append(...)` genuinely changes where
+    /// `import` looks next, matching real CPython. Before this, `sys.path` was built once as a copy
+    /// of SearchPaths at module-creation time, so any Python-level mutation of it was silently a
+    /// no-op — found via a real scenario needing it: a probe script adding a sibling directory to
+    /// `sys.path` to import a sample module, which failed with ModuleNotFoundError even though the
+    /// directory genuinely existed and was genuinely on `sys.path` from Python's own point of view.
+    /// </summary>
+    public PyList? PythonSysPath { get; set; }
+
+    private IEnumerable<string> AllSearchPaths()
+    {
+        foreach (var p in SearchPaths)
+            yield return p;
+        if (PythonSysPath is not null)
+            foreach (var p in PythonSysPath.Items)
+                if (p is string s)
+                    yield return s;
+    }
 
     public PyModule BuiltinsModule { get; }
 
@@ -109,7 +131,7 @@ public sealed class Importer
             return (null, true);
 
         string relPath = absolute.Replace('.', Path.DirectorySeparatorChar);
-        foreach (var searchPath in SearchPaths)
+        foreach (var searchPath in AllSearchPaths())
         {
             string packageInit = Path.Combine(searchPath, relPath, "__init__.py");
             string moduleFile = Path.Combine(searchPath, relPath + ".py");
@@ -134,7 +156,7 @@ public sealed class Importer
 
         // 2. file system
         string relPath = absolute.Replace('.', Path.DirectorySeparatorChar);
-        foreach (var searchPath in SearchPaths)
+        foreach (var searchPath in AllSearchPaths())
         {
             string packageInit = Path.Combine(searchPath, relPath, "__init__.py");
             string moduleFile = Path.Combine(searchPath, relPath + ".py");

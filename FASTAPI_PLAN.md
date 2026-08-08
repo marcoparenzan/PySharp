@@ -621,11 +621,14 @@ long session once the author said "procedi" to continue past Phase 1's completio
   The 404/exception-handling path is not yet closed (it now needs `asyncio.base_events
   ._run_until_complete_cb`, a private CPython-internal symbol — a deliberate stopping point for this
   round); `staticfiles.py`/WebSockets remain unexercised.
-- [ ] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio` (scenario 1b's reactor —
-  `add_reader`/`add_writer`/`run_in_executor` — is exactly the machinery an ASGI server needs; this is
-  where that investment pays off for scenario 2). Whether `anyio` gets its own real support or a thin
-  asyncio-backed shim (it supports multiple backends upstream; only the asyncio backend matters here)
-  is a decision to make once its actual usage surface from starlette is visible.
+- [x] 3.2 Minimal ASGI app + routing working, driven by PySharp's `asyncio`. **Done** (3.1.14 below):
+  `samples/asgi_server.py`, a real, minimal ASGI/3 HTTP server bridging raw HTTP/1.1 to the real
+  scope/receive/send protocol — reusable (`serve(app, host, port)` accepts any real ASGI callable),
+  verified over real HTTP (curl) against both its own demo app and a real, unmodified `Starlette`
+  app. `anyio` question resolved by everything observed since: its real usage surface throughout
+  this whole plan has been almost entirely the asyncio backend (`_backends/_asyncio.py`), which
+  PySharp's own `asyncio` module (plus a handful of extras: `queue`, `threading.local`, real async
+  generators, ...) already supports for real — no separate anyio-specific support was ever needed.
 
 ### 3.1.1 — the blow-by-blow (real starlette 1.4.1 + anyio probe)
 
@@ -1399,6 +1402,50 @@ found — every one exercised machinery already built in prior rounds, and all o
   Phase 2's pydantic work or Phase 3's starlette work began) — a natural decision point for the
   author rather than picking one unprompted.
 
+### 3.1.14 — Phase 3.2: a real, minimal ASGI server, built and verified over real HTTP
+
+The author's explicit direction ("Andiamo in sequenza" — go in order): 3.2 before Phase 4, matching
+the plan's own numbering. `samples/asgi_server.py` bridges raw HTTP/1.1 to the real ASGI 3.0
+scope/receive/send protocol, reusing scenario 1b/2's real async socket I/O
+(`loop.sock_accept`/`sock_recv`/`sock_sendall`, already built for the reactor). `serve(app, host,
+port)` is a reusable function accepting *any* real ASGI callable — not tied to the sample's own
+hand-written demo app. v1 scope, deliberately: request bodies are read fully before the app runs (no
+streaming request bodies), and every connection closes after one response (no HTTP/1.1
+keep-alive/pipelining) — real, honest simplifications, matching the project's standing style of
+scoping down explicitly rather than silently.
+
+- **Verified over real HTTP** (curl, matching scenario 1's own verification style — not just an
+  offline unit test): the sample's own hand-written demo app first (index route, a path parameter,
+  a POST echo, a 404) — all correct. Then, more importantly, **a real, unmodified `Starlette` app**
+  (with a route, a path-parameter route, and a custom 404 handler) served through the exact same
+  `serve()` function — real HTTP GET/POST round-trips against real starlette dispatch, real path
+  params, and a real custom exception handler, all correct.
+- **One real, general interpreter bug found and fixed along the way, found by the *second*
+  verification (the real-Starlette one), not the first**: `sys.path` was built once as a *snapshot
+  copy* of `Importer.SearchPaths` at module-creation time
+  (`new PyList(importer.SearchPaths.Select(...))`), so a script's own `sys.path.insert(...)`/
+  `.append(...)` mutated that disconnected copy and had **zero effect on actual import resolution** —
+  a real bug well beyond this one scenario (any script trying to add a sibling directory to
+  `sys.path` at runtime was silently doing nothing). Confirmed via the `probe_real_asgi_server.py`
+  verification script: `sys.path.insert(0, ".../samples")` then `import asgi_server` raised
+  `ModuleNotFoundError` even though the directory genuinely existed and the entry genuinely appeared
+  in `sys.path`. Fixed by giving `Importer` a *live* reference to the real `sys.path` `PyList`
+  (`Importer.PythonSysPath`), consulted alongside the existing C#-side `SearchPaths` at import time
+  — every existing `Importer.SearchPaths.Add(...)` call site (13 of them, mostly test fixtures)
+  keeps working unchanged.
+- **A second, smaller real gap found by the demo app's own HTTP/1.1 request-line parsing**:
+  `bytes.partition`/`rpartition` didn't exist at all — only `str` had them. Real CPython has both.
+  Added for real, mirroring `str.partition`'s exact semantics over raw bytes.
+- 8 tests added (`M3_Evaluator/StringTests.cs`: 4 `bytes.partition`/`rpartition` cases;
+  `M5_Imports/ImportTests.cs`: 1 `sys.path.insert` regression test; new
+  `M16_FastApi/AsgiServerSampleTests.cs`: 4 tests exercising the demo app via the same hand-built
+  scope/receive/send technique used throughout this whole plan, without needing a real socket in the
+  automated suite — the real-socket, real-Starlette path was verified manually via curl instead,
+  matching how every other sample in this project is verified). Full suite green throughout: 910/910
+  by the end of this round, up from 901 at the start of it.
+- **Phase 3.2 is done.** Scenario 2's Phase 3 (starlette + anyio + a real ASGI server) is now
+  substantially complete end to end. **Next**: Phase 4 — attempting `import fastapi` itself.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1645,7 +1692,16 @@ unmodified starlette + anyio. PySharp's traceback formatting still doesn't revea
 imported modules (shows `<string>` — a known, pre-existing limitation, separately worth revisiting,
 though it hasn't blocked root-causing anything so far).
 
-**Next decision point**: 3.2 (a real ASGI server, currently a placeholder) or Phase 4 (attempting
-`import fastapi` itself — a significantly larger new probe target, likely to surface many new gaps,
-similar in character to how the pydantic or starlette work began). Not started; a natural point to
-check in with the author rather than picking one unprompted.
+**Phase 3.2 is done (3.1.14)**: `samples/asgi_server.py`, a real, minimal, reusable ASGI/3 HTTP
+server bridging raw HTTP/1.1 to the real scope/receive/send protocol over PySharp's own async
+socket I/O — verified over real HTTP (curl) against both its own demo app and a real, unmodified
+`Starlette` app. Found and fixed one real, general interpreter bug along the way: `sys.path` was a
+disconnected snapshot copy, so `sys.path.insert(...)` from Python code had zero effect on actual
+import resolution — now backed by a live reference. Also added real `bytes.partition`/`rpartition`
+(missing entirely; only `str` had them). 910/910 tests green (up from 901).
+
+**Phase 3 (starlette + anyio + a real ASGI server) is now substantially complete end to end.**
+
+**Next**: Phase 4 — attempting `import fastapi` itself, a significantly larger new probe target
+likely to surface many new gaps, similar in character to how the pydantic or starlette work began.
+Not started.

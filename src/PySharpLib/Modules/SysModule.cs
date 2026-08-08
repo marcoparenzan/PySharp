@@ -24,7 +24,11 @@ public static class SysModule
         d["maxsize"] = new BigInteger(long.MaxValue);
         d["argv"] = new PyList(interp.Argv.Select(x => (object)x));
         d["modules"] = importer.Modules;
-        d["path"] = new PyList(importer.SearchPaths.Select(p => (object)p));
+        // A live PyList, not a snapshot: kept on the Importer too (PythonSysPath) so a script's
+        // own sys.path.insert(...)/.append(...) genuinely changes where `import` looks next.
+        var sysPath = new PyList(importer.SearchPaths.Select(p => (object)p));
+        importer.PythonSysPath = sysPath;
+        d["path"] = sysPath;
         d["byteorder"] = BitConverter.IsLittleEndian ? "little" : "big";
 
         d["exit"] = new PyBuiltinFunction("exit", (_, args, _) =>
