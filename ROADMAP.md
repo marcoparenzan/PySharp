@@ -382,8 +382,9 @@ in scenario 1).
   protocol (`accept`/`receive_text`/`send_text`/`close`, `WebSocketDisconnect`, manual streaming
   loops) works end to end with zero bugs found. **Real async generators now implemented** (author
   go-ahead): `WebSocket.iter_text()`/`iter_bytes()`/`iter_json()` work for real against real
-  starlette — full WebSocket streaming-helper parity. 3.2 (ASGI server) not started; 4/6/7/8 to do;
-  native cross-cutting partial.
+  starlette — full WebSocket streaming-helper parity. **Lifespan events and `StaticFiles(packages=
+  [...])` verified too, zero bugs found — Phase 3.1b is now substantially done.** 3.2 (ASGI server)
+  not started; 4/6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~59 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`, `concurrent.futures`, `stat`,

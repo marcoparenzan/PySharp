@@ -1360,6 +1360,45 @@ model were missing.
   in the pydantic/starlette/anyio dependency chain that previously hit the same wall — worth keeping
   in mind if a future round's frontier turns out to be exactly this gap again elsewhere.
 
+### 3.1.13 — the last two unexercised corners of 3.1b, both clean: **Phase 3.1b is substantially done**
+
+Picking up the exact 3.1.12 frontier. Three real probes, all against real starlette/anyio, zero bugs
+found — every one exercised machinery already built in prior rounds, and all of it held up.
+
+- **Lifespan events** (`Starlette(lifespan=@asynccontextmanager-decorated function)`, the modern
+  recommended style): a hand-built `{"type": "lifespan", ...}` scope + `lifespan.startup`/
+  `lifespan.shutdown` message sequence correctly drives real starlette's `Router.lifespan()` through
+  the *real* `asynccontextmanager` machinery built in 3.1.12 — startup runs the pre-yield code, the
+  yielded state dict merges into `scope["state"]` (verified with a real ASGI3 "state" lifespan
+  extension scope, `"state": {}`), and shutdown runs the post-yield code, in the correct order,
+  producing the correct `lifespan.startup.complete`/`lifespan.shutdown.complete` messages. A second
+  probe verified the failure path: an exception raised during startup produces a real
+  `lifespan.startup.failed` message with a real traceback string, and correctly re-raises out of
+  `app()` afterward — matching real starlette's `except BaseException: ...; raise` exactly. (One
+  false start: the first probe's hand-built scope omitted `"state": {}`, correctly triggering
+  starlette's own `RuntimeError('The server does not support "state" in the lifespan scope.')` — a
+  probe bug, not a PySharp one, caught by re-reading real starlette source rather than assuming the
+  interpreter was at fault.)
+- **`StaticFiles(packages=[...])`**: a real installed package (`mypkg`, with a `statics/asset.txt`
+  alongside its `__init__.py`) mounted via `StaticFiles(packages=["mypkg"])` correctly serves
+  `/pkg-static/asset.txt` with a real 200 and the expected file bytes — exercising the real
+  `importlib.util.find_spec` built in 3.1.10 for its intended runtime call site (not just at
+  `staticfiles.py`'s module-load-time import), plus `os.path.normpath`/`os.path.join` deriving the
+  package's statics directory from `spec.origin`.
+- No interpreter changes this round — all three probes passed exactly as real CPython/starlette
+  would; the existing 901/901 suite is unaffected, no new tests needed.
+- **Phase 3.1b is now substantially done**: routing (index + path-parameter routes), exception
+  handling (default 404, custom per-status and per-`Exception`-type handlers, uncaught-exception
+  propagation), static file serving (both `directory=` and `packages=`), WebSockets (plain
+  accept/receive/send/close, disconnect handling, manual streaming loops, and real async-generator-
+  backed `iter_text`/`iter_bytes`/`iter_json`), and lifespan events (success and failure) are all
+  verified end to end against real, unmodified starlette + anyio. Remaining before considering 3.1b
+  fully closed: none identified by probing so far — the next natural step is either 3.2 (a real ASGI
+  server, currently just a placeholder) or Phase 4 (attempting `import fastapi` itself, a
+  significantly larger new probe target likely to surface many new gaps, similar in character to how
+  Phase 2's pydantic work or Phase 3's starlette work began) — a natural decision point for the
+  author rather than picking one unprompted.
+
 ## Phase 4 — FastAPI itself + a real target app (placeholder)
 
 - [ ] 4.1 `import fastapi` succeeds.
@@ -1595,11 +1634,18 @@ async generator functions (mutually exclusive from coroutine functions in real C
 known-correct Python behavior (10+ scenarios) before writing 10 new tests. Full blow-by-blow in
 3.1.12. 901/901 tests green (up from 892 at the start of 3.1.11).
 
-**Current frontier for Phase 3**: `staticfiles.py`'s `packages=[...]` argument (which calls
-`find_spec` at runtime, not just import time) and `Starlette`'s lifespan events remain unexercised.
-PySharp's traceback formatting still doesn't reveal real file/line for imported modules (shows
-`<string>` — a known, pre-existing limitation, separately worth revisiting, though it hasn't blocked
-root-causing anything so far). Not started.
+**Lifespan events and `StaticFiles(packages=[...])` verified too, zero bugs found (3.1.13).**
+Startup/shutdown (including the ASGI3 "state" extension and a startup-failure path) and
+package-relative static file serving both work correctly against real starlette out of the box.
 
-Phase 4 remains a placeholder (see architecture decisions) until Phase 3 is scoped further from real
-probing.
+**Phase 3.1b is now substantially done**: routing, exception handling (default + custom, per-status
+and per-type), static files (`directory=` and `packages=`), WebSockets (plain and real-async-
+generator-backed streaming), and lifespan events are all verified end to end against real,
+unmodified starlette + anyio. PySharp's traceback formatting still doesn't reveal real file/line for
+imported modules (shows `<string>` — a known, pre-existing limitation, separately worth revisiting,
+though it hasn't blocked root-causing anything so far).
+
+**Next decision point**: 3.2 (a real ASGI server, currently a placeholder) or Phase 4 (attempting
+`import fastapi` itself — a significantly larger new probe target, likely to surface many new gaps,
+similar in character to how the pydantic or starlette work began). Not started; a natural point to
+check in with the author rather than picking one unprompted.
