@@ -35,6 +35,20 @@ public static class CodecsModule
             return BuildIncrementalDecoderClass(name);
         });
 
+        // Real CPython's byte-order-mark constants. Found via httpx's own `_utils.py`'s
+        // `guess_json_utf` (Response.json()'s auto-detection when no explicit charset is given),
+        // sniffing a response body's first bytes against these exact values.
+        d["BOM_UTF8"] = new PyBytes(new byte[] { 0xEF, 0xBB, 0xBF });
+        d["BOM_UTF16_LE"] = new PyBytes(new byte[] { 0xFF, 0xFE });
+        d["BOM_UTF16_BE"] = new PyBytes(new byte[] { 0xFE, 0xFF });
+        d["BOM_UTF32_LE"] = new PyBytes(new byte[] { 0xFF, 0xFE, 0x00, 0x00 });
+        d["BOM_UTF32_BE"] = new PyBytes(new byte[] { 0x00, 0x00, 0xFE, 0xFF });
+        d["BOM_LE"] = d["BOM_UTF16_LE"];
+        d["BOM_BE"] = d["BOM_UTF16_BE"];
+        d["BOM"] = d["BOM_UTF16_LE"]; // native order on the little-endian hosts this project targets
+        d["BOM_UTF16"] = d["BOM_UTF16_LE"];
+        d["BOM_UTF32"] = d["BOM_UTF32_LE"];
+
         return m;
     }
 

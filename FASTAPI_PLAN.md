@@ -2177,6 +2177,127 @@ The author's go-ahead ("procedi") to tackle 4.1.8's event-loop architecture wall
   loop case matching anyio's own dispatch mechanism. Full suite green throughout: 977/977 by the end
   of this round, up from 975 at the start.
 
+### 4.1.10 — the `Task`-internals wall closed for real, ~10 more real gaps, and the milestone: a real `TestClient` request round-trips end to end
+
+The author's go-ahead ("procedi") to tackle 4.1.9's `Task`-internals wall.
+
+- **Real CPython `asyncio.Task` private internals** (`Runtime/Async.cs`): `PyCoroutine.CurrentAwaited`
+  (maps onto the coroutine's own `_awaited` tracking), `PyTask.FutWaiter`/`MustCancel`/`GetCoro()`, and
+  a real `Task.cancel()` override — cancels the current waiter future directly if there is one,
+  otherwise sets `MustCancel` for delivery at the next step (matching real CPython's own
+  `_deliver_cancellation`). `AsyncioModule.cs`'s `TaskTable` gained `cancel`/`get_coro`;
+  `TypeMethods.cs` wired `_must_cancel`/`_fut_waiter` as real attribute reads. A C# `new`-hiding
+  gotcha caught proactively during design (not shipped as a bug): `PyTask.Cancel()` declared `new`
+  hides, not overrides, the non-virtual base `PyFuture.Cancel()`, so `FutureTable`'s shared `["cancel"]`
+  entry (cast to `(PyFuture)`) would have silently called the wrong one — handled by giving `TaskTable`
+  its own `["cancel"]` cast to `(PyTask)`. **A real correctness bug found during manual verification**:
+  `t.cancelled()` returned `False` after a real cancellation, because `Step()` delivered the resulting
+  `CancelledError` via `SetException(...)`, which doesn't set `PyFuture.Cancelled = true` — fixed by
+  special-casing a `CancelledError` result to call `base.Cancel()` instead, matching real CPython's own
+  `Task.__step`. Verified against 5 hand-derived checks (`_must_cancel`/`_fut_waiter`/`get_coro`/a real
+  `.cancel()` delivering `CancelledError`/`.cancelled()`).
+- **Real PEP 654 `BaseExceptionGroup`/`ExceptionGroup`** (`PyErr.cs`): anyio's own cancel-scope
+  teardown (`_backends/_asyncio.py`) references `BaseExceptionGroup` directly, expecting it as a
+  builtin since PySharp's declared `sys.version_info` is 3.12. Implemented the real auto-upgrade-to-
+  `ExceptionGroup` type-selection rule in `__new__` (every given exception being an `Exception`, not
+  just `BaseException`, upgrades a bare `BaseExceptionGroup(...)` call) and a real `.split(condition)`
+  (partitions `.exceptions`, either side `None` if empty). `except*` syntax is **not** supported (a
+  separate, deliberately out-of-scope parser gap — confirmed via `SyntaxError: unexpected token '*'`;
+  anyio itself only uses `.split()`, never `except*`). Verified against 12 hand-derived checks, zero
+  bugs found on the first pass.
+- **Real `Coroutine`/`Generator`/`Awaitable` ABC duck-typing for `isinstance()`** (`Builtins.cs`'s
+  `SatisfiesAbcByDuckType`, extending the mechanism 2.2.1 already built for `Mapping`/`Iterable`/etc.):
+  real CPython recognizes `types.CoroutineType`/`GeneratorType` instances as virtual subclasses of
+  `collections.abc.Coroutine`/`Generator`/`Awaitable` structurally, without explicit inheritance. Found
+  the hard way — a `TaskGroup.start_soon(worker)` call raised `ExceptionGroup: unhandled errors in a
+  TaskGroup, PySharpLib.Runtime.PyTuple`, which *looked* like a cosmetic `FormatForClr` display bug
+  (it partially is: a naive `.args`-join via raw `.ToString()`, not fixed, low-priority) but was
+  actually masking a real bug — `worker()`'s own `print` never ran. Diagnosed by catching the group and
+  inspecting `.exceptions` directly: the real cause was `TypeError: Expected worker() to return a
+  coroutine, but the return value (...) is not a coroutine object`, from anyio's own
+  `abc/_tasks.py`'s `isinstance(coro, Coroutine)` (imported from `collections.abc`) returning `False`
+  for a real `PyCoroutine`. Not accepting the superficial display-bug explanation and instead finding
+  the real cause underneath it is what actually unblocked this.
+- **`loop.get_task_factory()`/`set_task_factory()`** (`Runtime/Async.cs`'s new `PyEventLoop.TaskFactory`
+  property, `AsyncioModule.cs`'s `EventLoopTable`): anyio's real `TaskGroup._spawn` checks `if factory
+  := loop.get_task_factory()` before falling back to plain `loop.create_task` — previously
+  `AttributeError` since neither method existed at all.
+- **Real `io.BytesIO` position tracking** (`IoModule.cs`): `seek(offset, whence=0)`/`read(size=-1)`/
+  `tell()`/`truncate(size=None)` all now track and honor a real cursor position (`write` overwrites at
+  the current position and only extends the buffer past it), replacing a prior always-no-op `seek`
+  that happened to work only because `read()` always returned the whole buffer regardless of position.
+  Found via starlette's real `TestClient` (`testclient.py`'s `handle_request`, which streams an ASGI
+  response body into a `BytesIO` via repeated `write()` then `seek(0)` before reading it back), and
+  `truncate` via httpx's `_decoders.py` chunked-body buffering (`seek(0); truncate()` to clear the
+  buffer at each chunk boundary). Verified against 9 + 5 hand-derived checks.
+- **`dict()`/`dict.update()` now honor the real `keys()`-mapping protocol** (`PyOps.cs`'s new
+  `TryGetMappingItems`, used from `Builtins.cs`'s `dict()` and `TypeMethods.cs`'s `dict.update`): real
+  CPython treats any object exposing a `keys()` method as a mapping (iterate `x.keys()`, fetch each
+  value via `x[key]`), not as an iterable of `(key, value)` pairs — previously only a literal `PyDict`
+  argument was special-cased, so any other mapping-shaped object (real CPython dict subclasses
+  included) fell through to the pairs-iterable path and raised "dictionary update sequence element is
+  not a pair" whenever its own `__iter__` only yielded keys (as `MutableMapping`'s default does). Found
+  via httpx's real `dict(request.headers)` (`_models.py`'s `_CookieCompatRequest.__init__`, needed by
+  cookie-jar extraction on every response). Verified against a hand-written `FakeMapping` duck-type.
+- **Real `generator.send(value)` semantics** (`PyGenerator.cs`): previously any non-`None` `send()`
+  value was unconditionally rejected ("not supported in PySharp v1"). Now resumes the generator with
+  `value` as the real result of its currently-suspended `yield` expression (`Yield()` returns the
+  stored `_sendValue` instead of always `None`), and sending a non-`None` value to a not-yet-started
+  generator correctly raises `TypeError` (matching real CPython) instead of silently starting it. Found
+  via httpx's real synchronous auth flow (`_client.py`'s `_send_handling_auth`:
+  `auth_flow.send(response)`), which relies on `send()` succeeding even for the default no-auth flow's
+  bare `yield request` (the sent value is unused by that particular generator body, but CPython still
+  requires the call itself to succeed).
+- **A generator's `return value` now actually reaches `StopIteration.value`** (`PyGenerator.cs`,
+  `PyErr.cs`, `Builtins.cs`'s `next()`): a real, previously-silent bug, not just a missing feature —
+  `Interp.ExecFunctionBody` itself already catches `ReturnSignal` and returns its `.Value` normally
+  (so a generator's dedicated-thread body's own `catch (ReturnSignal)` around `ExecFunctionBody` was
+  dead code that could never fire), meaning every generator's return value was silently discarded.
+  Fixed by capturing `ExecFunctionBody`'s own return value as `PyGenerator.ReturnValue`, and threading
+  it through every `StopIteration` raised on exhaustion (`generator.send`/`__next__`, and the `next()`
+  builtin). `PyErr.StopIteration(value)` now also matches real CPython's actual rule precisely: a
+  `None` return value (explicit `return None`, bare `return`, or falling off the end) raises a bare
+  `StopIteration()` with empty `.args`, while any other value becomes `.args == (value,)` — both
+  expose the real value via `.value` either way. Verified against 6 hand-derived checks across both
+  branches.
+- **`email.message.Message.get_content_charset(failobj=None)`** (`EmailModule.cs`): parses the
+  `charset=` parameter off a `Content-Type` header (plain `key=value`/`key="value"` params, not RFC
+  2231 `charset*=` encoding — out of scope, nothing reachable needs it). Found via httpx's own
+  `_utils.py`'s `parse_content_type_charset`, used by `Response.json()` to pick a decode charset.
+  Caught a real keyword-argument-plumbing bug during verification: the builtin ignored a `kwargs`-
+  passed `failobj=` entirely (only checked positional `a[1]`), which is exactly how httpx calls it.
+- **`codecs.BOM_UTF8`/`BOM_UTF16_LE`/`BOM_UTF16_BE`/`BOM_UTF32_LE`/`BOM_UTF32_BE`** (+ `BOM`/`BOM_LE`/
+  `BOM_BE`/`BOM_UTF16`/`BOM_UTF32` aliases) as real byte constants (`CodecsModule.cs`): found via
+  httpx's own `_utils.py`'s `guess_json_utf`, which sniffs a response body's first bytes against these
+  exact values for `Response.json()`'s charset auto-detection when no explicit charset is given.
+- **The milestone**: a real, unmodified `starlette.testclient.TestClient` (backed by real
+  `httpx`/`httpcore`/`h11`) driving a real `FastAPI()` app's ASGI callable end to end —
+  `client.get("/")` and `client.get("/items/42")` both return the correct status code and JSON body,
+  through real anyio task groups/cancel scopes and this project's own async runtime. This is the
+  target Phase 4 has been chasing since 4.1.1.
+- **A separate, unrelated, deliberately out-of-scope gap found but not pursued**: `import anyio`
+  executed *inside* a function body (rather than at module top level) hits `NameError: name '__value'
+  is not defined`, from anyio's real `__init__.py`'s own module-level idiom (`for __value in
+  list(locals().values()): ...; del __value`, used to rewrite re-exported names' `__module__`). Traced
+  to `locals()` apparently resolving to the *calling* function's scope rather than the newly-created
+  module's own namespace when a module is imported from inside a function frame — a genuine, separate
+  gap in nested/deferred-import scoping, distinct from (though thematically related to) 1.9's earlier
+  `globals()`/`locals()`-at-module-scope fix. Every real scenario this project has actually exercised
+  imports `anyio` at module level, so this didn't block the milestone; worth revisiting on its own.
+- 16 tests added across `M4_Functions/GeneratorTests.cs` (3: `send()`, a not-yet-started-generator
+  `send()` `TypeError`, `StopIteration.value`), `M4_Functions/ExceptionTests.cs` (4: 3
+  `BaseExceptionGroup`/`ExceptionGroup` + 1 `Coroutine`/`Generator`/`Awaitable` ABC duck-typing),
+  `M3_Evaluator/CollectionTests.cs` (1: `dict()`/`update()` `keys()`-mapping protocol),
+  `M6_Stdlib/StdlibTests.cs` (4: `BytesIO` seek/read/truncate ×2, `email.message.get_content_charset`,
+  `codecs.BOM_*`), new `M10_Async/TaskInternalsTests.cs` (`[Collection("asyncio-run")]`, 2: Task
+  internals, `get_task_factory`/`set_task_factory`), and `M16_FastApi/FastApiSmokeTests.cs` (2: a real
+  anyio task group end to end, and — the milestone itself — a real `TestClient` GET round trip);
+  `FastApiInstallFixture` extended to also install `httpx==0.23.3` + its transitive deps
+  (`idna`/`sniffio`/`rfc3986`/`certifi`/`httpcore`/`h11`) and moved to `[Collection("asyncio-run")]`
+  since `TestClient` itself drives `anyio.from_thread.start_blocking_portal` (a genuine background
+  thread running its own `asyncio.run`). Full suite green throughout, confirmed via 15 consecutive
+  clean full-suite runs: 993/993 by the end of this round, up from 977 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
@@ -2460,3 +2581,20 @@ PyPI packages. 928/928 tests green (up from 914).
 
 **New frontier**: `FastAPI()` construction hits `inspect.isroutine` (missing). Not started — a
 natural next step for Phase 4.2 (writing the first real target FastAPI sample app).
+
+**Milestone reached (4.1.10): a real `TestClient` request round-trips end to end.** After 4.1.5
+through 4.1.9 closed the `httpx`/astral-regex/event-loop-threading/`Task`-internals chain, this round
+closed the last ~10 real gaps standing between "the event loop doesn't deadlock" and an actual
+correct HTTP-shaped response: real `BaseExceptionGroup`/`ExceptionGroup` (PEP 654), real
+`Coroutine`/`Generator`/`Awaitable` ABC duck-typing, `loop.get_task_factory()`/`set_task_factory()`,
+real `io.BytesIO` position tracking (`seek`/`read`/`truncate`), the `dict()`/`dict.update()`
+`keys()`-mapping protocol, real `generator.send(value)` semantics, a generator's `return value`
+actually reaching `StopIteration.value`, `email.message.Message.get_content_charset`, and
+`codecs.BOM_*`. `TestClient(app).get("/")` and `.get("/items/42")` both now return the correct status
+code and JSON body through the real, unmodified fastapi/starlette/pydantic/httpx/httpcore/h11/anyio
+stack. 993/993 tests green (up from 977 at the start of this round), confirmed via 15 consecutive
+clean full-suite runs. Full blow-by-blow in 4.1.10.
+
+**Next frontier**: Phase 4.2 — a first real target FastAPI sample app (a small, complete
+request/response API exercising path/query params, a JSON body, and a typed response model),
+plus POST/PUT and error-status paths through `TestClient` (only GET has been verified so far).

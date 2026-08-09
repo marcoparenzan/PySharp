@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e ⚪ not started) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel ✅, more validators/`__slots__` open), ASGI |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e 🟡 real ASGI server + `TestClient` GET round-trip working) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel ✅, more validators/`__slots__` open), ASGI (real `TestClient` GET ✅, POST/errors open) |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -189,8 +189,15 @@ as the test bench.
   `__config__`/`__fields__`/validators. Known remaining gap: `.dict()` leaks a `__fields_set__` key,
   since PySharp doesn't implement real `__slots__`-backed storage separate from an instance's regular
   attributes. Full phased log in `FASTAPI_PLAN.md`.
-- **2e — ASGI server + FastAPI.** ⚪ Not started. uvicorn is async-native. Options: a mini ASGI server
-  written over the C# `socket`, or starlette (pure but with async dependencies).
+- **2e — ASGI server + FastAPI.** 🟡 **In progress.** `samples/asgi_server.py` (Phase 3.2) is a real,
+  minimal, reusable ASGI/3 HTTP server over PySharp's own async socket I/O, verified over real HTTP
+  (curl) against both its own demo app and a real, unmodified `Starlette` app. Beyond that: a real,
+  unmodified `starlette.testclient.TestClient` (backed by real `httpx`/`httpcore`/`h11`) now drives a
+  real `FastAPI()` app's ASGI callable end to end — `client.get("/")` and a typed path-parameter route
+  both return the correct status/JSON, through real anyio task groups/cancel scopes and PySharp's own
+  async runtime (`FASTAPI_PLAN.md` Phase 4.1.10). Open: POST/PUT and error-status paths through
+  `TestClient` (only GET verified so far), and a real uvicorn-equivalent process wiring the ASGI server
+  to an actual `FastAPI()` app for a live end-to-end demo.
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -595,7 +602,25 @@ in scenario 1).
   replicating a slice of CPython's actual `Task` internals, not just its public API; a fundamentally
   different, more open-ended kind of gap than anything else found in this chain. Not started this
   round.
-- Tests: **977 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
+- **The `Task`-internals wall closed for real, and the milestone reached**: real
+  `_must_cancel`/`_fut_waiter`/`Task.cancel()`/`get_coro()` ✅ (including a real correctness bug caught
+  during verification — `t.cancelled()` incorrectly stayed `False` after a real cancellation, now
+  fixed to match CPython's own `Task.__step`); real PEP 654 `BaseExceptionGroup`/`ExceptionGroup` ✅
+  (`except*` syntax deliberately out of scope — anyio itself never uses it); real
+  `Coroutine`/`Generator`/`Awaitable` ABC duck-typing for `isinstance()` ✅, extending 2.2.1's own
+  `Mapping`/`Iterable` mechanism (found underneath what first looked like a cosmetic exception-display
+  bug); `loop.get_task_factory()`/`set_task_factory()` ✅. Then, past a real anyio `TaskGroup` working
+  end to end, ~5 more real gaps stood between that and an actual HTTP response: real `io.BytesIO`
+  position tracking (`seek`/`read`/`truncate`) ✅; the `dict()`/`dict.update()` `keys()`-mapping
+  protocol ✅ (any object with a `keys()` method, not just a literal `dict`); real `generator.send
+  (value)` semantics ✅ (previously any non-`None` value was unconditionally rejected); a generator's
+  `return value` actually reaching `StopIteration.value` ✅ (a real, previously-silent bug — the return
+  value was being discarded entirely, not just missing an attribute); `email.message.
+  Message.get_content_charset` ✅; `codecs.BOM_*` constants ✅. **`TestClient(app).get(...)` now
+  round-trips a real request through the full real fastapi/starlette/pydantic/httpx/httpcore/h11/anyio
+  stack, correct status code and JSON body.** Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.1.10.
+- Tests: **993 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 15 consecutive clean
+  full-suite runs.
 
 _Update these numbers at every milestone._

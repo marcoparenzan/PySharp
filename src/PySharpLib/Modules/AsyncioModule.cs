@@ -748,6 +748,15 @@ public static class AsyncioModule
                 ((PyTask)a[0]).Name = PyOps.Str(interp, a[1]);
                 return PyNone.Instance;
             }),
+            // Real Task.cancel() semantics (not just Future's generic immediate-cancel) — see
+            // PyTask.Cancel's own doc comment. Overrides FutureTable's generic "cancel" entry, which
+            // would otherwise dispatch through the (PyFuture) cast and miss this Task-specific
+            // behavior entirely (C#'s `new`-hiding resolves by static type, and FutureTable's own
+            // delegate casts to PyFuture, not PyTask).
+            ["cancel"] = new PyBuiltinFunction("Task.cancel", (_, a, _) => ((PyTask)a[0]).Cancel()),
+            // Real Task.get_coro() — the underlying coroutine object, e.g. for real anyio's own
+            // `_task_started(task)` (`getcoroutinestate(task.get_coro())`).
+            ["get_coro"] = new PyBuiltinFunction("Task.get_coro", (_, a, _) => ((PyTask)a[0]).GetCoro()),
         };
         return t;
     }
@@ -789,6 +798,12 @@ public static class AsyncioModule
         Add("create_future", (_, a, _) => new PyFuture { Loop = (PyEventLoop)a[0] });
         Add("create_task", (interp, a, _) =>
             AsyncRuntime.EnsureFuture(interp, a[1], (PyEventLoop)a[0]));
+        Add("get_task_factory", (_, a, _) => ((PyEventLoop)a[0]).TaskFactory ?? PyNone.Instance);
+        Add("set_task_factory", (_, a, _) =>
+        {
+            ((PyEventLoop)a[0]).TaskFactory = a[1] is PyNone ? null : a[1];
+            return PyNone.Instance;
+        });
         Add("call_soon", (interp, a, _) =>
         {
             var loop = (PyEventLoop)a[0];

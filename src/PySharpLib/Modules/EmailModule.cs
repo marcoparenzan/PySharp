@@ -110,6 +110,20 @@ public static class EmailModule
         return false;
     }
 
+    private static Dictionary<string, string> ParseParams(string headerValue)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var parts = headerValue.Split(';');
+        for (int i = 1; i < parts.Length; i++)
+        {
+            var kv = parts[i].Split('=', 2);
+            if (kv.Length != 2)
+                continue;
+            result[kv[0].Trim()] = kv[1].Trim().Trim('"');
+        }
+        return result;
+    }
+
     private static PyClass BuildMessageClass()
     {
         var cls = new PyClass("Message", new List<PyClass>());
@@ -164,6 +178,21 @@ public static class EmailModule
 
         Add("get_content_subtype", (interp, a, _) =>
             ((string)interp.CallMethod(a[0], "get_content_type", Array.Empty<object>())).Split('/')[1]);
+
+        // Real (scoped) Message.get_content_charset(failobj=None): parses the `charset=` parameter
+        // off the Content-Type header. Found via httpx's own `_utils.py`'s
+        // `parse_content_type_charset`, used to pick a decode charset for `Response.json()`. v1
+        // scope: plain `key=value`/`key="value"` params, not RFC 2231 (`charset*=`) encoding.
+        Add("get_content_charset", (_, a, kw) =>
+        {
+            var inst = (PyInstance)a[0];
+            object failobj = a.Length > 1 ? a[1] : kw is not null && kw.TryGetValue("failobj", out var fo) ? fo : PyNone.Instance;
+            if (!TryGetHeader(inst, "content-type", out var raw) || raw is not string s)
+                return failobj;
+            return ParseParams(s).TryGetValue("charset", out var charset)
+                ? charset.ToLowerInvariant()
+                : failobj;
+        });
 
         return cls;
     }

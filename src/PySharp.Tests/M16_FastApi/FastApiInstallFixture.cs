@@ -29,6 +29,16 @@ public sealed class FastApiInstallFixture : IDisposable
         installer.Install("typing_extensions");
         installer.Install("anyio");
         installer.Install("annotated_doc");
+        // httpx==0.23.3 is the last version still carrying the `Client(app=...)` convenience param
+        // starlette 0.27's TestClient needs; its own transitive deps below let a real
+        // TestClient(app).get(...) round trip run end-to-end. See FASTAPI_PLAN.md Phase 4.
+        installer.Install("httpx==0.23.3");
+        installer.Install("idna");
+        installer.Install("sniffio");
+        installer.Install("rfc3986");
+        installer.Install("certifi");
+        installer.Install("httpcore");
+        installer.Install("h11");
     }
 
     public void Dispose()

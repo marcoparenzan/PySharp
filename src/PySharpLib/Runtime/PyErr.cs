@@ -3,6 +3,8 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib.Builtins;
+
 namespace PySharpLib.Runtime;
 
 /// <summary>
@@ -63,6 +65,15 @@ public static class PyErr
     public static readonly PyClass UserWarningClass = Derive("UserWarning", Warning);
     public static readonly PyClass RuntimeWarningClass = Derive("RuntimeWarning", Warning);
 
+    // PEP 654 (real CPython 3.11+, matching this project's declared 3.12 compatibility):
+    // BaseExceptionGroup(BaseException), ExceptionGroup(BaseExceptionGroup, Exception). Found via
+    // real anyio's own `_backends/_asyncio.py` (an httpx transitive dependency's cancel-scope
+    // teardown: `raise BaseExceptionGroup("unhandled errors in a TaskGroup", self._exceptions)`,
+    // and `exc_val.split(...)` to separate anyio's own cancellation exceptions from genuine errors).
+    public static readonly PyClass BaseExceptionGroupClass = Derive("BaseExceptionGroup", BaseException);
+    public static readonly PyClass ExceptionGroupClass =
+        new("ExceptionGroup", new List<PyClass> { BaseExceptionGroupClass, Exception });
+
     static PyErr()
     {
         // default __init__/__str__/__repr__ for all exceptions.
@@ -93,6 +104,74 @@ public static class PyErr
                 : "";
             return $"{inst.Class.Name}({args})";
         });
+
+        // Real CPython BaseExceptionGroup.__new__: auto-upgrades to a real ExceptionGroup instance
+        // when every given exception is an Exception (not just BaseException) — matching real
+        // CPython's own actual type-selection rule — and rejects mixing a bare BaseException into
+        // an explicitly-requested ExceptionGroup.
+        BaseExceptionGroupClass.Dict["__new__"] = new PyBuiltinFunction("BaseExceptionGroup.__new__", (interp, a, _) =>
+        {
+            var requestedCls = (PyClass)a[0];
+            var excs = PyOps.Iterate(interp, a[2]).ToList();
+            if (excs.Count == 0)
+                throw ValueError("exception group must have at least one exception");
+            bool allAreExceptions = excs.All(e => e is PyInstance pi && pi.Class.IsSubclassOf(Exception));
+            var chosenCls = requestedCls == BaseExceptionGroupClass && allAreExceptions
+                ? ExceptionGroupClass
+                : requestedCls;
+            if (chosenCls.IsSubclassOf(ExceptionGroupClass) && !allAreExceptions)
+                throw new PyRaise(MakeInstance(TypeErrorClass, "Cannot nest BaseExceptions in an ExceptionGroup"));
+            return new PyInstance(chosenCls);
+        });
+        BaseExceptionGroupClass.Dict["__init__"] = new PyBuiltinFunction("BaseExceptionGroup.__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            object message = a[1];
+            var excTuple = new PyTuple(a[2] is PyTuple pt ? pt.Items : ((PyList)a[2]).Items.ToArray());
+            inst.Dict["message"] = message;
+            inst.Dict["exceptions"] = excTuple;
+            inst.Dict["args"] = new PyTuple(new[] { message, excTuple });
+            return PyNone.Instance;
+        });
+        BaseExceptionGroupClass.Dict["__str__"] = new PyBuiltinFunction("BaseExceptionGroup.__str__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            int n = ((PyTuple)inst.Dict["exceptions"]).Items.Length;
+            return $"{PyOps.Str(interp, inst.Dict["message"])} ({n} sub-exception{(n == 1 ? "" : "s")})";
+        });
+        // Real BaseExceptionGroup.split(condition): partitions .exceptions into (matching,
+        // non-matching) sub-groups (either None if empty), preserving .message — scoped to a flat
+        // (non-nested) group, since nothing reachable nests exception groups within exception
+        // groups. `condition` may be an exception type/tuple of types (isinstance-style) or a
+        // callable predicate, matching real CPython.
+        BaseExceptionGroupClass.Dict["split"] = new PyBuiltinFunction("BaseExceptionGroup.split", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            object condition = a[1];
+            bool Matches(object exc) => condition is PyClass or PyTuple
+                ? BuiltinsFactory.IsInstance(exc, condition)
+                : PyOps.Truthy(interp, interp.Call(condition, new[] { exc }));
+
+            var matched = new List<object>();
+            var unmatched = new List<object>();
+            foreach (var exc in ((PyTuple)inst.Dict["exceptions"]).Items)
+                (Matches(exc) ? matched : unmatched).Add(exc);
+
+            object Derive(List<object> items) => items.Count == 0
+                ? PyNone.Instance
+                : SetGroupFields(new PyInstance(inst.Class), inst.Dict["message"], items);
+
+            return new PyTuple(new[] { Derive(matched), Derive(unmatched) });
+        });
+    }
+
+    private static PyInstance SetGroupFields(PyInstance inst, object message, List<object> exceptions)
+    {
+        var excTuple = new PyTuple(exceptions.ToArray());
+        inst.Dict["message"] = message;
+        inst.Dict["exceptions"] = excTuple;
+        inst.Dict["args"] = new PyTuple(new[] { message, (object)excTuple });
+        return inst;
     }
 
     /// <summary>Tutte le classi eccezione da pubblicare nei builtins.</summary>
@@ -149,6 +228,8 @@ public static class PyErr
         yield return DeprecationWarningClass;
         yield return UserWarningClass;
         yield return RuntimeWarningClass;
+        yield return BaseExceptionGroupClass;
+        yield return ExceptionGroupClass;
     }
 
     private static PyClass Derive(string name, PyClass baseClass)
@@ -179,7 +260,19 @@ public static class PyErr
     public static PyRaise ModuleNotFoundError(string msg) => Raise(ModuleNotFoundErrorClass, msg);
     public static PyRaise OverflowError(string msg) => Raise(OverflowErrorClass, msg);
     public static PyRaise SyntaxLike(string msg) => Raise(SyntaxErrorClass, msg);
-    public static PyRaise StopIteration() => new(MakeInstance(StopIterationClass));
+    /// <summary>Real CPython: a generator's `return value` becomes StopIteration(value)'s `.value`
+    /// attribute (None, with empty .args, for a bare `return`/falling off the end) — found via
+    /// httpx's real sync auth flow catching `StopIteration` around `auth_flow.send(...)`.</summary>
+    public static PyRaise StopIteration(object? value = null)
+    {
+        // Real CPython: a None return value (explicit `return None`, bare `return`, or falling off
+        // the end) raises a bare StopIteration() with empty .args — only a genuinely non-None value
+        // becomes .args == (value,). Both cases still expose the real value via .value.
+        bool hasValue = value is not null and not PyNone;
+        var inst = MakeInstance(StopIterationClass, hasValue ? new[] { value! } : Array.Empty<object>());
+        inst.Dict["value"] = value ?? PyNone.Instance;
+        return new PyRaise(inst);
+    }
 
     public static PyRaise KeyError(object key)
         => new(MakeInstance(KeyErrorClass, key));

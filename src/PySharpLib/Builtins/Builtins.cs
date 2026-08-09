@@ -301,6 +301,11 @@ public static class BuiltinsFactory
                 {
                     result.Update(src);
                 }
+                else if (PyOps.TryGetMappingItems(interp, args[0], out var mapItems))
+                {
+                    foreach (var (k, v) in mapItems)
+                        result[k] = v;
+                }
                 else
                 {
                     foreach (var pair in PyOps.Iterate(interp, args[0]))
@@ -403,7 +408,7 @@ public static class BuiltinsFactory
                 return v;
             if (args.Length > 1)
                 return args[1];
-            throw PyErr.StopIteration();
+            throw PyErr.StopIteration(args[0] is PyGenerator gen ? gen.ReturnValue : null);
         });
 
         Add("sum", (interp, args, _) =>
@@ -900,6 +905,16 @@ public static class BuiltinsFactory
             "Callable" => HasDunder("__call__")
                 || obj is PyFunction or PyBuiltinFunction or PyBoundMethod or PyClass or PyStaticMethod or PyClassMethod,
             "Hashable" => obj is not (PyList or PyDict or PySet or PyByteArray),
+            // Real CPython: `types.CoroutineType`/`types.GeneratorType` are registered virtual
+            // subclasses of `collections.abc.Coroutine`/`Generator` — a real coroutine/generator
+            // object always satisfies the isinstance check, not via duck-typed dunder presence.
+            // Found via real anyio's own `abc/_tasks.py` (`call_for_coroutine`:
+            // `isinstance(coro, Coroutine)`, verifying an `async def` function's call actually
+            // produced a real coroutine object) — an httpx transitive dependency, reached spawning
+            // a real task inside `TaskGroup.start_soon` while tearing down a `TestClient` request.
+            "Coroutine" => obj is PyCoroutine,
+            "Generator" => obj is PyGenerator,
+            "Awaitable" => obj is PyCoroutine or PyFuture or PyGenerator || HasDunder("__await__"),
             _ => false,
         };
     }

@@ -74,6 +74,15 @@ public sealed class PyCoroutine
     public bool Started => _thread is not null;
     public string Name => _fn.Name;
 
+    /// <summary>Real CPython Task's private `_fut_waiter`: the Future the coroutine is *currently*
+    /// suspended on, or null when not (not yet started, or momentarily between steps — the same
+    /// window real CPython's own `_fut_waiter` is `None` in). Maps directly onto `_awaited`, which
+    /// this class already tracks for the driver's own use (PyTask.Step's `out awaited`) — real
+    /// anyio's own cancellation delivery (`_backends/_asyncio.py`'s `_deliver_cancellation`) reads
+    /// this directly off the Task to decide whether to cancel the thing being awaited immediately or
+    /// defer via `_must_cancel`. See PyTask.FutWaiter.</summary>
+    public PyFuture? CurrentAwaited => Started && !Finished && _awaited is PyFuture pf ? pf : null;
+
     public PyCoroutine(PyFunction fn, Env env)
     {
         _fn = fn;
@@ -648,6 +657,21 @@ public sealed class PyTask : PyFuture
     /// constructing a real `httpx.Client`/`TestClient` request.</summary>
     public string? Name { get; set; }
 
+    /// <summary>Real CPython Task's private `_fut_waiter` and `get_coro()` — see
+    /// `PyCoroutine.CurrentAwaited`'s own doc comment for why/how. Found via real anyio's own
+    /// `_deliver_cancellation`/`_task_started` (`_backends/_asyncio.py`).</summary>
+    public PyFuture? FutWaiter => _coro.CurrentAwaited;
+    public PyCoroutine GetCoro() => _coro;
+
+    /// <summary>Real CPython Task's private `_must_cancel`: set when `.cancel()` is called but
+    /// there's no current `_fut_waiter` to cancel directly (the task hasn't started yet, or is
+    /// between steps) — checked and cleared at the very start of the *next* step, which then
+    /// delivers a real `CancelledError` instead of the normal resume value/exception. Matches real
+    /// CPython's own `Task.__step`/`Task.cancel` algorithm. Found via real anyio's own
+    /// `_deliver_cancellation` (`_backends/_asyncio.py`), reached tearing down a real `TestClient`
+    /// request's cancel scope.</summary>
+    public bool MustCancel { get; set; }
+
     public PyTask(PyCoroutine coro, PyEventLoop loop, Interp interp)
         : base(loop)
     {
@@ -657,10 +681,34 @@ public sealed class PyTask : PyFuture
         loop.CallSoon(() => Step(PyNone.Instance, null));
     }
 
+    /// <summary>Real CPython Task.cancel(): if the task is currently suspended awaiting something
+    /// (a real `_fut_waiter`), cancel that directly — PyTask.Step's existing AddNativeCallback
+    /// wiring then delivers the resulting CancelledError into the coroutine at its await point,
+    /// exactly like real CPython. Otherwise (not yet started, or between steps) defer via
+    /// `_must_cancel`, delivered on the next step.</summary>
+    public new bool Cancel()
+    {
+        if (IsDone)
+            return false;
+        var waiter = FutWaiter;
+        if (waiter is not null && !waiter.IsDone)
+        {
+            waiter.Cancel();
+            return true;
+        }
+        MustCancel = true;
+        return true;
+    }
+
     private void Step(object sendValue, PyRaise? throwErr)
     {
         if (IsDone)
             return;
+        if (MustCancel)
+        {
+            MustCancel = false;
+            throwErr = new PyRaise(PyErr.MakeInstance(AsyncRuntime.CancelledErrorClass));
+        }
 
         PyCoroutine.StepResult status;
         object awaited;
@@ -677,7 +725,16 @@ public sealed class PyTask : PyFuture
         if (status == PyCoroutine.StepResult.Done)
         {
             if (_coro.Error is not null)
-                SetException(_coro.Error);
+            {
+                // Real CPython Task.__step: a coroutine that exits via an (uncaught) CancelledError
+                // transitions the task itself to the CANCELLED state (Future.cancel(), not
+                // set_exception()) — matters for real anyio's own cancellation bookkeeping, which
+                // checks `task.cancelled()`, not just whether an exception is pending.
+                if (PyErr.Matches(_coro.Error.Value, AsyncRuntime.CancelledErrorClass))
+                    base.Cancel();
+                else
+                    SetException(_coro.Error);
+            }
             else
                 SetResult(_coro.ReturnValue);
             return;
@@ -741,6 +798,11 @@ public sealed class PyEventLoop
     /// dedicated internal thread — called at the very start of that thread's body, mirroring
     /// LogicalThread.Adopt. Deliberately NOT called for a genuine `threading.Thread.start()`.</summary>
     public static void AdoptRunning(PyEventLoop? loop) => _running = loop;
+
+    // Real CPython's set_task_factory/get_task_factory — most code (including anyio's TaskGroup._spawn)
+    // just checks `if factory := loop.get_task_factory()` and falls back to plain `loop.create_task`
+    // when it's None, which is all this project's create_task path needs to support today.
+    public object? TaskFactory { get; set; }
 
     public PyEventLoop(Interp interp) => Interp = interp;
 

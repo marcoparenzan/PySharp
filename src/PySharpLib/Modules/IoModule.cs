@@ -71,9 +71,12 @@ public static class IoModule
     {
         var cls = new PyClass("BytesIO", new List<PyClass> { IOBaseClass });
         const string key = "__buf__";
+        const string posKey = "__pos__";
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"BytesIO.{name}", fn);
 
         List<byte> Buf(object self) => (List<byte>)((PyInstance)self).Dict[key];
+        int Pos(object self) => (int)((PyInstance)self).Dict[posKey];
+        void SetPos(object self, int pos) => ((PyInstance)self).Dict[posKey] = pos;
 
         Add("__init__", (_, a, _) =>
         {
@@ -82,6 +85,7 @@ public static class IoModule
             if (a.Length > 1 && a[1] is PyBytes b)
                 buf.AddRange(b.Data);
             inst.Dict[key] = buf;
+            inst.Dict[posKey] = 0;
             return PyNone.Instance;
         });
         Add("write", (_, a, _) =>
@@ -92,14 +96,65 @@ public static class IoModule
                 PyByteArray b => b.Data.ToArray(),
                 _ => throw PyErr.TypeError("a bytes-like object is required"),
             };
-            Buf(a[0]).AddRange(data);
+            var buf = Buf(a[0]);
+            int pos = Pos(a[0]);
+            // Real BytesIO.write overwrites at the current position and only extends the
+            // buffer past that point — matters once seek()/read() are used together, not just
+            // the append-only pattern this project's earlier callers all used.
+            int end = pos + data.Length;
+            while (buf.Count < end)
+                buf.Add(0);
+            for (int i = 0; i < data.Length; i++)
+                buf[pos + i] = data[i];
+            SetPos(a[0], end);
             return new BigInteger(data.Length);
         });
         Add("getvalue", (_, a, _) => new PyBytes(Buf(a[0]).ToArray()));
-        Add("read", (_, a, _) => new PyBytes(Buf(a[0]).ToArray()));
+        Add("read", (_, a, _) =>
+        {
+            var buf = Buf(a[0]);
+            int pos = Pos(a[0]);
+            int size = a.Length > 1 && a[1] is not PyNone ? (int)PyOps.AsBigInt(a[1], "size") : -1;
+            int avail = Math.Max(0, buf.Count - pos);
+            int n = size < 0 ? avail : Math.Min(size, avail);
+            var result = new byte[n];
+            buf.CopyTo(pos, result, 0, n);
+            SetPos(a[0], pos + n);
+            return new PyBytes(result);
+        });
         Add("close", (_, _, _) => PyNone.Instance);
         Add("flush", (_, _, _) => PyNone.Instance);
-        Add("tell", (_, a, _) => new BigInteger(Buf(a[0]).Count));
+        Add("tell", (_, a, _) => new BigInteger(Pos(a[0])));
+        Add("seek", (_, a, _) =>
+        {
+            int offset = (int)PyOps.AsBigInt(a[1], "offset");
+            int whence = a.Length > 2 ? (int)PyOps.AsBigInt(a[2], "whence") : 0;
+            var buf = Buf(a[0]);
+            int newPos = whence switch
+            {
+                0 => offset,
+                1 => Pos(a[0]) + offset,
+                2 => buf.Count + offset,
+                _ => throw PyErr.ValueError("invalid whence"),
+            };
+            if (newPos < 0)
+                throw PyErr.ValueError("negative seek value");
+            SetPos(a[0], newPos);
+            return new BigInteger(newPos);
+        });
+        Add("truncate", (_, a, _) =>
+        {
+            var buf = Buf(a[0]);
+            int size = a.Length > 1 && a[1] is not PyNone ? (int)PyOps.AsBigInt(a[1], "size") : Pos(a[0]);
+            if (size < 0)
+                throw PyErr.ValueError("negative truncate size");
+            if (buf.Count > size)
+                buf.RemoveRange(size, buf.Count - size);
+            else
+                while (buf.Count < size)
+                    buf.Add(0);
+            return new BigInteger(size);
+        });
         Add("__enter__", (_, a, _) => a[0]);
         Add("__exit__", (_, _, _) => false);
         return cls;

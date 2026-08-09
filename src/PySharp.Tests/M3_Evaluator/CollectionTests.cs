@@ -158,4 +158,31 @@ public class CollectionTests
             d['c'] = 3
             print(list(d.keys()))
             """));
+
+    // Real CPython's dict()/dict.update() mapping-protocol check: an object with a `keys()` method
+    // is treated as a mapping (iterate `x.keys()`, fetch each value via `x[key]`) rather than as an
+    // iterable of (key, value) pairs. Found via httpx's `dict(request.headers)`
+    // (`_models.py`'s `_CookieCompatRequest.__init__`) — `Headers` has `keys()`/`__getitem__` but
+    // its own `__iter__` only yields keys, so treating it as a pairs-iterable raised "dictionary
+    // update sequence element is not a pair" instead of building the real header dict. See
+    // FASTAPI_PLAN.md Phase 4.
+    [Fact]
+    public void Dict_and_update_recognize_a_custom_object_with_a_keys_method_as_a_mapping()
+        => Assert.Equal("{'a': 1, 'b': 2}\n{'a': 1, 'b': 2}\n", Py.Run("""
+            class FakeMapping:
+                def __init__(self):
+                    self._d = {"a": 1, "b": 2}
+                def keys(self):
+                    return self._d.keys()
+                def __getitem__(self, k):
+                    return self._d[k]
+                def __iter__(self):
+                    return iter(self._d.keys())
+
+            m = FakeMapping()
+            print(dict(m))
+            d2 = {}
+            d2.update(m)
+            print(d2)
+            """));
 }

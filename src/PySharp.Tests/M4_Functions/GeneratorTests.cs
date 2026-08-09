@@ -124,4 +124,66 @@ public class GeneratorTests
             """;
         Assert.Equal("1 1 2 2\n", Py.Run(src));
     }
+
+    [Fact]
+    public void Send_resumes_with_the_sent_value_as_the_yield_expressions_result()
+    {
+        // Real gen.send(value): resumes the generator with `value` as the result of its currently-
+        // suspended 'yield' expression — found via httpx's real sync auth flow (`_client.py`'s
+        // `_send_handling_auth`: `auth_flow.send(response)`), previously unconditionally rejected
+        // ("not supported in PySharp v1").
+        string src = """
+            def echo():
+                x = yield 'first'
+                print('got', x)
+                yield 'after'
+            g = echo()
+            print(next(g))
+            print(g.send('hello'))
+            """;
+        Assert.Equal("first\ngot hello\nafter\n", Py.Run(src));
+    }
+
+    [Fact]
+    public void Send_a_non_None_value_to_a_just_started_generator_raises_TypeError()
+    {
+        string src = """
+            def gen():
+                yield 1
+            g = gen()
+            try:
+                g.send('nope')
+            except TypeError as e:
+                print('caught:', e)
+            """;
+        Assert.Equal("caught: can't send non-None value to a just-started generator\n", Py.Run(src));
+    }
+
+    [Fact]
+    public void Generator_return_value_becomes_StopIteration_value()
+    {
+        // Real CPython: a generator's `return value` becomes the StopIteration it raises on
+        // exhaustion's `.value` attribute (None for a bare `return`/falling off the end).
+        string src = """
+            def gen():
+                yield 1
+                return 'done'
+            g = gen()
+            print(next(g))
+            try:
+                next(g)
+            except StopIteration as e:
+                print(e.value, e.args)
+
+            def bare():
+                yield 1
+            g2 = bare()
+            next(g2)
+            try:
+                next(g2)
+            except StopIteration as e:
+                print(e.value, e.args)
+            """;
+        Assert.Equal("1\ndone ('done',)\nNone ()\n", Py.Run(src));
+    }
 }

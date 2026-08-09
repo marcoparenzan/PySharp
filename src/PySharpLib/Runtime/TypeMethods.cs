@@ -94,6 +94,22 @@ public static class TypeMethods
             value = (object?)fut.Loop ?? PyNone.Instance;
             return true;
         }
+        // Real CPython Task's private `_must_cancel`/`_fut_waiter` — see PyTask.MustCancel/
+        // FutWaiter's own doc comments for why. Found via real anyio's own `_deliver_cancellation`
+        // (`_backends/_asyncio.py`), reached tearing down a real `TestClient` request's cancel scope.
+        if (obj is PyTask task)
+        {
+            if (name == "_must_cancel")
+            {
+                value = task.MustCancel;
+                return true;
+            }
+            if (name == "_fut_waiter")
+            {
+                value = (object?)task.FutWaiter ?? PyNone.Instance;
+                return true;
+            }
+        }
         // Universal fallback: `x.__class__` for any builtin value (PyInstance has its own, correct,
         // earlier in Interp.GetAttr's switch — this only runs for everything else: None, str, int,
         // list, ...). Found via a real `NoneType = None.__class__` idiom (pydantic/typing.py).
@@ -896,6 +912,11 @@ public static class DictMethods
             {
                 if (a[1] is PyDict other)
                     d.Update(other);
+                else if (PyOps.TryGetMappingItems(interp, a[1], out var mapItems))
+                {
+                    foreach (var (k, v) in mapItems)
+                        d[k] = v;
+                }
                 else
                     foreach (var pair in PyOps.Iterate(interp, a[1]))
                     {
@@ -1272,18 +1293,16 @@ public static class GeneratorMethods
             var gen = (PyGenerator)a[0];
             if (gen.MoveNext(interp, out var v))
                 return v;
-            throw PyErr.StopIteration();
+            throw PyErr.StopIteration(gen.ReturnValue);
         }),
         ["__iter__"] = new PyBuiltinFunction("generator.__iter__", (_, a, _) => a[0]),
-        // send(None) is equivalent to next(); non-None values not supported in v1
         ["send"] = new PyBuiltinFunction("generator.send", (interp, a, _) =>
         {
-            if (a.Length > 1 && a[1] is not PyNone)
-                throw PyErr.TypeError("can't send non-None value to a generator (not supported in PySharp v1)");
             var gen = (PyGenerator)a[0];
-            if (gen.MoveNext(interp, out var v))
+            var sendValue = a.Length > 1 ? a[1] : PyNone.Instance;
+            if (gen.Send(interp, sendValue, out var v))
                 return v;
-            throw PyErr.StopIteration();
+            throw PyErr.StopIteration(gen.ReturnValue);
         }),
         ["close"] = new PyBuiltinFunction("generator.close", (_, _, _) => PyNone.Instance),
     };

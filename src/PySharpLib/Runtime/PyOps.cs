@@ -402,6 +402,30 @@ public static class PyOps
         }
     }
 
+    /// <summary>Real CPython's dict()/dict.update() mapping-protocol check: an object with a `keys()`
+    /// method is treated as a mapping (iterate `x.keys()`, fetch each value via `x[key]`) rather than
+    /// as an iterable of (key, value) pairs. Found via httpx's `dict(request.headers)` (`_models.py`'s
+    /// `_CookieCompatRequest.__init__`) — `Headers` has `keys()`/`__getitem__` but its own `__iter__`
+    /// only yields keys, so treating it as a pairs-iterable raised "dictionary update sequence element
+    /// is not a pair" instead of building the real header dict.</summary>
+    public static bool TryGetMappingItems(Interp interp, object obj, out IEnumerable<(object Key, object Value)> items)
+    {
+        bool hasKeys = obj switch
+        {
+            PyInstance inst => inst.Class.TryLookup("keys", out _),
+            PyDictKeysView => false,
+            _ => false,
+        };
+        if (!hasKeys)
+        {
+            items = null!;
+            return false;
+        }
+        var keys = Iterate(interp, interp.CallMethod(obj, "keys", Array.Empty<object>())).ToList();
+        items = keys.Select(k => (k, interp.CallMethod(obj, "__getitem__", new[] { k })));
+        return true;
+    }
+
     private static IEnumerable<object> SnapshotList(PyList l)
     {
         // Iterate by index like CPython (allows append during the loop)

@@ -23,9 +23,15 @@ public sealed class PyGenerator
 
     private Thread? _thread;
     private object _yielded = PyNone.Instance;
+    private object _sendValue = PyNone.Instance;
     private bool _finished;
     private Exception? _error;
     private PyRaise? _pendingThrow;
+
+    /// <summary>The value of a completed generator's `return value` statement (None if it fell off
+    /// the end or used a bare `return`) — becomes StopIteration(...).value for callers of
+    /// next()/send() past exhaustion. See PyErr.StopIteration.</summary>
+    public object ReturnValue { get; private set; } = PyNone.Instance;
 
     [ThreadStatic]
     private static PyGenerator? _current;
@@ -41,8 +47,9 @@ public sealed class PyGenerator
         _env = env;
     }
 
-    /// <summary>Called by the generator thread when it evaluates 'yield v'. Returns the sent value
-    /// (None), or raises if the caller resumed us via <see cref="ThrowInto"/>.</summary>
+    /// <summary>Called by the generator thread when it evaluates 'yield v'. Returns the value passed
+    /// to the resuming gen.send(value) (None for plain next()/gen.send(None)), or raises if the
+    /// caller resumed us via <see cref="ThrowInto"/>.</summary>
     public object Yield(object value)
     {
         _yielded = value;
@@ -53,10 +60,22 @@ public sealed class PyGenerator
             _pendingThrow = null;
             throw exc;
         }
-        return PyNone.Instance;
+        return _sendValue;
     }
 
-    public bool MoveNext(Interp interp, out object value) => Resume(interp, null, out value);
+    public bool MoveNext(Interp interp, out object value) => Resume(interp, PyNone.Instance, null, out value);
+
+    /// <summary>Real CPython gen.send(value): resumes the generator with `value` as the result of its
+    /// currently-suspended 'yield' expression. Found via httpx's real sync auth flow
+    /// (`_client.py`'s `_send_handling_auth`: `auth_flow.send(response)`), which relies on
+    /// `send()`'s carried value even when the particular generator body ignores it (the default
+    /// no-auth flow's bare `yield request`) — CPython still requires the call to succeed.</summary>
+    public bool Send(Interp interp, object sendValue, out object value)
+    {
+        if (_thread is null && sendValue is not PyNone)
+            throw PyErr.TypeError("can't send non-None value to a just-started generator");
+        return Resume(interp, sendValue, null, out value);
+    }
 
     /// <summary>
     /// Resumes the generator by raising <paramref name="excValue"/> at the suspended 'yield'
@@ -66,9 +85,9 @@ public sealed class PyGenerator
     /// StopIteration; otherwise the exception propagates to the caller.
     /// </summary>
     public bool ThrowInto(Interp interp, PyInstance excValue, out object value) =>
-        Resume(interp, new PyRaise(excValue), out value);
+        Resume(interp, PyNone.Instance, new PyRaise(excValue), out value);
 
-    private bool Resume(Interp interp, PyRaise? throwValue, out object value)
+    private bool Resume(Interp interp, object sendValue, PyRaise? throwValue, out object value)
     {
         if (_finished)
         {
@@ -99,11 +118,11 @@ public sealed class PyGenerator
                 _resume.Wait();
                 try
                 {
-                    interp.ExecFunctionBody(_fn, _env);
-                }
-                catch (ReturnSignal)
-                {
-                    // return in a generator → end of iteration
+                    // ExecFunctionBody itself catches ReturnSignal and returns its Value normally
+                    // (see Interp.ExecFunctionBody) — a `return x` in a generator body never
+                    // reaches this frame as a thrown ReturnSignal, so the value must be read off
+                    // ExecFunctionBody's own return instead.
+                    ReturnValue = interp.ExecFunctionBody(_fn, _env);
                 }
                 catch (Exception ex)
                 {
@@ -123,6 +142,7 @@ public sealed class PyGenerator
         }
 
         _pendingThrow = throwValue;
+        _sendValue = sendValue;
         _resume.Release();
         _produced.Wait();
 

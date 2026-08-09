@@ -1397,6 +1397,19 @@ public class CodecsTests
             print(len(out))
             print(out == chr(0xFFFD) + chr(0xFFFD) + "ok")
             """));
+
+    [Fact]
+    public void BOM_constants_match_real_CPython_byte_sequences()
+        // Found via httpx's own `_utils.py`'s `guess_json_utf` (Response.json()'s charset
+        // auto-detection), which sniffs a response body's first bytes against these exact values.
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nTrue", Run("""
+            import codecs
+            print(codecs.BOM_UTF8 == bytes([0xEF, 0xBB, 0xBF]))
+            print(codecs.BOM_UTF16_LE == bytes([0xFF, 0xFE]))
+            print(codecs.BOM_UTF16_BE == bytes([0xFE, 0xFF]))
+            print(codecs.BOM_UTF32_LE == bytes([0xFF, 0xFE, 0x00, 0x00]))
+            print(codecs.BOM_UTF32_BE == bytes([0x00, 0x00, 0xFE, 0xFF]))
+            """));
 }
 
 /// <summary>contextvars: real get/set/reset/Context/copy_context — scoped to a single current value
@@ -1650,6 +1663,52 @@ public class IoBaseTests
             print(isinstance(io.StringIO(), io.IOBase))
             print(isinstance(io.BytesIO(), io.IOBase))
             """));
+
+    [Fact]
+    public void BytesIO_seek_and_read_track_a_real_position()
+        // Found via starlette's real TestClient (`testclient.py`'s `handle_request`), which streams
+        // an ASGI response body into a BytesIO via repeated write() then seek(0) before reading it
+        // all back out — a prior stub `seek()` (always a no-op returning 0) didn't matter there
+        // since read() always returned the whole buffer regardless of position, but real
+        // position-aware seek()/read(size)/tell() is needed for anything using them together.
+        => Assert.Equal("11\n0\nb'hello world'\n11\nb'hello'\n5\n10\nb'd'\nb'hello world'", Py.Run("""
+            import io
+            b = io.BytesIO()
+            b.write(b"hello")
+            b.write(b" world")
+            print(b.tell())
+            b.seek(0)
+            print(b.tell())
+            print(b.read())
+            print(b.tell())
+            b.seek(0)
+            print(b.read(5))
+            print(b.tell())
+            b.seek(-1, 2)
+            print(b.tell())
+            print(b.read())
+            print(b.getvalue())
+            """).TrimEnd('\n'));
+
+    [Fact]
+    public void BytesIO_truncate_resizes_without_moving_the_position_when_a_size_is_given()
+        // Found via httpx's `_decoders.py` chunked-body buffering (`self._buffer.seek(0);
+        // self._buffer.truncate()` to clear the buffer after each chunk boundary).
+        => Assert.Equal("b''\n0\n5\nb'hello'\n11", Py.Run("""
+            import io
+            b = io.BytesIO()
+            b.write(b"hello world")
+            b.seek(0)
+            b.truncate()
+            print(b.getvalue())
+            print(b.tell())
+
+            b2 = io.BytesIO()
+            b2.write(b"hello world")
+            print(b2.truncate(5))
+            print(b2.getvalue())
+            print(b2.tell())
+            """).TrimEnd('\n'));
 }
 
 /// <summary>concurrent.futures.Future: a real thread-safe future (distinct from asyncio's
@@ -2573,6 +2632,30 @@ public class EmailUtilsTests
                 b = parsedate("Tue, 16 Jan 2024 00:00:00 GMT")
                 print(a < b)
                 """));
+}
+
+/// <summary>email.message.Message.get_content_charset: parses the `charset=` parameter off a
+/// Content-Type header. Found via httpx's own `_utils.py`'s `parse_content_type_charset`, used by
+/// Response.json() to pick a decode charset. See FASTAPI_PLAN.md Phase 4.</summary>
+public class EmailMessageCharsetTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Get_content_charset_reads_the_charset_param_and_falls_back_to_failobj()
+        => Assert.Equal("utf-8\nutf-8\nNone\nfallback", Run("""
+            import email.message
+
+            msg = email.message.Message()
+            msg["content-type"] = "application/json; charset=UTF-8"
+            print(msg.get_content_charset())
+            print(msg.get_content_charset(failobj="none"))
+
+            msg2 = email.message.Message()
+            msg2["content-type"] = "application/json"
+            print(msg2.get_content_charset())
+            print(msg2.get_content_charset(failobj="fallback"))
+            """));
 }
 
 /// <summary>mimetypes.guess_type: a real extension-to-MIME table plus real encoding-suffix
