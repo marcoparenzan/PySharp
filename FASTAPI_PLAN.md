@@ -2350,6 +2350,35 @@ The author's go-ahead ("procedi") to push past GET-only `TestClient` coverage.
   per-instance state, no shared/static mutable state at all). 998/998 by the end of this round, up
   from 993 at the start.
 
+## Phase 4.2 — first real target FastAPI sample app, live over real HTTP
+
+The author's go-ahead ("procedi") to write the actual sample app Phase 4.1 has been building toward.
+
+- **`samples/fastapi_demo.py`**: a real, unmodified `fastapi.FastAPI()` app — GET `/` (a plain JSON
+  message), GET `/items/{item_id}` (typed path parameter + a real `HTTPException(404)` for a missing
+  item), PUT `/items/{item_id}` (a real pydantic `Item` request body), DELETE `/items/{item_id}`, POST
+  `/items` (a real pydantic body, computing a derived field), and GET `/search` (query parameters with
+  real defaults) — wired to `samples/asgi_server.py`'s real, reusable `serve(app)` (`from asgi_server
+  import serve`, resolved via PySharp's own script-directory search-path insertion — verified the
+  cross-import works cleanly) instead of starlette's in-process `TestClient`. This is the *live*,
+  curl-able version of the exact milestone `FASTAPI_PLAN.md` 4.1.10/4.1.11 already verified in-process.
+- **Run live and driven entirely with real `curl` over a real HTTP/1.1 connection, not simulated**:
+  started the server as a real background process (`pysharp run samples/fastapi_demo.py`), then curled
+  every route from outside the process — GET `/`, GET `/items/42` (404 before any item exists), GET
+  `/search?q=hello&limit=5`, POST `/items` (both a valid body and one missing `price`, confirming the
+  real 422 shape), PUT `/items/1`, GET `/items/1` (now found), DELETE `/items/1`, GET `/items/1` again
+  (404 again, confirming the delete took). **Zero new bugs found** — every response matched
+  hand-derived real FastAPI/starlette/pydantic output exactly, on the first run.
+- 6 tests added: new `M16_FastApi/FastApiDemoSampleTests.cs` (`[Collection("asyncio-run")]`), driving
+  `fastapi_demo.app` directly via a hand-built ASGI scope/receive/send triple — the same technique
+  `AsgiServerSampleTests` already uses for the dependency-free demo app, here exercising the real
+  fastapi/starlette/pydantic ASGI callable instead, covering the same scenarios verified live via curl
+  (index route, the full PUT→GET→DELETE→GET item lifecycle, POST with a valid body, POST with the real
+  422 validation shape, query-parameter defaults). No interpreter changes needed this round — the
+  sample and its tests are the deliverable. Full suite green: 1004/1004 (up from 998), confirmed
+  stable across 5 consecutive full-suite runs (a lighter check than usual since nothing in
+  `src/PySharpLib` changed this round).
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
@@ -2660,6 +2689,21 @@ metaclass actually computes. A `copy.copy`/`copy.deepcopy` regression this surfa
 `.Dict`, silently emptying any slots-only object) was caught and fixed before it shipped. 998/998
 tests green (up from 993), confirmed via 65 consecutive clean full-suite runs.
 
-**Next frontier**: Phase 4.2 — a first real target FastAPI sample app (a small, complete
-request/response API exercising path/query params, a JSON body, and a typed response model), wired
-either through `TestClient` or the real `samples/asgi_server.py` end to end.
+**Phase 4.2 is done: a real FastAPI app runs live, over real HTTP.** `samples/fastapi_demo.py` — a
+real, unmodified `FastAPI()` app (path/query params, a real pydantic request body, a real
+`HTTPException` 404, a computed response field) — wired to the real, reusable `samples/asgi_server.py`
+`serve(app)` instead of `TestClient`'s in-process dispatch. Started as a real background process and
+driven entirely with real `curl` over a real HTTP/1.1 connection: every route matched hand-derived
+expected output exactly, **zero new bugs found**. This is the live, curl-able version of the
+GET/POST/PUT/DELETE milestone 4.1.10/4.1.11 already verified in-process. 1004/1004 tests green (up
+from 998), no interpreter changes needed this round.
+
+**Phase 4 (FastAPI) has now reached a real, live, end-to-end milestone**: a real, unmodified FastAPI
+app — full CRUD, typed path/query params, pydantic request-body validation, `HTTPException` — served
+over real HTTP entirely by PySharp, with zero framework code modified. Remaining open items are
+smaller-scoped: WebSocket support in `fastapi_demo.py` (real WebSockets already work against
+starlette directly, per Phase 3.1b — not yet threaded through this specific sample), a real
+uvicorn-equivalent process manager (today's `serve()` is single-connection-at-a-time-per-Task but has
+no graceful shutdown/reload story), and the pre-existing, separately-scoped gaps noted along the way
+(`except*` syntax, nested-import `locals()` scoping, non-`'__dict__'`-slots-only instances still
+getting a usable `__dict__`).

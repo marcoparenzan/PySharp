@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e 🟡 real ASGI server + `TestClient` GET/POST/PUT/DELETE working) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` ✅, more validators open), ASGI (real `TestClient` GET/POST/PUT/DELETE/`HTTPException` ✅) |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` ✅, more validators open), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -191,16 +191,20 @@ as the test bench.
   (`PyClass.HasSlot`/`PyInstance.Slots`), separate from an instance's regular attribute dict even when
   `__dict__` is itself a declared slot (pydantic's own `BaseModel.__slots__ = ('__dict__',
   '__fields_set__')` pattern). Full phased log in `FASTAPI_PLAN.md`.
-- **2e — ASGI server + FastAPI.** 🟡 **In progress.** `samples/asgi_server.py` (Phase 3.2) is a real,
-  minimal, reusable ASGI/3 HTTP server over PySharp's own async socket I/O, verified over real HTTP
-  (curl) against both its own demo app and a real, unmodified `Starlette` app. Beyond that: a real,
-  unmodified `starlette.testclient.TestClient` (backed by real `httpx`/`httpcore`/`h11`) now drives a
-  real `FastAPI()` app's ASGI callable end to end — GET, POST (with a real pydantic request body,
-  including the real 422 validation-error shape), PUT, DELETE, query params, and `HTTPException` all
-  verified (`FASTAPI_PLAN.md` Phase 4.1.10–4.1.11), through real anyio task groups/cancel scopes and
-  PySharp's own async runtime. Open: a real uvicorn-equivalent process wiring the ASGI server to an
-  actual `FastAPI()` app for a live end-to-end demo (only `TestClient`'s in-process ASGI dispatch has
-  been verified so far).
+- **2e — ASGI server + FastAPI.** ✅ **Done** (a real, live end-to-end demo — some smaller-scoped
+  items remain, see below). `samples/asgi_server.py` (Phase 3.2) is a real, minimal, reusable ASGI/3
+  HTTP server over PySharp's own async socket I/O, verified over real HTTP (curl) against both its own
+  demo app and a real, unmodified `Starlette` app. A real, unmodified
+  `starlette.testclient.TestClient` (backed by real `httpx`/`httpcore`/`h11`) drives a real
+  `FastAPI()` app's ASGI callable end to end — GET, POST (with a real pydantic request body, including
+  the real 422 validation-error shape), PUT, DELETE, query params, and `HTTPException` all verified
+  (`FASTAPI_PLAN.md` Phase 4.1.10–4.1.11). **`samples/fastapi_demo.py`** (Phase 4.2) wires a real
+  `FastAPI()` app to the real `asgi_server.py` and was run live as a background process, driven
+  entirely with real `curl` over real HTTP/1.1 — every route (full CRUD, typed path/query params,
+  pydantic validation, `HTTPException`) matched expected output exactly, zero new bugs. Open:
+  WebSocket support in the sample itself (WebSockets already work against starlette directly, not yet
+  threaded through this sample), and a real uvicorn-equivalent process manager (graceful
+  shutdown/reload — today's `serve()` has neither).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -634,8 +638,15 @@ in scenario 1).
   `copy.copy`/`copy.deepcopy` regression this surfaced (only ever copied the regular dict, silently
   emptying any slots-only object like pydantic's real `FieldInfo`) was caught and fixed before it
   shipped. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.1.11.
-- Tests: **998 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 65 consecutive clean
-  full-suite runs (one unrelated, unreproduced flake in an early batch — see 4.1.11).
+- **Phase 4.2 done: a real FastAPI app runs live, over real HTTP, entirely on PySharp.**
+  `samples/fastapi_demo.py` wires a real, unmodified `FastAPI()` app (full CRUD, typed path/query
+  params, a real pydantic request body, a real `HTTPException`) to the real, reusable
+  `samples/asgi_server.py`. Started as a real background process and driven entirely with real `curl`
+  over a real HTTP/1.1 connection — every route matched hand-derived expected output exactly, zero new
+  bugs found, no interpreter changes needed. This is the live, curl-able version of the
+  GET/POST/PUT/DELETE milestone 4.1.10/4.1.11 already verified in-process via `TestClient`.
+- Tests: **1004 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed stable across multiple
+  consecutive full-suite runs.
 
 _Update these numbers at every milestone._
