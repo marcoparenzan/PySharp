@@ -201,10 +201,14 @@ as the test bench.
   (`FASTAPI_PLAN.md` Phase 4.1.10–4.1.11). **`samples/fastapi_demo.py`** (Phase 4.2) wires a real
   `FastAPI()` app to the real `asgi_server.py` and was run live as a background process, driven
   entirely with real `curl` over real HTTP/1.1 — every route (full CRUD, typed path/query params,
-  pydantic validation, `HTTPException`) matched expected output exactly, zero new bugs. Open:
-  WebSocket support in the sample itself (WebSockets already work against starlette directly, not yet
-  threaded through this sample), and a real uvicorn-equivalent process manager (graceful
-  shutdown/reload — today's `serve()` has neither).
+  pydantic validation, `HTTPException`) matched expected output exactly, zero new bugs.
+  ~~Open: WebSocket support in the sample itself~~ ✅ **Done** (Phase 4.3.1/4.3.2): `asgi_server.py`
+  now speaks a real RFC 6455 handshake, real frame framing/masking, real fragmented-message
+  reassembly, and a real closing handshake, verified live over a real socket with a from-scratch
+  WebSocket client, zero bugs found. Still open: a real uvicorn-equivalent process manager (graceful
+  shutdown/reload — today's `serve()` has neither), and threading WebSocket support through
+  `fastapi_demo.py` itself (verified so far against the dependency-free `demo_app`, not yet against
+  the real `FastAPI()` app in that sample).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -655,7 +659,26 @@ in scenario 1).
   triggered it. `super()` itself untouched. A pre-existing, separate, smaller gap (`locals()` inside a
   class body — no Frame is pushed for class-body execution at all) was found but deliberately not
   pursued (nothing real reaches it). Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.
-- Tests: **1005 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+- **Real WebSocket support for the live ASGI server (Phase 4.3.1).** `samples/asgi_server.py`'s
+  `serve()` now speaks a genuine RFC 6455 handshake (SHA1+base64 on `Sec-WebSocket-Key`) and real
+  binary frame framing/masking both ways, bridged to the same real ASGI `websocket` scope/receive/
+  send protocol already verified against starlette (Phase 3.1.11) — any real ASGI app works
+  unmodified, not just the sample's own dependency-free demo. Verified live over a real socket with a
+  from-scratch Python WebSocket client (handshake, sequential text messages, a binary frame,
+  ping/pong, an extended-length frame, a clean close) — zero bugs found, every value matched a
+  hand-derived expectation, including RFC 6455's own canonical worked example as an independent
+  cross-check. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.1.
+- **WebSocket hardening: real fragmentation + a real closing handshake (Phase 4.3.2).** Closed the two
+  v1 simplifications 4.3.1 had deliberately left open: large messages a real client fragments across
+  several frames are now correctly reassembled (a control frame like a ping arriving *between*
+  fragments, explicitly legal per RFC 6455, no longer disturbs the in-progress message), and receiving
+  a client close frame now echoes a real close-frame reply back before the connection actually ends,
+  completing the real RFC 6455 closing handshake instead of just going silent. Also fixed two smaller
+  defensive gaps found on review: a handshake missing `Sec-WebSocket-Key` entirely now gets a real 400
+  instead of crashing, and calling `receive()` again after a disconnect stays well-defined instead of
+  reading a closing socket. Every behavior verified by hand, live over a real socket, before any test
+  was written. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.2.
+- Tests: **1014 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed stable across multiple
   consecutive full-suite runs.
 

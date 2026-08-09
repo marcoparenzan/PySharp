@@ -2423,6 +2423,88 @@ name '__value' is not defined`.
   1005/1005 (up from 1004), confirmed via multiple full-suite runs once the environmental slowness was
   isolated as unrelated to the change.
 
+### 4.3.1 — real WebSocket support for the live ASGI server (RFC 6455 handshake + framing)
+
+The author's go-ahead ("procedi", after confirming via `AskUserQuestion` that a real WebSocket
+implementation — not a smaller polish item — was the wanted next refinement) to close the other
+loose end noted at the end of Phase 4.2: `samples/asgi_server.py`'s `serve()` only spoke plain
+HTTP/1.1, with WebSocket explicitly out of scope ("needs the HTTP/1.1 Upgrade handshake").
+
+- **A real RFC 6455 WebSocket implementation, built from scratch on top of the existing raw-socket
+  HTTP server** (`samples/asgi_server.py`): detects a WebSocket Upgrade request (`Upgrade: websocket`
+  and `Connection: Upgrade` headers), computes the real handshake response (`base64(SHA1(client_key +
+  the spec's own fixed GUID))`), and speaks the real binary frame format both ways — reading masked
+  client frames (7-bit/16-bit/64-bit length forms, unmasking with the frame's own 4-byte key) and
+  writing unmasked server frames. Bridges to the exact real ASGI `websocket` scope/receive/send
+  protocol already verified against real starlette in Phase 3.1.11 (`websocket.connect`/
+  `websocket.receive`/`websocket.disconnect` via `receive()`; `websocket.accept`/`websocket.send`/
+  `websocket.close` via `send()`), so any real ASGI app — not just the sample's own dependency-free
+  `demo_app` — works unmodified. Also refactored HTTP request parsing onto a new shared `_ConnReader`
+  (buffers partial socket reads so a byte read past what the HTTP parse needed, e.g. the start of a
+  WebSocket frame arriving in the same TCP segment as the handshake headers, isn't lost). v1 scope,
+  deliberately: no fragmented-message reassembly (continuation frames aren't handled — matches how
+  real clients send reasonably-sized messages), and an unmasked client frame is accepted rather than
+  rejected (RFC 6455 requires the server to close on one — real clients always mask, so this is a
+  protocol-strictness simplification, not a functional gap).
+- **Verified live, over a real socket, byte for byte — zero bugs found on the first complete run**:
+  wrote a from-scratch Python WebSocket client (raw `socket`, no library) implementing the same RFC
+  6455 handshake and masked-frame construction from the *client* side, then ran it against a real,
+  live `asgi_server.serve(demo_app)` background process. Checked: the handshake's `Sec-WebSocket-
+  Accept` against a hand-computed expected value: match. Three sequential text messages, each
+  correctly echoed in order. A binary frame, echoed correctly. A ping, correctly auto-answered with a
+  pong carrying the same payload, without disturbing the next real message. A 300-byte message,
+  correctly using the 16-bit extended-length frame form. A clean close. Every single value matched by
+  hand before any test was written — the same discipline used throughout this whole plan.
+- **The RFC 6455 spec's own canonical worked example used as an independent cross-check**: `_ws_accept_key("dGhlIHNhbXBsZSBub25jZQ==")` produces exactly `"s3pPLMBiTxaQ9kYGzzhZRbK+xOo="` — the literal example from RFC 6455 §1.3, not just an internally-consistent round trip.
+- 10 tests added to `M16_FastApi/AsgiServerSampleTests.cs`: the RFC 6455 known-answer handshake test,
+  a frame-encoding byte-for-byte check (including the 16-bit extended-length path), two hand-built-
+  ASGI-triple tests against `demo_app`'s websocket route (a full connect/echo-text/echo-bytes/
+  disconnect sequence, and rejecting an unknown path), and — the live counterpart, mirroring
+  `AsyncServerTests`'s own real-socket pattern (`FreeTcpPort` + a background `Thread` running
+  `asyncio.run(asgi_server.serve(...))`) — a genuine end-to-end test driving a real `TcpClient`
+  through the actual handshake and two real masked/unmasked frame round trips. Full suite green:
+  1011/1011 (up from 1005), confirmed via 5 consecutive full-suite runs once this session's earlier
+  environmental slowness had cleared (back to ~45-60s for the whole suite, matching pre-session norms).
+
+### 4.3.2 — WebSocket hardening: real fragmentation reassembly and a real closing handshake
+
+The author's go-ahead ("rinforza websocket") to close the two v1 simplifications 4.3.1 had
+deliberately left open, plus two smaller defensive gaps found while reviewing that code again.
+
+- **Real message fragmentation reassembly** (`samples/asgi_server.py`): `_recv_ws_frame` now also
+  returns the real FIN bit (previously read off the frame header but discarded); `_handle_websocket`'s
+  `receive()` accumulates `0x0` continuation-frame payloads under the *first* fragment's original
+  opcode (text or binary) until a frame with FIN=1 completes the message, matching what a real browser
+  actually sends for any sufficiently large WebSocket message — the previous v1 scope treated every
+  continuation frame as an immediate protocol-error disconnect. Correctly handles a real, legal edge
+  case: a ping/pong or close control frame arriving *between* two fragments of an in-progress message
+  (control frames must never themselves be fragmented, but RFC 6455 explicitly allows them
+  interleaved mid-fragmentation) — verified this doesn't disturb the in-progress reassembly.
+- **A real closing handshake**: previously, receiving a client close frame just synthesized
+  `websocket.disconnect` for the app and let the connection die via the ordinary `finally: conn.close()`
+  — no close frame was ever sent back. Real RFC 6455 requires the *receiving* side to echo a close
+  frame (its code, if any) before the connection actually ends. Fixed: `receive()` now writes a real
+  close-frame reply (mirroring the client's own code, or 1000 if none was sent) immediately upon
+  seeing one, *before* returning the disconnect event to the app.
+- **Two smaller defensive fixes found on re-review, not previously exercised**: a WebSocket Upgrade
+  request missing `Sec-WebSocket-Key` entirely (a genuinely malformed handshake) previously crashed
+  with an `AttributeError` calling `.decode()` on `None` — now answered with a real `400 Bad Request`
+  instead. Calling `receive()` again after a disconnect was already delivered (not something any real
+  ASGI app does, but worth being well-defined about) previously tried to read from an already-closing
+  socket — now consistently returns another disconnect event.
+- **Verified by hand before any test was written, same discipline as 4.3.1**: a fragmented two-part
+  text message ("Hello, " + "World!"), with a ping sent *between* the fragments — correctly
+  auto-answered without corrupting the in-progress reassembly, and the full "Hello, World!" still
+  echoed correctly afterward. A client-initiated close — the server's close-frame reply carried the
+  exact same code (1000) back, and a subsequent read hit real EOF (the connection had genuinely
+  ended). A handshake request with the `Upgrade`/`Connection` headers but no `Sec-WebSocket-Key` —
+  answered with a real `HTTP/1.1 400 Bad Request` status line. Every value matched by hand, live over
+  a real socket, before any test was written.
+- 3 tests added to `M16_FastApi/AsgiServerSampleTests.cs` (all real-socket, extending the same
+  `StartServerAndHandshake` helper the 4.3.1 live test now shares): fragmentation reassembly with a
+  mid-fragment ping, the closing handshake (echoed code, then real EOF), and the missing-key 400.
+  Full suite green: 1014/1014 (up from 1011), confirmed via 5 consecutive full-suite runs.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
