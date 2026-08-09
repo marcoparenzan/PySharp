@@ -2120,6 +2120,63 @@ h11/rfc3986/anyio's own internals before hitting a new, deep architectural wall.
   calls `asyncio.run`). Full suite green throughout, confirmed stable across 15 consecutive clean
   full-suite runs: 975/975 by the end of this round, up from 963 at the start.
 
+### 4.1.9 — the event-loop architecture wall fixed for real, then a new, much deeper wall found (CPython `Task` internals)
+
+The author's go-ahead ("procedi") to tackle 4.1.8's event-loop architecture wall head-on.
+
+- **`PyEventLoop._running` made real thread-local, propagated the same way `LogicalThread` already
+  is** (`Runtime/Async.cs`, `PyGenerator.cs`): changed from a plain `static` field to `[ThreadStatic]`,
+  plus a new `PyEventLoop.AdoptRunning(loop)` method called at the very start of every
+  coroutine/generator/async-generator's own dedicated internal thread (`PyCoroutine.Resume`,
+  `PyAsyncGenerator`'s equivalent, `PyGenerator.Resume`) — capturing the caller's `PyEventLoop.Running`
+  *before* spawning and re-adopting it *inside* the new thread, mirroring `LogicalThread.Adopt`'s
+  existing propagation exactly. Deliberately **not** called for a genuine `threading.Thread.start()`
+  (`ThreadingModule.cs` already didn't propagate `LogicalThread` either, for the same reason) — so a
+  real independently-started thread correctly begins with no running loop of its own, letting its own
+  `asyncio.run()` establish an independent scope instead of corrupting the caller's. This is exactly
+  the fix 4.1.8's own investigation predicted: the old plain-static field held up fine as long as only
+  one *logical* event loop was ever in play at a time (even across a coroutine's own dedicated CLR
+  threads), but real anyio's `start_blocking_portal` spawns a genuine second, independent
+  `threading.Thread` running its own `asyncio.run()`-driven loop concurrently with the original — the
+  first scenario needing two truly independent loop scopes on two real OS threads.
+- **Verified against the real primitive anyio's own cross-thread dispatch uses, not just the simple
+  case**: first confirmed the straightforward nested-`asyncio.run`-in-a-real-thread shape works (a
+  background thread runs `asyncio.run(inner())` to completion while the outer loop keeps running
+  concurrently); then, since that alone didn't fully unblock the real `TestClient` request either,
+  bisected further and reproduced the *exact* mechanism real anyio's own
+  `AsyncIOBackend.run_sync_from_thread` (`_backends/_asyncio.py`) uses: a `concurrent.futures.Future`
+  to fetch the *running* loop object out of a still-active background thread (via
+  `asyncio.get_running_loop()`), then `loop.call_soon_threadsafe(...)` + a second
+  `concurrent.futures.Future` to dispatch real work into that still-suspended loop (the background
+  coroutine parked on `await some_event.wait()`, exactly like anyio's own
+  `BlockingPortal.sleep_until_stopped()`) and synchronously wait for the result. This narrower
+  reproduction — built specifically to isolate anyio's own dispatch shape from the simpler nested-run
+  case — is what actually confirmed the fix handles the real scenario, not just a simplified
+  approximation of it.
+- **Confirmed via 25 consecutive clean full-suite runs** (deliberately more than this project's usual
+  15, given how deep and sensitive this specific change is — it touches the event-loop threading
+  model every async test in the suite depends on): 977/977 throughout, no regressions.
+- **The next real wall, found immediately after — and substantially larger in scope than anything
+  else in this whole investigative chain**: with the event-loop threading fix confirmed working
+  (`portal ready` now prints; a plain `portal.call(sync_fn, 21)` on a *plain function* still hangs),
+  bisecting further traced the hang into `BlockingPortal.call` → `start_task_soon` →
+  `_spawn_task_from_thread`, which doesn't just dispatch a callback — it calls
+  `self._task_group.start_soon(...)`, spawning a real task inside anyio's own `TaskGroup`. Testing
+  `anyio.create_task_group()` directly (no blocking portal involved at all) surfaced the actual
+  problem: `AttributeError: 'Task' object has no attribute '_must_cancel'` — real anyio's own asyncio
+  backend directly reads and writes **private, undocumented `asyncio.Task` implementation-detail
+  attributes** (`_must_cancel`, and almost certainly others in the same cancellation-delivery code
+  path: `_fut_waiter`, `_coro`, etc.) for precise cancel-scope semantics, not just Task's public API.
+  This is a fundamentally different *kind* of gap than everything else found across this entire
+  investigative chain: every previous fix targeted real CPython's *documented, public* behavior
+  (however obscure); this needs replicating a slice of CPython's actual C-level `Task` state machine
+  well enough to satisfy code that was written against those internals directly. A substantially
+  larger, more open-ended undertaking than a "next real gap" — deliberately not started this round.
+- 2 tests added: new `M10_Async/EventLoopThreadingTests.cs` (`[Collection("asyncio-run")]`) — the
+  nested-`asyncio.run`-in-a-thread case, and the real `call_soon_threadsafe`-onto-a-still-running-
+  loop case matching anyio's own dispatch mechanism. Full suite green throughout: 977/977 by the end
+  of this round, up from 975 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

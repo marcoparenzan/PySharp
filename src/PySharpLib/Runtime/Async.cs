@@ -114,9 +114,11 @@ public sealed class PyCoroutine
         if (_thread is null)
         {
             var callerLogicalThread = LogicalThread.Current;
+            var callerRunningLoop = PyEventLoop.Running;
             _thread = new Thread(() =>
             {
                 LogicalThread.Adopt(callerLogicalThread);
+                PyEventLoop.AdoptRunning(callerRunningLoop);
                 _current = this;
                 _currentTask = OwningTask;
                 _resume.Wait();
@@ -410,9 +412,11 @@ public sealed class PyAsyncGenerator
         if (_thread is null)
         {
             var callerLogicalThread = LogicalThread.Current;
+            var callerRunningLoop = PyEventLoop.Running;
             _thread = new Thread(() =>
             {
                 LogicalThread.Adopt(callerLogicalThread);
+                PyEventLoop.AdoptRunning(callerRunningLoop);
                 _current = this;
                 _resume.Wait();
                 try
@@ -712,10 +716,31 @@ public sealed class PyEventLoop
     public bool IsRunning { get; private set; }
     public bool IsClosed => _closed;
 
-    // A coroutine body runs on its own thread but must still see the loop that is driving
-    // it (e.g. asyncio.get_running_loop()); this is process-wide, not thread-local.
+    // A coroutine/generator body runs on its own dedicated internal CLR thread but must still see
+    // the loop that is driving it (e.g. asyncio.get_running_loop()) — so this is [ThreadStatic],
+    // explicitly propagated into each such dedicated thread via AdoptRunning below, the exact same
+    // pattern LogicalThread already uses for thread-local Python-thread identity (see
+    // LogicalThread.cs's own doc comment). A genuine `threading.Thread.start()` (ThreadingModule.cs)
+    // does NOT propagate it, so a real independently-started thread correctly begins with no
+    // running loop of its own.
+    //
+    // Found the hard way: this used to be a single plain (non-thread-local) static, which worked
+    // for every scenario this project had exercised — because there was always at most one
+    // *logical* event loop in play, even though coroutine bodies hop across several real dedicated
+    // CLR threads. anyio's real `start_blocking_portal` (`from_thread.py`) was the first scenario to
+    // break that assumption: it spawns a genuine, independent `threading.Thread` that runs its own
+    // `asyncio.run()`-driven event loop while the original thread blocks waiting for it — two
+    // *real*, concurrently-running loops on two real OS threads, which stomped on the same shared
+    // `_running` field and hung real `TestClient` requests forever (reproduced: `timeout 45 ...` →
+    // exit 124, not a crash). See FASTAPI_PLAN.md Phase 4.
+    [ThreadStatic]
     private static PyEventLoop? _running;
     public static PyEventLoop? Running => _running;
+
+    /// <summary>Propagates the currently-running loop (if any) into a coroutine/generator's own
+    /// dedicated internal thread — called at the very start of that thread's body, mirroring
+    /// LogicalThread.Adopt. Deliberately NOT called for a genuine `threading.Thread.start()`.</summary>
+    public static void AdoptRunning(PyEventLoop? loop) => _running = loop;
 
     public PyEventLoop(Interp interp) => Interp = interp;
 

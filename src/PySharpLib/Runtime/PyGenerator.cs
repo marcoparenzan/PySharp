@@ -90,9 +90,11 @@ public sealed class PyGenerator
             }
 
             var callerLogicalThread = LogicalThread.Current;
+            var callerRunningLoop = PyEventLoop.Running;
             _thread = new Thread(() =>
             {
                 LogicalThread.Adopt(callerLogicalThread);
+                PyEventLoop.AdoptRunning(callerRunningLoop);
                 _current = this;
                 _resume.Wait();
                 try

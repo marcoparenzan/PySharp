@@ -427,18 +427,25 @@ in scenario 1).
   `namedtuple._replace`, with the two separate, drifted namedtuple implementations
   (`typing.NamedTuple`/class-based vs. `collections.namedtuple`) finally unified onto one generator;
   `pathlib.Path.expanduser()`; `asyncio.Task.get_name`/`set_name`; `bytes.count()`; `parse_qs`/
-  `parse_qsl` coercing `None` to `''` (matching real CPython). **New frontier — a genuine, deep
-  event-loop architecture wall, not a small gap**: a real `TestClient.get("/")` now reaches anyio's
-  `start_blocking_portal`, which spawns an independent `threading.Thread` running its *own*
-  `asyncio.run()` event loop while the original thread blocks waiting for it — and hangs (reproduced:
-  `timeout 45 ...` → exit 124). Root cause, reasoned from `PyEventLoop._running`'s own existing doc
-  comment: it's deliberately process-wide (not thread-local), which held up fine as long as only one
-  *logical* event loop was ever in play — but this is the first scenario needing two genuinely
-  independent, concurrently-running loops on two real OS threads, and they almost certainly corrupt
-  each other's bookkeeping. Fixing this needs real thread-local propagation (extending the technique
-  `LogicalThread` already uses for coroutine dedicated-threads) to also cover a genuine
-  `threading.Thread`-spawned loop — a substantial architecture change, not started this round. Phase
-  4.2 (a real target sample app) not started. 6/7/8 to do; native cross-cutting partial.
+  `parse_qsl` coercing `None` to `''` (matching real CPython). **The event-loop architecture wall is
+  now fixed for real** ✅: `PyEventLoop._running` is `[ThreadStatic]`, explicitly re-adopted into
+  every coroutine/generator/async-generator's own dedicated internal thread via a new
+  `PyEventLoop.AdoptRunning` (mirroring `LogicalThread.Adopt`'s existing propagation exactly) — but
+  deliberately *not* propagated into a genuine `threading.Thread.start()`, so a real independently-
+  started thread (like anyio's own `start_blocking_portal`) correctly gets its own independent loop
+  scope instead of corrupting the caller's. Verified against both the simple nested-`asyncio.run`
+  case and, since that alone wasn't enough, the *exact* cross-thread dispatch primitive real anyio's
+  own `run_sync_from_thread` uses (`asyncio.get_running_loop()` out of a background thread via a
+  `concurrent.futures.Future`, then `loop.call_soon_threadsafe(...)` into that still-suspended loop)
+  — confirmed via 25 consecutive clean full-suite runs (more than the usual 15, given how deep and
+  sensitive this specific change is). **New frontier — substantially larger in scope than anything
+  else in this whole chain**: past the event-loop fix, a real `TestClient` request now hangs inside
+  anyio's own `TaskGroup.start_soon`, which reads/writes **private, undocumented `asyncio.Task`
+  attributes** (`_must_cancel` and likely others) for precise cancellation semantics — a
+  fundamentally different kind of gap than everything else found so far: every previous fix targeted
+  real CPython's documented public behavior; this needs replicating a slice of CPython's actual
+  C-level `Task` state machine, not started this round. Phase 4.2 (a real target sample app) not
+  started. 6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~65 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `importlib.resources`, `textwrap`, `signal`,
@@ -575,15 +582,20 @@ in scenario 1).
   it); real `MutableMapping.pop`/`popitem`/`setdefault`/`clear` ✅, unified between `collections.abc`
   and `typing`; real `namedtuple._replace` ✅, with the two drifted namedtuple implementations
   unified onto one generator; `pathlib.Path.expanduser()` ✅; `asyncio.Task.get_name`/`set_name` ✅;
-  `bytes.count()` ✅; `parse_qs`/`parse_qsl` None-coercion ✅. **New frontier — a genuine, deep
-  event-loop architecture wall**: `TestClient.get("/")` reaches anyio's `start_blocking_portal`,
-  which runs a second, independent event loop on a real spawned `threading.Thread` — and hangs.
-  Root cause: `PyEventLoop._running` is deliberately process-wide, not thread-local (fine for every
-  prior scenario's single logical loop, even across coroutines' own dedicated threads), but this is
-  the first scenario with two genuinely concurrent loops on two real OS threads. A substantial,
-  separate architecture fix (real thread-local propagation, extending `LogicalThread`'s existing
-  technique), not started this round.
-- Tests: **975 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  `bytes.count()` ✅; `parse_qs`/`parse_qsl` None-coercion ✅. **The event-loop architecture wall
+  fixed for real** ✅: `PyEventLoop._running` is now `[ThreadStatic]`, propagated into every
+  coroutine/generator's own dedicated thread the same way `LogicalThread` already is, but *not* into
+  a genuine `threading.Thread.start()` — so anyio's real `start_blocking_portal` (a real independent
+  thread running its own `asyncio.run()` loop) no longer corrupts the caller's loop. Verified against
+  real anyio's own cross-thread dispatch primitive (`asyncio.get_running_loop()` out of a background
+  thread + `loop.call_soon_threadsafe(...)` into it), confirmed via 25 consecutive clean full-suite
+  runs. **New frontier — substantially larger in scope**: past that fix, a real `TestClient` request
+  now hangs inside anyio's own `TaskGroup.start_soon`, which reads/writes private, undocumented
+  `asyncio.Task` attributes (`_must_cancel` and likely others) for cancellation semantics — needs
+  replicating a slice of CPython's actual `Task` internals, not just its public API; a fundamentally
+  different, more open-ended kind of gap than anything else found in this chain. Not started this
+  round.
+- Tests: **977 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._
