@@ -684,6 +684,28 @@ public sealed class Interp
                 result[f] = inst.Dict[f];
             return result;
         });
+        // Real namedtuple._replace(**kwds): a new instance with the given fields overridden,
+        // raising on any field name that doesn't exist. Found via real rfc3986's own `uri.py`
+        // (`class URIReference(namedtuple("URIReference", misc.URI_COMPONENTS), URIMixin):`) —
+        // real httpx's URL-joining logic (`urljoin`) calls `._replace(...)` while resolving a
+        // relative redirect/request URL against a base.
+        cls.Dict["_replace"] = new PyBuiltinFunction($"{cls.Name}._replace", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            var newInst = new PyInstance(inst.Class);
+            foreach (var f in fields)
+                newInst.Dict[f] = inst.Dict[f];
+            if (kwargs is not null)
+            {
+                foreach (var kv in kwargs)
+                {
+                    if (!fields.Contains(kv.Key))
+                        throw PyErr.ValueError($"Got unexpected field names: ['{kv.Key}']");
+                    newInst.Dict[kv.Key] = kv.Value;
+                }
+            }
+            return newInst;
+        });
     }
 
     /// <summary>Converts the value attributes of an enum class into singleton members.</summary>

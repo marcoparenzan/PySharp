@@ -414,14 +414,31 @@ in scenario 1).
   instance, not a shared static); real `importlib.resources` (`files()`/`as_file()`, a real
   `pathlib.Path` via the package's own tracked `__file__`); real `logging.addLevelName`/
   `getLevelName`. Plus 3 more PyPI installs (`certifi`, `httpcore`, `h11`), all compatible with the
-  already-pinned `httpx==0.23.3`. **`import httpx` succeeds**, and constructing a real
-  `starlette.testclient.TestClient` gets substantially further into `httpcore`/`h11`'s own import
-  chain. **Current frontier**: real `h11` compiles several regexes from **bytes** patterns
-  (`re.compile(rb"[0-9]+")`) — real CPython's `re` supports both `str` and `bytes` patterns, but
-  PySharp's `re.compile()` only ever accepted `str`. A genuinely separate, substantial feature (every
-  `re` entry point needs bytes-vs-str mode awareness, matching via a byte-preserving encoding since
-  .NET's `Regex` only operates on `string`), not started this round. Phase 4.2 (a real target sample
-  app) not started. 6/7/8 to do; native cross-cutting partial.
+  already-pinned `httpx==0.23.3`. **`import httpx` succeeds**, and real bytes-pattern `re` support ✅
+  (`re.compile(rb"...")` — real CPython's `re` matches `bytes` as well as `str`; every entry point
+  now threads a bytes-vs-str mode through, backed by a lossless Latin-1 byte↔codepoint mapping since
+  .NET's `Regex` only operates on `string`) got `TestClient` construction all the way to actually
+  issuing a request. Along the way: real `isinstance()` recognition of `dict` as `Mapping` plus
+  structural duck-typing for `Iterable`/`Iterator`/`Container`/`Sized`/`Callable`/`Hashable` (a real,
+  silent correctness bug beyond the immediate crash — real httpx's `Headers.__init__` branches on
+  `isinstance(headers, Mapping)` to pick `.items()` vs. iterating bare keys); real
+  `MutableMapping.pop`/`popitem`/`setdefault`/`clear` mixins, unified by identity between
+  `collections.abc` and `typing` (previously two unrelated bare placeholders); real
+  `namedtuple._replace`, with the two separate, drifted namedtuple implementations
+  (`typing.NamedTuple`/class-based vs. `collections.namedtuple`) finally unified onto one generator;
+  `pathlib.Path.expanduser()`; `asyncio.Task.get_name`/`set_name`; `bytes.count()`; `parse_qs`/
+  `parse_qsl` coercing `None` to `''` (matching real CPython). **New frontier — a genuine, deep
+  event-loop architecture wall, not a small gap**: a real `TestClient.get("/")` now reaches anyio's
+  `start_blocking_portal`, which spawns an independent `threading.Thread` running its *own*
+  `asyncio.run()` event loop while the original thread blocks waiting for it — and hangs (reproduced:
+  `timeout 45 ...` → exit 124). Root cause, reasoned from `PyEventLoop._running`'s own existing doc
+  comment: it's deliberately process-wide (not thread-local), which held up fine as long as only one
+  *logical* event loop was ever in play — but this is the first scenario needing two genuinely
+  independent, concurrently-running loops on two real OS threads, and they almost certainly corrupt
+  each other's bookkeeping. Fixing this needs real thread-local propagation (extending the technique
+  `LogicalThread` already uses for coroutine dedicated-threads) to also cover a genuine
+  `threading.Thread`-spawned loop — a substantial architecture change, not started this round. Phase
+  4.2 (a real target sample app) not started. 6/7/8 to do; native cross-cutting partial.
 - Stdlib modules: **~65 / ~200** of CPython (added `re`, `datetime`, `ipaddress`, `pathlib`, `weakref`,
   `pickle`, `colorsys`, `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib`, `inspect`,
   `shlex`, `contextvars`, `importlib`, `importlib.resources`, `textwrap`, `signal`,
@@ -549,12 +566,24 @@ in scenario 1).
   reverse order, scoped per engine instance); real `importlib.resources` ✅ (`files()`/`as_file()`,
   a real `pathlib.Path`); real `logging.addLevelName`/`getLevelName` ✅. Plus 3 more PyPI installs
   (`certifi`, `httpcore`, `h11`). **`import httpx` succeeds**, and building a real `TestClient`
-  against a real `FastAPI()` app now gets deep into `httpcore`/`h11`'s own import chain. **New
-  frontier**: real `h11` compiles regexes from **bytes** patterns (`re.compile(rb"...")`) — real
-  CPython's `re` supports both `str` and `bytes`, but PySharp's `re.compile()` only ever accepted
-  `str`. A separate, substantial feature (every `re` entry point needs bytes-vs-str mode awareness),
-  not started this round.
-- Tests: **963 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  against a real `FastAPI()` app now gets deep into `httpcore`/`h11`'s own import chain. Then: real
+  **bytes-pattern `re`** ✅ (`re.compile(rb"...")` — every entry point now threads bytes-vs-str mode
+  through, backed by a lossless Latin-1 mapping) got a real `TestClient` request nearly all the way
+  through. Also found and fixed along the way: real `isinstance(dict, Mapping)` plus structural
+  `Iterable`/`Iterator`/`Container`/`Sized`/`Callable`/`Hashable` duck-typing ✅ (a real silent
+  correctness bug, not just a crash — real httpx's `Headers.__init__` picks the wrong branch without
+  it); real `MutableMapping.pop`/`popitem`/`setdefault`/`clear` ✅, unified between `collections.abc`
+  and `typing`; real `namedtuple._replace` ✅, with the two drifted namedtuple implementations
+  unified onto one generator; `pathlib.Path.expanduser()` ✅; `asyncio.Task.get_name`/`set_name` ✅;
+  `bytes.count()` ✅; `parse_qs`/`parse_qsl` None-coercion ✅. **New frontier — a genuine, deep
+  event-loop architecture wall**: `TestClient.get("/")` reaches anyio's `start_blocking_portal`,
+  which runs a second, independent event loop on a real spawned `threading.Thread` — and hangs.
+  Root cause: `PyEventLoop._running` is deliberately process-wide, not thread-local (fine for every
+  prior scenario's single logical loop, even across coroutines' own dedicated threads), but this is
+  the first scenario with two genuinely concurrent loops on two real OS threads. A substantial,
+  separate architecture fix (real thread-local propagation, extending `LogicalThread`'s existing
+  technique), not started this round.
+- Tests: **975 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between).
 
 _Update these numbers at every milestone._

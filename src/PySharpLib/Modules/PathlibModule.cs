@@ -125,6 +125,19 @@ public static class PathlibModule
         });
         Add("resolve", (_, a, _) => Make(NormalizeSeparators(Path.GetFullPath(Value(a[0])))));
         Add("absolute", (_, a, _) => Make(NormalizeSeparators(Path.GetFullPath(Value(a[0])))));
+        // Real Path.expanduser(): a leading `~` (or `~/...`) is replaced with the current user's
+        // home directory — real CPython's `os.path.expanduser` semantics, scoped to that common
+        // case (no `~otheruser/...` support; nothing reachable needs another user's home). Found
+        // via real httpx's own `_utils.py` (`NetRCInfo`: `Path("~/.netrc").expanduser()`).
+        Add("expanduser", (_, a, _) =>
+        {
+            string p = Value(a[0]);
+            if (p != "~" && !p.StartsWith("~/", StringComparison.Ordinal) && !p.StartsWith(@"~\", StringComparison.Ordinal))
+                return Make(p);
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string rest = p.Length > 1 ? p[2..] : "";
+            return Make(NormalizeSeparators(rest.Length > 0 ? Path.Combine(home, rest) : home));
+        });
         Add("read_text", (_, a, _) => File.ReadAllText(Value(a[0])));
         Add("write_text", (_, a, _) => { File.WriteAllText(Value(a[0]), (string)a[1]); return new System.Numerics.BigInteger(((string)a[1]).Length); });
         Add("open", (interp, a, kwargs) =>

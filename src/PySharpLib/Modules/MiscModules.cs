@@ -150,7 +150,7 @@ public static class MiscModules
         foreach (var name in new[]
         {
             "Any", "Optional", "Union", "List", "Dict", "Tuple", "Set", "FrozenSet",
-            "Callable", "Iterator", "Iterable", "Sequence", "Mapping", "MutableMapping",
+            "Callable", "Iterator", "Iterable", "Sequence",
             "Type", "TypeVar", "Generic", "ClassVar", "Final", "Literal", "Protocol",
             "NamedTuple", "TypedDict", "cast", "overload", "IO", "BinaryIO", "TextIO",
             "Deque", "DefaultDict", "OrderedDict", "Counter", "ChainMap", "Awaitable",
@@ -169,6 +169,13 @@ public static class MiscModules
         {
             d[name] = new PyClass(name, new List<PyClass>());
         }
+        // Real Mapping/MutableMapping mixin classes, shared by identity with collections.abc's own
+        // (real CPython: `typing.Mapping`/`typing.MutableMapping` are literally the same classes,
+        // just generic-subscriptable) — found via real httpx's own `Headers(typing.MutableMapping[
+        // str, str])` (`_models.py`), which needs the real `pop`/`popitem`/`setdefault`/`clear`
+        // mixins built in CollectionsModule.cs.
+        d["Mapping"] = CollectionsModule.MappingClass;
+        d["MutableMapping"] = CollectionsModule.MutableMappingClass;
         // Real functional-syntax typing.NamedTuple: `RawURL = NamedTuple("RawURL", [("scheme",
         // str), ("host", str)])` builds and returns a real class (reusing the exact same
         // __init__/__repr__/__getitem__/etc. generation the class-based `class Foo(NamedTuple):`

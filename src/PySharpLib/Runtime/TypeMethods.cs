@@ -60,7 +60,10 @@ public static class TypeMethods
             PyGenerator => GeneratorMethods.Table,
             PyIterator => IteratorMethods.Table,
             PyRange => RangeMethods.Table,
-            // Task derives from Future and shares its method surface.
+            // Task derives from Future and shares its method surface, plus get_name/set_name — the
+            // PyTask case must come first, since it's also a PyFuture and switch patterns match in
+            // order.
+            PyTask => Modules.AsyncioModule.TaskTable,
             PyFuture => Modules.AsyncioModule.FutureTable,
             PyCoroutine => Modules.AsyncioModule.CoroutineTable,
             PyAsyncGenerator => Modules.AsyncioModule.AsyncGeneratorTable,
@@ -1144,6 +1147,29 @@ public static class BytesMethods
         });
         Add("upper", (_, a, _) => new PyBytes(B(a).Data.Select(x => x is >= (byte)'a' and <= (byte)'z' ? (byte)(x - 32) : x).ToArray()));
         Add("lower", (_, a, _) => new PyBytes(B(a).Data.Select(x => x is >= (byte)'A' and <= (byte)'Z' ? (byte)(x + 32) : x).ToArray()));
+        // Real bytes.count(sub[, start[, end]]) — non-overlapping occurrences. Found via real
+        // rfc3986's own normalizers.py (`uri_bytes.count(b"%")`), an httpx transitive dependency.
+        Add("count", (_, a, _) =>
+        {
+            var data = B(a).Data;
+            var sub = ((PyBytes)a[1]).Data;
+            int start = a.Length > 2 ? (int)PyOps.AsBigInt(a[2], "start") : 0;
+            int end = a.Length > 3 ? (int)PyOps.AsBigInt(a[3], "end") : data.Length;
+            start = Math.Clamp(start < 0 ? start + data.Length : start, 0, data.Length);
+            end = Math.Clamp(end < 0 ? end + data.Length : end, 0, data.Length);
+            if (sub.Length == 0)
+                return new BigInteger(start <= end ? end - start + 1 : 0);
+            int count = 0, pos = start;
+            while (pos <= end - sub.Length)
+            {
+                int idx = data.AsSpan(pos, end - pos).IndexOf(sub);
+                if (idx < 0)
+                    break;
+                count++;
+                pos += idx + sub.Length;
+            }
+            return new BigInteger(count);
+        });
         return t;
     }
 

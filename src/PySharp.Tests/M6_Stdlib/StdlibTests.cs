@@ -1043,6 +1043,67 @@ public class ReTests
             found = p4.findall("x" + chr(0x10000) + "y" + chr(0x10005) + "z")
             print(found == [chr(0x10000), chr(0x10005)])
             """));
+
+    [Fact]
+    public void Bytes_pattern_and_subject_match_search_findall_and_return_real_bytes()
+        // Regression: re.compile() only ever accepted `str`, raising "TypeError: compile(): invalid
+        // argument type" for a `bytes` pattern — real CPython's `re` supports both. Found via real
+        // h11's own `_readers.py`/`_events.py`/`_headers.py` (`re.compile(rb"[0-9]+")` etc.), an
+        // httpx transitive dependency (its low-level HTTP/1.1 transport). Backed by a Latin-1
+        // decode/encode round trip (lossless, byte-for-byte 1:1) since .NET's Regex only operates on
+        // `string`.
+        => Assert.Equal("True\nTrue\nTrue\n[b'1', b'22', b'333']", Run("""
+            import re
+            p = re.compile(rb"[0-9]+")
+            m = p.match(b"123abc")
+            print(m.group() == b"123")
+            print(type(m.group()) is bytes)
+            m2 = re.compile(rb"(\w+)=(\w+)").search(b"key=value")
+            print(m2.groups() == (b"key", b"value"))
+            print(re.findall(rb"\d+", b"a1b22c333"))
+            """));
+
+    [Fact]
+    public void Bytes_sub_and_split_return_bytes_and_a_bytes_callable_replacement_works()
+        => Assert.Equal("b'aXbXcX'\nb'a<1> b<22>'\n[b'a', b'b', b'c']", Run("""
+            import re
+            print(re.sub(rb"\d+", b"X", b"a1b22c333"))
+            print(re.sub(rb"\d+", lambda m: b"<" + m.group() + b">", b"a1 b22"))
+            print(re.split(rb",\s*", b"a, b,c"))
+            """));
+
+    [Fact]
+    public void Mixing_a_bytes_pattern_with_a_str_subject_raises_TypeError_and_vice_versa()
+        => Assert.Equal(
+            "cannot use a bytes pattern on a string-like object\n" +
+            "cannot use a string pattern on a bytes-like object\n456",
+            Run("""
+                import re
+                bytes_pattern = re.compile(rb"\d+")
+                try:
+                    bytes_pattern.match("123abc")
+                except TypeError as e:
+                    print(e)
+                str_pattern = re.compile(r"\d+")
+                try:
+                    str_pattern.match(b"123")
+                except TypeError as e:
+                    print(e)
+                print(str_pattern.match("456").group())
+                """));
+
+    [Fact]
+    public void Bytes_count_matches_real_CPython_including_the_empty_substring_edge_case()
+        // Regression: bytes.count() didn't exist at all — found via real rfc3986's own
+        // normalizers.py (`uri_bytes.count(b"%")`), an httpx transitive dependency.
+        => Assert.Equal("3\n2\n0\n4\n1\n1", Run("""
+            print(b"abcabcabc".count(b"abc"))
+            print(b"aaaa".count(b"aa"))
+            print(b"hello".count(b"z"))
+            print(b"abc".count(b""))
+            print(b"abcabc".count(b"a", 1))
+            print(b"abcabc".count(b"a", 0, 3))
+            """));
 }
 
 /// <summary>colorsys: RGB/HLS/HSV conversions, ported directly from CPython's algorithms. Every
@@ -3408,4 +3469,180 @@ public class LoggingAddLevelNameTests
             logger.setLevel(5)
             logger.log(5, "hello %s", "world")
             """).TrimEnd('\n'));
+}
+
+/// <summary>Real gaps found continuing past `import httpx` into actually constructing a real
+/// `TestClient` request against a real `FastAPI()` app: urllib.parse.parse_qs/parse_qsl coercing a
+/// falsy (None) argument to an empty string (real CPython's own `_decode_args` behavior); real
+/// isinstance() duck-typing for `dict`-as-`Mapping` and the structural (`__subclasshook__`-style)
+/// ABCs (Iterable/Iterator/Container/Sized/Callable/Hashable); real MutableMapping pop/popitem/
+/// setdefault/clear mixins, shared by identity between `collections.abc` and `typing`; real
+/// namedtuple._replace (and a duplicate, drifted `collections.namedtuple` implementation unified to
+/// reuse the same generator as `typing.NamedTuple`); real `pathlib.Path.expanduser()`; real
+/// `asyncio.Task.get_name()`/`set_name()`. All found via real httpx's own dependency chain
+/// (h11/rfc3986/anyio) while chasing a real request/response cycle. See FASTAPI_PLAN.md.
+/// <c>[Collection("asyncio-run")]</c>: one test here calls `asyncio.run` — see Runtime/Async.cs's
+/// own doc comment on why every such test must be serialized against every other one (this
+/// project's own hard-learned lesson from an earlier round's real, reproduced flaky-suite hang).
+/// </summary>
+[Collection("asyncio-run")]
+public class HttpxRequestChainFixesTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Parse_qs_and_parse_qsl_coerce_None_to_an_empty_string()
+        => Assert.Equal("{}\n[]\n{}\n{'a': ['1']}", Run("""
+            from urllib.parse import parse_qs, parse_qsl
+            print(parse_qs(None))
+            print(parse_qsl(None))
+            print(parse_qs(""))
+            print(parse_qs("a=1"))
+            """));
+
+    [Fact]
+    public void Isinstance_recognizes_a_plain_dict_as_a_real_Mapping()
+        => Assert.Equal("True\nTrue\nFalse\nFalse", Run("""
+            from collections.abc import Mapping, MutableMapping
+            d = {"a": 1}
+            print(isinstance(d, Mapping))
+            print(isinstance(d, MutableMapping))
+            print(isinstance([1, 2], Mapping))
+            print(isinstance("x", Mapping))
+            """));
+
+    [Fact]
+    public void Isinstance_duck_types_the_structural_ABCs_by_dunder_presence()
+        => Assert.Equal("True\nFalse\nTrue\nTrue\nFalse\nTrue\nFalse\nFalse\nTrue", Run("""
+            from collections.abc import Iterable, Sized, Callable, Hashable
+            class MyIter:
+                def __iter__(self):
+                    yield 1
+            class Empty:
+                pass
+            print(isinstance(MyIter(), Iterable))
+            print(isinstance(Empty(), Iterable))
+            print(isinstance([1, 2], Iterable))
+            def f(): pass
+            print(isinstance(f, Callable))
+            print(isinstance(Empty(), Callable))
+            class HasLen:
+                def __len__(self):
+                    return 1
+            print(isinstance(HasLen(), Sized))
+            print(isinstance(Empty(), Sized))
+            print(isinstance([], Hashable))
+            print(isinstance((1, 2), Hashable))
+            """));
+
+    [Fact]
+    public void MutableMapping_pop_popitem_setdefault_and_clear_are_real_mixin_methods()
+        => Assert.Equal("1\ndefault\nKeyError: missing\n3\n3\n('b', 2)\n{}", Run("""
+            from collections.abc import MutableMapping
+            class MyMap(MutableMapping):
+                def __init__(self):
+                    self._data = {}
+                def __getitem__(self, key): return self._data[key]
+                def __setitem__(self, key, value): self._data[key] = value
+                def __delitem__(self, key): del self._data[key]
+                def __iter__(self): return iter(self._data)
+                def __len__(self): return len(self._data)
+            m = MyMap()
+            m["a"] = 1
+            m["b"] = 2
+            print(m.pop("a"))
+            print(m.pop("missing", "default"))
+            try:
+                m.pop("missing")
+            except KeyError as e:
+                print("KeyError:", e)
+            print(m.setdefault("c", 3))
+            print(m.setdefault("c", 999))
+            print(m.popitem())
+            m.clear()
+            print(dict(m._data))
+            """));
+
+    [Fact]
+    public void Typing_MutableMapping_is_the_same_real_class_as_collections_abcs()
+        // Regression: `class Headers(typing.MutableMapping[str, str])` (real httpx's own
+        // `_models.py`) previously got a bare placeholder with none of the real pop/popitem/
+        // setdefault/clear mixins, since `typing.MutableMapping` and `collections.abc.
+        // MutableMapping` were two separate, unrelated bare classes.
+        => Assert.Equal("1\n2\nTrue", Run("""
+            import typing
+            class MyMap(typing.MutableMapping[str, str]):
+                def __init__(self):
+                    self._data = {}
+                def __getitem__(self, key): return self._data[key]
+                def __setitem__(self, key, value): self._data[key] = value
+                def __delitem__(self, key): del self._data[key]
+                def __iter__(self): return iter(self._data)
+                def __len__(self): return len(self._data)
+            m = MyMap()
+            m["a"] = "1"
+            m["b"] = "2"
+            print(m.pop("a"))
+            print(m.get("b"))
+            print(isinstance(m, typing.MutableMapping))
+            """));
+
+    [Fact]
+    public void Namedtuple_replace_works_for_both_the_functional_and_class_based_forms()
+        // Regression: `_replace` didn't exist on either the class-based `class Foo(NamedTuple):`/
+        // functional `typing.NamedTuple(...)` path or the separate, drifted `collections.
+        // namedtuple(...)` implementation (which was also missing `_asdict` entirely) — found via
+        // real rfc3986's own `uri.py`: `class URIReference(namedtuple("URIReference",
+        // misc.URI_COMPONENTS), URIMixin):`, real httpx's `urljoin` calling `._replace(...)` while
+        // resolving a relative redirect URL. The two implementations are now unified (`collections.
+        // namedtuple` delegates to the same `Interp.ConvertToNamedTuple` generator).
+        => Assert.Equal(
+            "Point(x=1, y=99)\nPoint(x=1, y=2)\nValueError: Got unexpected field names: ['z']\n6\nMyPoint(x=10, y=4)",
+            Run("""
+                from collections import namedtuple
+                Point = namedtuple("Point", ["x", "y"])
+                p = Point(1, 2)
+                print(p._replace(y=99))
+                print(p)
+                try:
+                    p._replace(z=5)
+                except ValueError as e:
+                    print("ValueError:", e)
+
+                class Mixin:
+                    def double_x(self):
+                        return self.x * 2
+                class MyPoint(namedtuple("MyPoint", ["x", "y"]), Mixin):
+                    pass
+                mp = MyPoint(3, 4)
+                print(mp.double_x())
+                print(mp._replace(x=10))
+                """));
+
+    [Fact]
+    public void Path_expanduser_replaces_a_leading_tilde_with_the_real_home_directory()
+        => Assert.Equal("True\nTrue\nTrue", Run("""
+            from pathlib import Path
+            import os
+            home = os.path.expanduser("~").replace("\\", "/")
+            print(str(Path("~").expanduser()) == home)
+            print(str(Path("/absolute/path").expanduser()) == "/absolute/path")
+            print(str(Path("relative").expanduser()) == "relative")
+            """));
+
+    [Fact]
+    public void Task_get_name_and_set_name_are_real()
+        => Assert.Equal("my-task\n5\nTrue", Run("""
+            import asyncio
+            async def f():
+                return 5
+            async def main():
+                t = asyncio.create_task(f())
+                t.set_name("my-task")
+                print(t.get_name())
+                print(await t)
+                t2 = asyncio.create_task(f())
+                print(t2.get_name().startswith("Task-"))
+            asyncio.run(main())
+            """));
 }

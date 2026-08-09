@@ -146,6 +146,18 @@ public static class UrllibModule
         return cls;
     }
 
+    /// <summary>Real CPython's `urllib.parse._decode_args` treats a falsy `qs` argument (`None`,
+    /// `""`) as an empty string rather than raising — found via real httpx's own `_urls.py`
+    /// (`QueryParams.__init__`: `parse_qs(value, keep_blank_values=True)` where `value` is `None`
+    /// when no query params were given at all, e.g. constructing a `Client()`/`TestClient(app)` with
+    /// no explicit `params=`).</summary>
+    private static string CoerceQs(object o) => o switch
+    {
+        null or PyNone => "",
+        string s => s,
+        _ => throw PyErr.TypeError("Cannot mix str and non-str arguments"),
+    };
+
     private static List<(string Key, string Value)> ParseQsl(string qs, bool keepBlank)
     {
         var result = new List<(string, string)>();
@@ -307,7 +319,7 @@ public static class UrllibModule
 
         d["parse_qsl"] = new PyBuiltinFunction("parse_qsl", (interp, a, kwargs) =>
         {
-            string qs = (string)a[0];
+            string qs = CoerceQs(a[0]);
             bool keepBlank = kwargs is not null && kwargs.TryGetValue("keep_blank_values", out var kb) && PyOps.Truthy(interp, kb);
             var pairs = ParseQsl(qs, keepBlank);
             return new PyList(pairs.Select(p => (object)new PyTuple(new object[] { p.Key, p.Value })).ToList());
@@ -315,7 +327,7 @@ public static class UrllibModule
 
         d["parse_qs"] = new PyBuiltinFunction("parse_qs", (interp, a, kwargs) =>
         {
-            string qs = (string)a[0];
+            string qs = CoerceQs(a[0]);
             bool keepBlank = kwargs is not null && kwargs.TryGetValue("keep_blank_values", out var kb) && PyOps.Truthy(interp, kb);
             var dict = new PyDict();
             foreach (var (key, value) in ParseQsl(qs, keepBlank))

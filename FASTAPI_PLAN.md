@@ -2020,6 +2020,106 @@ it further.
   green throughout, confirmed stable across 15 consecutive clean full-suite runs: 963/963 by the end
   of this round, up from 956 at the start.
 
+### 4.1.8 — real bytes-pattern regex, a real `TestClient` request nearly works, ending at a genuine event-loop architecture wall
+
+The author's go-ahead ("prosegui") to tackle 4.1.7's bytes-regex wall head-on. This round implemented
+a genuinely large feature (bytes-mode `re`) and then closed a long chain of smaller real gaps found
+running an actual `TestClient` request against a real `FastAPI()` app, reaching all the way into
+h11/rfc3986/anyio's own internals before hitting a new, deep architectural wall.
+
+- **Real `bytes` pattern/subject support in `re`** (`ReModule.cs`, rewritten in full): real CPython's
+  `re` module matches against `bytes` as well as `str` — PySharp's only ever accepted `str`. Every
+  entry point (`compile`/`match`/`fullmatch`/`search`/`findall`/`finditer`/`sub`/`subn`/`split`/
+  `escape`, plus `Pattern`'s and `Match`'s own methods) now threads a bytes-vs-str mode through:
+  a `bytes` pattern/subject is decoded via Latin-1 (a lossless, byte-for-byte 1:1 mapping of 0–255 to
+  the identically-valued codepoint — chosen because .NET's `Regex` only operates on `string`) into
+  the actual working string matched against, and every result (match text, group values, `.string`,
+  `sub`/`split` output) is re-encoded back to `bytes` via the same mapping. A pattern's mode is fixed
+  at compile time and enforced against every subject given to it afterward, matching real CPython's
+  own "cannot use a bytes pattern on a string-like object" (and the reverse) errors — verified by
+  hand against compile/match/search/groups/findall/sub (both a bytes template and a bytes-returning
+  callable)/split/fullmatch/finditer/repr, plus both mismatch directions and confirming str-mode
+  still works unaffected. Found via real h11's own `_readers.py`/`_events.py`/`_headers.py`
+  (`re.compile(rb"[0-9]+")` etc.) — h11 is httpx's low-level HTTP/1.1 transport.
+- **`bytes.count()`** (TypeMethods.cs `BytesMethods`): didn't exist. A real port of CPython's own
+  non-overlapping-occurrence algorithm with optional `start`/`end`. Found via real rfc3986's own
+  `normalizers.py` (`uri_bytes.count(b"%")`).
+- **`urllib.parse.parse_qs`/`parse_qsl` coerce a falsy (`None`) argument to an empty string**,
+  matching real CPython's own `_decode_args` (`x.decode(...) if x else ''` — a falsy input becomes
+  `''`, not a call on `None`). Found via real httpx's own `_urls.py` (`QueryParams.__init__`:
+  `parse_qs(value, keep_blank_values=True)` where `value` is `None` whenever a `Client`/`TestClient`
+  is constructed without an explicit `params=`).
+- **Real `isinstance()` recognition of `dict` as a `Mapping`, plus structural (`__subclasshook__`-
+  style) duck typing for `Iterable`/`Iterator`/`Container`/`Sized`/`Callable`/`Hashable`**
+  (Builtins.cs): real CPython recognizes any class defining the matching dunder (`__iter__`,
+  `__next__`, `__contains__`, `__len__`, `__call__`) as a virtual subclass of the corresponding ABC,
+  and `dict` specifically as a registered `Mapping`, all *without* requiring explicit inheritance —
+  previously `isinstance({}, Mapping)` and friends were simply `False`. This was a real, silent
+  correctness bug beyond the immediate crash: real httpx's own `Headers.__init__` branches on
+  `isinstance(headers, Mapping)` to decide whether to iterate `.items()` (correct) or the mapping
+  directly (real CPython: iterates *keys*) — with the check always False, a plain dict fell into the
+  wrong branch and tried to unpack each key *string* into `(k, v)`, raising "too many values to
+  unpack" for any key longer than 2 characters. Found via real httpx's own `_models.py`, then again
+  via `self.stream` (a real `ByteStream`, `_content.py`, defining only `__iter__`) needing
+  `isinstance(self.stream, typing.Iterable)` to be `True`.
+- **Real `MutableMapping.pop`/`popitem`/`setdefault`/`clear` mixins** (CollectionsModule.cs),
+  **unified by identity between `collections.abc` and `typing`** (MiscModules.cs): real CPython's
+  `typing.Mapping`/`typing.MutableMapping` are literally the same classes as their `collections.abc`
+  counterparts (just generic-subscriptable) — previously two separate, unrelated bare placeholders,
+  so a class built against one saw none of the other's mixin methods. `MappingClass`/
+  `MutableMappingClass` are now built once as shared, process-wide `CollectionsModule` statics (safe
+  to share, unlike this project's other script-varying shared state, since the mixin methods are
+  stateless — they only ever touch the instance they're called on). Found via real httpx's own
+  `Headers(typing.MutableMapping[str, str])` (`_models.py`): overrides `update` itself but relies on
+  the inherited mixin for `self.pop(key)`.
+- **Real `namedtuple._replace`, and the two separate, drifted namedtuple implementations unified**
+  (`Interp.ConvertToNamedTuple` gained `_replace`; `CollectionsModule.BuildNamedTuple` — the
+  `collections.namedtuple(...)` factory function — now delegates to `ConvertToNamedTuple` instead of
+  hand-duplicating a second, incomplete copy that was missing `_asdict` entirely and, like the first,
+  missing `_replace`): found via real rfc3986's own `uri.py` (`class URIReference(namedtuple(
+  "URIReference", misc.URI_COMPONENTS), URIMixin):`), with real httpx's own URL-joining logic calling
+  `._replace(...)` while resolving a relative redirect/request URL against a base. Verified the
+  unification preserves real multiple-inheritance behavior (`class MyPoint(namedtuple(...), Mixin):`)
+  before trusting it.
+- **`pathlib.Path.expanduser()`** (PathlibModule.cs): didn't exist — a real (if scoped to the common
+  case: no `~otheruser/...` support) port of `os.path.expanduser`'s `~`-prefix handling. Found via
+  real httpx's own `_utils.py` (`NetRCInfo`: `Path("~/.netrc").expanduser()`).
+- **`asyncio.Task.get_name()`/`set_name()`** (Runtime/Async.cs's `PyTask` gained a real `Name`
+  property; a new `AsyncioModule.TaskTable` dispatched ahead of the shared `FutureTable` in
+  TypeMethods.cs, since real CPython's `Task` has these but `Future` doesn't): the synthetic default
+  name (when never explicitly set) is derived from the task's own CLR identity, not a shared counter
+  — this project's own established caution around process-wide mutable state, from the very
+  concurrency bugs this whole investigative chain kept running into. Found via real anyio's own
+  `_backends/_asyncio.py` (`task.set_name(name)`), reached constructing a real `TestClient` request.
+- **The wall this round stopped at — a genuine, deep event-loop architecture limitation, not a small
+  gap**: constructing and issuing a real `TestClient.get("/")` request now gets all the way into
+  anyio's `start_blocking_portal` (`from_thread.py`) — which spawns a **real, independent
+  `threading.Thread`** running its *own* `asyncio.run()`-driven event loop, while the *original*
+  calling thread blocks on a `concurrent.futures.Future` waiting for it — and then hangs forever (a
+  real, reproduced timeout via `timeout 45 ... ; echo $?` → exit 124, not a crash). Root cause,
+  reasoned from `Runtime/Async.cs`'s own existing doc comment: `PyEventLoop._running` is a
+  deliberately **process-wide, not thread-local**, static (needed so a coroutine body — running on
+  its own dedicated OS thread — can still see which loop is driving it, e.g. for
+  `asyncio.get_running_loop()`). Every scenario this project has hit before had exactly one *logical*
+  event loop in play at a time, even across coroutines' dedicated threads, so this held up fine.
+  `start_blocking_portal` is the first scenario needing **two genuinely independent, concurrently-
+  running event loops on two real, separate OS threads** — and they almost certainly stomp on the
+  same `_running` field, corrupting each other's "which loop is this callback for" bookkeeping.
+  Fixing this properly needs real thread-local propagation (the same technique `LogicalThread`
+  already uses to propagate identity across a coroutine's own dedicated thread) extended to also give
+  a genuine `threading.Thread`-spawned event loop its own independent scope — a substantial,
+  carefully-scoped architecture change in its own right, not a quick patch, and a well-justified
+  stopping point given how many real concurrency bugs this exact project has already had to
+  carefully root-cause and fix this session alone.
+- 12 tests added: `M6_Stdlib/StdlibTests.cs` gained 4 new `ReTests` cases (bytes pattern match/
+  search/findall/groups, bytes sub/split incl. a bytes-returning callable, both pattern/subject
+  bytes-vs-str mismatch directions, `bytes.count`) and a new `HttpxRequestChainFixesTests` (8:
+  parse_qs/parse_qsl None-coercion, dict-as-Mapping, structural ABC duck-typing, MutableMapping
+  mixins, typing/collections.abc Mapping unification, namedtuple._replace for both namedtuple forms,
+  Path.expanduser, Task get_name/set_name — `[Collection("asyncio-run")]`-tagged, since one case
+  calls `asyncio.run`). Full suite green throughout, confirmed stable across 15 consecutive clean
+  full-suite runs: 975/975 by the end of this round, up from 963 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

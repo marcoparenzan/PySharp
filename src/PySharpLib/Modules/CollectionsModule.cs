@@ -209,6 +209,14 @@ public static class CollectionsModule
 
     // ---------------------------------------------------------------- namedtuple
 
+    // Delegates to Interp.ConvertToNamedTuple (the same generator `class Foo(NamedTuple):`/
+    // functional `typing.NamedTuple(...)` already use) rather than a second, hand-maintained
+    // implementation — the two had already drifted (this one was missing `_asdict` entirely, and
+    // both were missing `_replace`, found via real rfc3986's own `uri.py`:
+    // `class URIReference(namedtuple("URIReference", misc.URI_COMPONENTS), URIMixin):`).
+    // ConvertToNamedTuple only ever reads `__annotations__`'s *keys* (field names), never the
+    // annotation values, so a plain `namedtuple(name, fields)` call (no real type info) can just
+    // fill them with a placeholder.
     private static object BuildNamedTuple(Interpretation.Interp interp, object[] a)
     {
         string typeName = (string)a[0];
@@ -219,48 +227,32 @@ public static class CollectionsModule
         };
 
         var cls = new PyClass(typeName, new List<PyClass>());
-        cls.Dict["_fields"] = new PyTuple(fields.Select(f => (object)f).ToArray());
-        cls.Dict["__init__"] = new PyBuiltinFunction($"{typeName}.__init__", (_, args, kwargs) =>
-        {
-            var inst = (PyInstance)args[0];
-            for (int i = 0; i < fields.Count; i++)
-            {
-                if (i + 1 < args.Length)
-                    inst.Dict[fields[i]] = args[i + 1];
-                else if (kwargs is not null && kwargs.TryGetValue(fields[i], out var kv))
-                    inst.Dict[fields[i]] = kv;
-                else
-                    throw PyErr.TypeError($"{typeName}() missing argument '{fields[i]}'");
-            }
-            return PyNone.Instance;
-        });
-        cls.Dict["__repr__"] = new PyBuiltinFunction($"{typeName}.__repr__", (interp2, args, _) =>
-        {
-            var inst = (PyInstance)args[0];
-            var parts = fields.Select(f => $"{f}={PyOps.Repr(interp2, inst.Dict[f])}");
-            return $"{typeName}({string.Join(", ", parts)})";
-        });
-        cls.Dict["__getitem__"] = new PyBuiltinFunction($"{typeName}.__getitem__", (_, args, _) =>
-        {
-            var inst = (PyInstance)args[0];
-            int i = PyOps.SeqIndex(args[1], fields.Count, typeName);
-            return inst.Dict[fields[i]];
-        });
-        cls.Dict["__len__"] = new PyBuiltinFunction($"{typeName}.__len__", (_, _, _) =>
-            new BigInteger(fields.Count));
-        cls.Dict["__iter__"] = new PyBuiltinFunction($"{typeName}.__iter__", (_, args, _) =>
-        {
-            var inst = (PyInstance)args[0];
-            return new PyIterator(fields.Select(f => inst.Dict[f]).GetEnumerator());
-        });
+        var ann = new PyDict();
+        foreach (var f in fields)
+            ann[f] = PyNone.Instance;
+        cls.Dict["__annotations__"] = ann;
+        interp.ConvertToNamedTuple(cls);
         return cls;
     }
+
+    /// <summary>Real Mapping/MutableMapping mixin classes, shared by identity between
+    /// `collections.abc` and `typing` (real CPython: `typing.Mapping`/`typing.MutableMapping` are
+    /// the exact same classes as their `collections.abc` counterparts, just generic-subscriptable —
+    /// found the hard way via real httpx's own `Headers(typing.MutableMapping[str, str])`
+    /// (`_models.py`): it subclasses the `typing` spelling, not `collections.abc`'s, so these two
+    /// modules must hand out the *same* class objects or a class built against one sees none of the
+    /// other's mixin methods). Stateless (the mixin methods only ever touch the instance they're
+    /// called on via `__getitem__`/`__setitem__`/`__delitem__`/iteration), so — unlike this
+    /// project's other, script-varying shared state — one process-wide instance is safe, the same
+    /// category as `EnumModule.EnumClass`/`GenericAliasModule.GenericAliasClass`.</summary>
+    public static readonly PyClass MappingClass = BuildMappingClass();
+    public static readonly PyClass MutableMappingClass = BuildMutableMappingClass(MappingClass);
 
     /// <summary>
     /// collections.abc: plain placeholder classes, like the equivalent names already stubbed in
     /// `typing` (see MiscModules.CreateTyping) — just need to exist and be importable/subclassable.
     /// No isinstance/subclass-hook duck-typing (e.g. isinstance({}, Mapping) is not True here) unless
-    /// a real scenario needs it.
+    /// a real scenario needs it. Mapping/MutableMapping are the real, shared classes above instead.
     /// </summary>
     public static PyModule CreateAbc()
     {
@@ -277,12 +269,18 @@ public static class CollectionsModule
         {
             d[name] = new PyClass(name, new List<PyClass>());
         }
+        d["Mapping"] = MappingClass;
+        d["MutableMapping"] = MutableMappingClass;
+        return m;
+    }
 
-        // Real Mapping mixin method: `get(key, default=None)` via `self[key]`, catching KeyError.
-        // Found via starlette's real `Headers(Mapping[str, str])` (datastructures.py) — Headers
-        // overrides __getitem__/keys/values/items/__contains__/__eq__ itself, but relies on this one
-        // mixin method from the real ABC for `headers.get("content-type")`-style lookups
-        // (responses.py's FileResponse, reached serving a real static asset).
+    // Real Mapping mixin method: `get(key, default=None)` via `self[key]`, catching KeyError.
+    // Found via starlette's real `Headers(Mapping[str, str])` (datastructures.py) — Headers
+    // overrides __getitem__/keys/values/items/__contains__/__eq__ itself, but relies on this one
+    // mixin method from the real ABC for `headers.get("content-type")`-style lookups
+    // (responses.py's FileResponse, reached serving a real static asset).
+    private static PyClass BuildMappingClass()
+    {
         var mapping = new PyClass("Mapping", new List<PyClass>());
         mapping.Dict["get"] = new PyBuiltinFunction("Mapping.get", (interp, a, kwargs) =>
         {
@@ -296,11 +294,84 @@ public static class CollectionsModule
                 return def!;
             }
         });
-        d["Mapping"] = mapping;
+        return mapping;
+    }
+
+    // Real MutableMapping.pop/popitem/setdefault/clear — CPython's own mixin algorithms, built on
+    // __getitem__/__setitem__/__delitem__/iteration. Found via real httpx's own `Headers.update()`
+    // (`_models.py`): overrides `update` itself but relies on the inherited mixin for
+    // `self.pop(key)`.
+    private static PyClass BuildMutableMappingClass(PyClass mapping)
+    {
         // Real CPython: MutableMapping derives from Mapping (inheriting the same mixin methods) —
         // must be built with Mapping already in its bases at construction time, since PyClass
         // computes its MRO once in the constructor (mutating .Bases afterward wouldn't update it).
-        d["MutableMapping"] = new PyClass("MutableMapping", new List<PyClass> { mapping });
-        return m;
+        var mutableMapping = new PyClass("MutableMapping", new List<PyClass> { mapping });
+
+        object popMarker = new();
+        mutableMapping.Dict["pop"] = new PyBuiltinFunction("MutableMapping.pop", (interp, a, kwargs) =>
+        {
+            object def = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("default", out var d2) ? d2 : popMarker;
+            object value;
+            try
+            {
+                value = interp.GetItem(a[0], a[1]);
+            }
+            catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.KeyErrorClass))
+            {
+                if (ReferenceEquals(def, popMarker))
+                    throw;
+                return def;
+            }
+            interp.DelItem(a[0], a[1]);
+            return value;
+        });
+        // Real MutableMapping.popitem(): pops an arbitrary (the first, via iteration order) item.
+        mutableMapping.Dict["popitem"] = new PyBuiltinFunction("MutableMapping.popitem", (interp, a, _) =>
+        {
+            object key;
+            try
+            {
+                key = PyOps.Iterate(interp, a[0]).First();
+            }
+            catch (InvalidOperationException)
+            {
+                throw PyErr.KeyError("popitem(): dictionary is empty");
+            }
+            object value = interp.GetItem(a[0], key);
+            interp.DelItem(a[0], key);
+            return new PyTuple(new[] { key, value });
+        });
+        // Real MutableMapping.setdefault(key, default=None): returns the existing value, or sets
+        // and returns `default` if the key is missing.
+        mutableMapping.Dict["setdefault"] = new PyBuiltinFunction("MutableMapping.setdefault", (interp, a, kwargs) =>
+        {
+            object def = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("default", out var d2) ? d2 : PyNone.Instance;
+            try
+            {
+                return interp.GetItem(a[0], a[1]);
+            }
+            catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.KeyErrorClass))
+            {
+                interp.SetItem(a[0], a[1], def);
+                return def;
+            }
+        });
+        // Real MutableMapping.clear(): repeatedly popitem() until empty.
+        mutableMapping.Dict["clear"] = new PyBuiltinFunction("MutableMapping.clear", (interp, a, _) =>
+        {
+            while (true)
+            {
+                try
+                {
+                    interp.CallMethod(a[0], "popitem", Array.Empty<object>());
+                }
+                catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.KeyErrorClass))
+                {
+                    return PyNone.Instance;
+                }
+            }
+        });
+        return mutableMapping;
     }
 }

@@ -732,6 +732,26 @@ public static class AsyncioModule
             (object?)((PyFuture)a[0]).Loop ?? PyNone.Instance),
     };
 
+    /// <summary>Task's real method surface: everything Future has, plus get_name/set_name (added
+    /// CPython 3.8, Future doesn't have them). Found via real anyio's own `_backends/_asyncio.py`
+    /// (`task.set_name(name)`), reached constructing a real `httpx.Client`/`TestClient` request.</summary>
+    public static readonly Dictionary<string, PyBuiltinFunction> TaskTable = BuildTaskTable();
+
+    private static Dictionary<string, PyBuiltinFunction> BuildTaskTable()
+    {
+        var t = new Dictionary<string, PyBuiltinFunction>(FutureTable)
+        {
+            ["get_name"] = new PyBuiltinFunction("Task.get_name", (_, a, _) =>
+                ((PyTask)a[0]).Name ?? $"Task-{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(a[0])}"),
+            ["set_name"] = new PyBuiltinFunction("Task.set_name", (interp, a, _) =>
+            {
+                ((PyTask)a[0]).Name = PyOps.Str(interp, a[1]);
+                return PyNone.Instance;
+            }),
+        };
+        return t;
+    }
+
     public static readonly Dictionary<string, PyBuiltinFunction> CoroutineTable = new()
     {
         ["close"] = new PyBuiltinFunction("coroutine.close", (_, _, _) => PyNone.Instance),

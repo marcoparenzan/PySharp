@@ -636,6 +636,14 @@ public sealed class PyTask : PyFuture
     private readonly PyCoroutine _coro;
     private readonly Interp _interp;
 
+    /// <summary>Real Task.get_name()/set_name() (added CPython 3.8) — per-instance, not a shared
+    /// counter (this project's own established caution around process-wide mutable state). Falls
+    /// back to a real-CLR-identity-based synthetic name if never explicitly set, matching the
+    /// *shape* of CPython's own auto-generated "Task-N" default without needing a shared counter.
+    /// Found via real anyio's own `_backends/_asyncio.py` (`task.set_name(name)`), reached
+    /// constructing a real `httpx.Client`/`TestClient` request.</summary>
+    public string? Name { get; set; }
+
     public PyTask(PyCoroutine coro, PyEventLoop loop, Interp interp)
         : base(loop)
     {

@@ -816,10 +816,10 @@ public static class BuiltinsFactory
                 return t.Items.Any(x => IsInstance(obj, x));
             case PyClass cls:
                 if (obj is PyInstance inst)
-                    return inst.Class.IsSubclassOf(cls);
+                    return inst.Class.IsSubclassOf(cls) || SatisfiesAbcByDuckType(obj, cls.Name);
                 if (cls.Name == "object")
                     return true;
-                return TypeMatchesBuiltinName(obj, cls.Name);
+                return TypeMatchesBuiltinName(obj, cls.Name) || SatisfiesAbcByDuckType(obj, cls.Name);
             case PyBuiltinFunction bf:
                 // isinstance(x, int) where int is the builtin conversion function
                 return TypeMatchesBuiltinName(obj, bf.Name);
@@ -876,6 +876,34 @@ public static class BuiltinsFactory
     private static bool IsIntEnumMember(object obj) =>
         obj is PyInstance inst && inst.Class.IsSubclassOf(EnumModule.IntEnumClass);
 
+    /// <summary>Real CPython: several `collections.abc`/`typing` ABCs (Iterable, Iterator,
+    /// Container, Sized, Callable, Hashable) recognize *any* class defining the matching dunder as
+    /// a virtual subclass via `__subclasshook__` — structural, not explicit-inheritance, duck
+    /// typing. Without this, `isinstance(x, Iterable)` was False for any real class that just
+    /// defines `__iter__` without also literally subclassing the (bare, mixin-only) `Iterable`
+    /// placeholder. Found via real httpx's own `_models.py` (`assert isinstance(self.stream,
+    /// typing.Iterable)`, where `self.stream` is a real `ByteStream` — `_content.py` — defining only
+    /// `__iter__`, no explicit ABC inheritance).</summary>
+    private static bool SatisfiesAbcByDuckType(object obj, string abcName)
+    {
+        bool HasDunder(string name) => obj is PyInstance inst && inst.Class.TryLookup(name, out _);
+        bool IsBuiltinIterable(object o) => o is string or PyList or PyTuple or PyDict or PySet
+            or PyFrozenSet or PyBytes or PyByteArray or PyRange or PyIterator or PyGenerator;
+
+        return abcName switch
+        {
+            "Iterable" => HasDunder("__iter__") || IsBuiltinIterable(obj),
+            "Iterator" => HasDunder("__next__") || obj is PyIterator or PyGenerator or PyCoroutine,
+            "Container" => HasDunder("__contains__") || IsBuiltinIterable(obj),
+            "Sized" => HasDunder("__len__")
+                || obj is string or PyList or PyTuple or PyDict or PySet or PyFrozenSet or PyBytes or PyByteArray,
+            "Callable" => HasDunder("__call__")
+                || obj is PyFunction or PyBuiltinFunction or PyBoundMethod or PyClass or PyStaticMethod or PyClassMethod,
+            "Hashable" => obj is not (PyList or PyDict or PySet or PyByteArray),
+            _ => false,
+        };
+    }
+
     private static bool TypeMatchesBuiltinName(object obj, string name) => name switch
     {
         "int" => obj is BigInteger or bool || IsIntEnumMember(obj),
@@ -907,6 +935,14 @@ public static class BuiltinsFactory
         // Task/Future interchangeable use in its own type checks (_backends/_asyncio.py), reachable
         // from `import starlette`.
         "Future" => obj is PyFuture,
+        // Real CPython: `dict` is a registered virtual subclass of `collections.abc.Mapping`/
+        // `MutableMapping` — `isinstance({}, Mapping)` is True. Found via real httpx's own
+        // `_models.py`'s `Headers.__init__`: `elif isinstance(headers, Mapping): ... for k, v in
+        // headers.items()` vs. the `else` branch's `for k, v in headers` (iterating bare keys) —
+        // without this, a plain dict fell into the `else` branch and tried to unpack each key
+        // *string* into `(k, v)`, raising "too many values to unpack" for any key longer than 2
+        // characters.
+        "Mapping" or "MutableMapping" => obj is PyDict,
         _ => PyOps.TypeName(obj) == name,
     };
 
