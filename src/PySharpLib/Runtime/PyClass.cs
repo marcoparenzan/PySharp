@@ -90,6 +90,39 @@ public sealed class PyClass
     public bool IsSubclassOf(PyClass other)
         => Mro.Contains(other) || (other.VirtualSubclasses is { } vs && Mro.Any(vs.Contains));
 
+    /// <summary>Real CPython: a name declared in any class's own `__slots__` (across the whole MRO)
+    /// gets dedicated per-instance storage separate from `__dict__`, even when `__dict__` itself is
+    /// also one of the declared slots (as pydantic's BaseModel does: `__slots__ = ('__dict__',
+    /// '__fields_set__')`). PySharp doesn't implement full slot-descriptor storage, but this targeted
+    /// check is enough to keep a real slot name (like `__fields_set__`) out of the instance's regular
+    /// `PyInstance.Dict` — see `PyInstance.Slots`. Found via real pydantic's own `.dict()`
+    /// (`main.py`'s `_iter`'s fast path, `yield from self.__dict__.items()`), which silently leaked
+    /// `__fields_set__` into every serialized model because PySharp had nowhere else to put it.
+    public bool HasSlot(string name)
+    {
+        if (name == "__dict__")
+            return false;
+        foreach (var cls in Mro)
+        {
+            if (!cls.Dict.TryGet("__slots__", out var slotsObj))
+                continue;
+            // pydantic's real ModelMetaclass computes a subclass's effective __slots__ as
+            // `slots | private_attributes.keys()` — a real Python set, not a tuple/list.
+            bool found = slotsObj switch
+            {
+                string s => s == name,
+                PyTuple t => t.Items.Contains(name),
+                PyList l => l.Items.Contains(name),
+                PySet st => st.Items.Contains(name),
+                PyFrozenSet fs => fs.Items.Contains(name),
+                _ => false,
+            };
+            if (found)
+                return true;
+        }
+        return false;
+    }
+
     public override string ToString() => $"<class '{Name}'>";
 }
 
@@ -98,6 +131,14 @@ public sealed class PyInstance
 {
     public PyClass Class { get; }
     public PyDict Dict { get; } = new();
+
+    /// <summary>Storage for real `__slots__` attributes, kept out of `Dict` (and so out of
+    /// `self.__dict__`/`vars(self)`/anything iterating `Dict` directly) — see
+    /// <see cref="PyClass.HasSlot"/>. Lazily allocated since the overwhelming majority of instances
+    /// never use a slot attribute.</summary>
+    public PyDict? Slots { get; private set; }
+
+    public PyDict EnsureSlots() => Slots ??= new PyDict();
 
     public PyInstance(PyClass cls) => Class = cls;
 

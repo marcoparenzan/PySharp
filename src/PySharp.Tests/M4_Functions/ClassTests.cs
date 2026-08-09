@@ -284,4 +284,63 @@ public class ClassTests
                 pass
             print(Base.__eq__ is object.__eq__)
             """));
+
+    /// <summary>Real `__slots__`-declared attributes get dedicated per-instance storage kept out of
+    /// the regular attribute dict, even when `__dict__` is itself also a declared slot (as real
+    /// pydantic's `BaseModel.__slots__ = ('__dict__', '__fields_set__')` does) — see
+    /// `PyClass.HasSlot`/`PyInstance.Slots`. Found via a real `.dict()` leak on a `BaseModel`
+    /// subclass (`PydanticSmokeTests`); this is the general-purpose slice of the fix, independent of
+    /// pydantic. Real CPython recognizes `__slots__` as a plain tuple, list, string (single slot), or
+    /// set (e.g. computed via `slots1 | slots2`, as pydantic's own `ModelMetaclass` does) — all four
+    /// shapes are covered here.</summary>
+    // Real CPython: a class whose __slots__ explicitly includes '__dict__' (as pydantic's own
+    // BaseModel.__slots__ = ('__dict__', '__fields_set__') does) still has a real instance __dict__
+    // for anything NOT named as another slot — declared slot names get dedicated storage kept out of
+    // it. (A class whose __slots__ omits '__dict__' has no instance __dict__ at all in real CPython —
+    // a separate, pre-existing PySharp limitation, out of scope here.)
+    [Theory]
+    [InlineData("('__dict__', 'x', 'y')")]
+    [InlineData("['__dict__', 'x', 'y']")]
+    [InlineData("{'__dict__', 'x', 'y'}")]
+    public void Slots_attributes_are_kept_out_of_the_instance_dict(string slotsLiteral)
+        => Assert.Equal("1 2\nFalse\nFalse\n", Py.Run($$"""
+            class Slotted:
+                __slots__ = {{slotsLiteral}}
+                def __init__(self, x, y):
+                    self.x = x
+                    self.y = y
+            s = Slotted(1, 2)
+            print(s.x, s.y)
+            print("x" in s.__dict__)
+            print("y" in s.__dict__)
+            """));
+
+    [Fact]
+    public void Single_string_slots_declaration_is_a_single_slot_name_not_one_per_character()
+        => Assert.Equal("5\n", Py.Run("""
+            class Slotted:
+                __slots__ = 'value'
+                def __init__(self, value):
+                    self.value = value
+            s = Slotted(5)
+            print(s.value)
+            """));
+
+    [Fact]
+    public void Copy_and_deepcopy_preserve_slots_attributes()
+        => Assert.Equal("1 2\n1 99\n1 2\n", Py.Run("""
+            import copy
+            class Slotted:
+                __slots__ = ('a', 'b')
+                def __init__(self, a, b):
+                    self.a = a
+                    self.b = b
+            s = Slotted(1, 2)
+            c = copy.copy(s)
+            print(c.a, c.b)
+            c.a = 99
+            print(s.a, c.a)
+            d = copy.deepcopy(s)
+            print(d.a, d.b)
+            """));
 }

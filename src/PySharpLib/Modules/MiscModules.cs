@@ -613,6 +613,12 @@ public static class MiscModules
         var copy = new PyInstance(inst.Class);
         foreach (var e in inst.Dict.Entries)
             copy.Dict[e.Key] = e.Value;
+        // Real `__slots__` attributes live in separate storage (see PyInstance.Slots) — a shallow
+        // copy must carry those over too, or a slots-only object (e.g. pydantic's real FieldInfo,
+        // which has no `__dict__` at all) silently loses every one of its actual field values.
+        if (inst.Slots is { } slots)
+            foreach (var e in slots.Entries)
+                copy.EnsureSlots()[e.Key] = e.Value;
         return copy;
     }
 
@@ -639,6 +645,9 @@ public static class MiscModules
         var copy = new PyInstance(inst.Class);
         foreach (var e in inst.Dict.Entries)
             copy.Dict[e.Key] = DeepCopy(e.Value);
+        if (inst.Slots is { } slots)
+            foreach (var e in slots.Entries)
+                copy.EnsureSlots()[e.Key] = DeepCopy(e.Value);
         return copy;
     }
 }

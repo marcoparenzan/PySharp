@@ -2594,6 +2594,8 @@ public sealed class Interp
         {
             case PyInstance inst:
             {
+                if (inst.Slots is not null && inst.Slots.TryGet(name, out value!))
+                    return true;
                 if (inst.Dict.TryGet(name, out value!))
                     return true;
                 if (inst.Class.TryLookup(name, out var classAttr))
@@ -3038,6 +3040,11 @@ public sealed class Interp
                     Call(new PyBoundMethod(inst, setattr), new object[] { name, value });
                     return;
                 }
+                if (inst.Class.HasSlot(name))
+                {
+                    inst.EnsureSlots()[name] = value;
+                    return;
+                }
                 inst.Dict[name] = value;
                 return;
             }
@@ -3078,6 +3085,8 @@ public sealed class Interp
                     Call(new PyBoundMethod(inst, delattr), new object[] { name });
                     return;
                 }
+                if (inst.Slots is not null && inst.Slots.Remove(name))
+                    return;
                 if (!inst.Dict.Remove(name))
                     throw PyErr.AttributeError($"'{inst.Class.Name}' object has no attribute '{name}'");
                 return;

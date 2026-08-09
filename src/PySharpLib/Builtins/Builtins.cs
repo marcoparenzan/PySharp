@@ -129,12 +129,23 @@ public static class BuiltinsFactory
                         inst.Dict[e.Key] = e.Value;
                 return PyNone.Instance;
             }
+            // Real `__slots__` attribute (declared alongside '__dict__' itself, as pydantic's
+            // BaseModel does for `__fields_set__`): dedicated storage, kept out of the instance's
+            // regular attribute dict. See PyClass.HasSlot.
+            if (inst.Class.HasSlot(name))
+            {
+                inst.EnsureSlots()[name] = a[2];
+                return PyNone.Instance;
+            }
             inst.Dict[name] = a[2];
             return PyNone.Instance;
         });
         objectClass.Dict["__delattr__"] = new PyBuiltinFunction("object.__delattr__", (_, a, _) =>
         {
-            ((PyInstance)a[0]).Dict.Remove((string)a[1]);
+            var inst = (PyInstance)a[0];
+            string name = (string)a[1];
+            if (inst.Slots is null || !inst.Slots.Remove(name))
+                inst.Dict.Remove(name);
             return PyNone.Instance;
         });
         objectClass.Dict["__init__"] = new PyBuiltinFunction("object.__init__", (_, _, _) => PyNone.Instance);

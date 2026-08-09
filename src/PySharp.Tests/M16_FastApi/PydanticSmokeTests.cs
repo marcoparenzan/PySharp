@@ -104,15 +104,19 @@ public class PydanticSmokeTests : IClassFixture<PydanticInstallFixture>
     }
 
     [Fact]
-    public void Basemodel_dict_output_is_the_current_frontier()
+    public void Basemodel_dict_output_no_longer_leaks_fields_set()
     {
-        // `.dict()` runs and includes the real field values, but also currently leaks
-        // `__fields_set__` as a key — real pydantic keeps it out of `self.__dict__` (and so out of
-        // `.dict()`) via a `__slots__` entry of its own, giving it storage separate from the
-        // instance's regular attribute dict. PySharp doesn't implement real `__slots__`-backed
-        // separate storage (every instance attribute lives in the same `PyInstance.Dict`, slotted or
-        // not) — a real, but distinctly scoped, gap from everything fixed so far. Captured as a
-        // concrete starting point for whoever picks up real `__slots__` support next.
+        // Real `__slots__`-backed separate storage (`PyInstance.Slots`, see `PyClass.HasSlot` and
+        // `object.__setattr__`'s own doc comment in Builtins.cs): a name declared in a class's
+        // `__slots__` (across the whole MRO, even when `__dict__` itself is also a declared slot, as
+        // real pydantic's `BaseModel.__slots__ = ('__dict__', '__fields_set__')` does) now gets
+        // dedicated storage kept out of the instance's regular attribute dict. Previously every
+        // instance attribute lived in the same `PyInstance.Dict` regardless of `__slots__`, so
+        // `object.__setattr__(self, '__fields_set__', ...)` (real pydantic's own `BaseModel.__init__`
+        // idiom) landed right alongside the real field values, and `.dict()`'s fast path (`yield from
+        // self.__dict__.items()`) leaked it into every serialized model. Found the hard way via a
+        // real FastAPI route directly returning a pydantic model — `TestClient`'s JSON response came
+        // back with a spurious `"__fields_set__"` key. See FASTAPI_PLAN.md Phase 4.1.11.
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
         engine.Importer.SearchPaths.Add(_fixture.SitePackages);
@@ -126,7 +130,9 @@ public class PydanticSmokeTests : IClassFixture<PydanticInstallFixture>
             d = u.dict()
             print(d["id"], d["name"])
             print("__fields_set__" in d)
+            print(sorted(u.__fields_set__))
+            print("__fields_set__" in u.__dict__)
             """);
-        Assert.Equal("1 Marco\nTrue\n", writer.ToString());
+        Assert.Equal("1 Marco\nFalse\n['id', 'name']\nFalse\n", writer.ToString());
     }
 }

@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e 🟡 real ASGI server + `TestClient` GET round-trip working) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel ✅, more validators/`__slots__` open), ASGI (real `TestClient` GET ✅, POST/errors open) |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e 🟡 real ASGI server + `TestClient` GET/POST/PUT/DELETE working) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` ✅, more validators open), ASGI (real `TestClient` GET/POST/PUT/DELETE/`HTTPException` ✅) |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -186,18 +186,21 @@ as the test bench.
   the interpreter's class-statement execution (`ExecClassDef`) — the first scenario where "custom
   metaclasses are ignored" (a deliberate v1 simplification) actually blocked something, since real
   pydantic's `ModelMetaclass.__new__` must run while `class User(BaseModel): ...` executes to build
-  `__config__`/`__fields__`/validators. Known remaining gap: `.dict()` leaks a `__fields_set__` key,
-  since PySharp doesn't implement real `__slots__`-backed storage separate from an instance's regular
-  attributes. Full phased log in `FASTAPI_PLAN.md`.
+  `__config__`/`__fields__`/validators. ~~Known remaining gap: `.dict()` leaks a `__fields_set__`
+  key~~ ✅ **Fixed** (`FASTAPI_PLAN.md` 4.1.11): real `__slots__`-backed per-instance storage
+  (`PyClass.HasSlot`/`PyInstance.Slots`), separate from an instance's regular attribute dict even when
+  `__dict__` is itself a declared slot (pydantic's own `BaseModel.__slots__ = ('__dict__',
+  '__fields_set__')` pattern). Full phased log in `FASTAPI_PLAN.md`.
 - **2e — ASGI server + FastAPI.** 🟡 **In progress.** `samples/asgi_server.py` (Phase 3.2) is a real,
   minimal, reusable ASGI/3 HTTP server over PySharp's own async socket I/O, verified over real HTTP
   (curl) against both its own demo app and a real, unmodified `Starlette` app. Beyond that: a real,
   unmodified `starlette.testclient.TestClient` (backed by real `httpx`/`httpcore`/`h11`) now drives a
-  real `FastAPI()` app's ASGI callable end to end — `client.get("/")` and a typed path-parameter route
-  both return the correct status/JSON, through real anyio task groups/cancel scopes and PySharp's own
-  async runtime (`FASTAPI_PLAN.md` Phase 4.1.10). Open: POST/PUT and error-status paths through
-  `TestClient` (only GET verified so far), and a real uvicorn-equivalent process wiring the ASGI server
-  to an actual `FastAPI()` app for a live end-to-end demo.
+  real `FastAPI()` app's ASGI callable end to end — GET, POST (with a real pydantic request body,
+  including the real 422 validation-error shape), PUT, DELETE, query params, and `HTTPException` all
+  verified (`FASTAPI_PLAN.md` Phase 4.1.10–4.1.11), through real anyio task groups/cancel scopes and
+  PySharp's own async runtime. Open: a real uvicorn-equivalent process wiring the ASGI server to an
+  actual `FastAPI()` app for a live end-to-end demo (only `TestClient`'s in-process ASGI dispatch has
+  been verified so far).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -619,8 +622,20 @@ in scenario 1).
   Message.get_content_charset` ✅; `codecs.BOM_*` constants ✅. **`TestClient(app).get(...)` now
   round-trips a real request through the full real fastapi/starlette/pydantic/httpx/httpcore/h11/anyio
   stack, correct status code and JSON body.** Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.1.10.
-- Tests: **993 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 15 consecutive clean
-  full-suite runs.
+- **POST/PUT/DELETE/query-params/`HTTPException` verified against real `TestClient`, zero new bugs —
+  then real `__slots__`-backed storage closed the last documented Phase-2 gap.** A pydantic request
+  body validates and serializes correctly (including the real 422 error shape), `HTTPException`
+  round-trips status/detail, query params parse correctly. The one real gap found — a route returning
+  a `BaseModel` directly leaked `__fields_set__` into the JSON — is now fixed: `__slots__`-declared
+  attributes (`PyClass.HasSlot`/`PyInstance.Slots`) get real per-instance storage separate from the
+  regular attribute dict, even when `__dict__` is itself a declared slot (pydantic's own
+  `BaseModel.__slots__ = ('__dict__', '__fields_set__')` pattern), recognized in all four real
+  `__slots__` shapes (string/tuple/list/set — pydantic's own metaclass computes a set). A
+  `copy.copy`/`copy.deepcopy` regression this surfaced (only ever copied the regular dict, silently
+  emptying any slots-only object like pydantic's real `FieldInfo`) was caught and fixed before it
+  shipped. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.1.11.
+- Tests: **998 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 65 consecutive clean
+  full-suite runs (one unrelated, unreproduced flake in an early batch — see 4.1.11).
 
 _Update these numbers at every milestone._

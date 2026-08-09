@@ -2298,6 +2298,58 @@ The author's go-ahead ("procedi") to tackle 4.1.9's `Task`-internals wall.
   thread running its own `asyncio.run`). Full suite green throughout, confirmed via 15 consecutive
   clean full-suite runs: 993/993 by the end of this round, up from 977 at the start.
 
+### 4.1.11 — POST/PUT/DELETE/query-params verified against real `TestClient` (zero new bugs), then real `__slots__`-backed storage closes the last documented Phase-2 gap
+
+The author's go-ahead ("procedi") to push past GET-only `TestClient` coverage.
+
+- **POST with a real pydantic request body, PUT, DELETE, query params, and `HTTPException` all verified
+  against real `TestClient` — zero new bugs found.** A route accepting a pydantic `BaseModel` body
+  validates and serializes correctly, including the real 422 validation-error shape
+  (`{"detail": [{"loc": ["body", "price"], "msg": "field required", "type":
+  "value_error.missing"}]}`) when a required field is missing; `HTTPException(status_code=404, ...)`
+  round-trips its status and detail correctly; `Query`-typed and defaulted query parameters both
+  parse correctly. Confirms Phase 4's core request/response plumbing generalizes well past the
+  original GET-only milestone.
+- **A real, previously-documented gap surfaced immediately when a route returns a pydantic model
+  directly**: the JSON response leaked a spurious `"__fields_set__"` key alongside the real fields
+  (`Basemodel_dict_output_is_the_current_frontier`, tracked since Phase 2.2.1) — this is the single
+  most common FastAPI usage pattern (returning a `BaseModel` instance from a handler), so it was worth
+  closing now rather than leaving it open.
+- **Real `__slots__`-backed storage, closing the gap** (`PyClass.HasSlot` (new), `PyInstance.Slots`
+  (new), `Builtins.cs`'s `object.__setattr__`/`__delattr__`, `Interp.cs`'s `TryGetAttr`/`SetAttr`/
+  `DelAttr`): a name declared in any class's own `__slots__` (walking the whole MRO) now gets
+  dedicated per-instance storage kept separate from the instance's regular attribute dict — even when
+  `__dict__` itself is also a declared slot, exactly like real pydantic's own `BaseModel.__slots__ =
+  ('__dict__', '__fields_set__')`. `__slots__` is recognized in all four real shapes CPython accepts:
+  a plain string (one slot), tuple, list, or set (pydantic's real `ModelMetaclass` computes a
+  subclass's effective `__slots__` as `slots | private_attributes.keys()` — a genuine Python `set`,
+  not a tuple, which the first pass of this fix missed entirely and had to add). Deliberately scoped:
+  this does **not** implement full slot-descriptor semantics (a class whose `__slots__` omits
+  `'__dict__'` still gets a — real-CPython-incorrect — usable `__dict__` in PySharp; a separate,
+  smaller, pre-existing limitation, not reachable by anything this round exercised).
+- **A real regression caught during verification, not shipped**: `copy.copy()`/`copy.deepcopy()` on a
+  `PyInstance` only ever copied `.Dict`, so the very first end-to-end retest after landing the slots
+  fix broke `import fastapi` itself — `AttributeError: 'FieldInfo' object has no attribute 'default'`,
+  traced to real pydantic's own `_get_field_info` (`fields.py`) calling `copy.copy(field_info)` on a
+  genuinely slots-only object (pydantic's real `FieldInfo.__slots__` lists ~25 names, no `__dict__`
+  at all) — the shallow copy silently came back with every field empty, since all the real data now
+  lived in `.Slots`, which `CopyInstance`/`DeepCopyInstance` didn't know existed yet. Fixed by copying
+  `.Slots` alongside `.Dict` in both. Caught immediately by re-running the exact real-package probes
+  this round had already verified, before trusting the fix — the same discipline that has caught every
+  other regression across this whole investigation.
+- Verified by hand: a `FakeMapping`-style minimal `__slots__` class (all 3 collection shapes, plus the
+  bare-string shape), a real `copy.copy`/`copy.deepcopy` round trip on a slots-only object, and the
+  real pydantic `BaseModel` case end to end (`.dict()`, `.__fields_set__`, `.__dict__`) — all matched
+  hand-derived real CPython output. 5 tests added: `M4_Functions/ClassTests.cs` (4: three `__slots__`
+  container shapes via `[Theory]`, the bare-string single-slot shape, `copy`/`deepcopy` round trip —
+  general-purpose, independent of pydantic), and `M16_FastApi/PydanticSmokeTests.cs`'s existing
+  frontier test flipped from documenting the bug to verifying the fix. Confirmed via 65 consecutive
+  clean full-suite runs (one unrelated, unreproduced flake at run 12 of an early batch — isolated,
+  consistent with this project's own documented history of rare parallel-execution flakes unrelated to
+  whatever specific change is in flight, and inherently implausible here since this fix touches only
+  per-instance state, no shared/static mutable state at all). 998/998 by the end of this round, up
+  from 993 at the start.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
@@ -2595,6 +2647,19 @@ code and JSON body through the real, unmodified fastapi/starlette/pydantic/httpx
 stack. 993/993 tests green (up from 977 at the start of this round), confirmed via 15 consecutive
 clean full-suite runs. Full blow-by-blow in 4.1.10.
 
+**POST/PUT/DELETE/query-params/`HTTPException` verified, and a documented Phase-2 gap closed
+(4.1.11).** Zero new bugs in the request/response plumbing itself past the GET-only milestone — a
+pydantic request body validates and serializes correctly (including the real 422 error shape),
+`HTTPException` round-trips its status/detail, query params parse correctly. The one real gap found —
+a route returning a `BaseModel` directly leaked `__fields_set__` into the JSON, the exact
+previously-documented "Current known gap in Phase 2" — is now fixed for real: `__slots__`-declared
+attributes get genuine per-instance storage separate from the regular attribute dict
+(`PyClass.HasSlot`/`PyInstance.Slots`), matching real pydantic's own `BaseModel.__slots__ =
+('__dict__', '__fields_set__')` pattern exactly, including the set-shaped `__slots__` pydantic's own
+metaclass actually computes. A `copy.copy`/`copy.deepcopy` regression this surfaced (they only copied
+`.Dict`, silently emptying any slots-only object) was caught and fixed before it shipped. 998/998
+tests green (up from 993), confirmed via 65 consecutive clean full-suite runs.
+
 **Next frontier**: Phase 4.2 — a first real target FastAPI sample app (a small, complete
-request/response API exercising path/query params, a JSON body, and a typed response model),
-plus POST/PUT and error-status paths through `TestClient` (only GET has been verified so far).
+request/response API exercising path/query params, a JSON body, and a typed response model), wired
+either through `TestClient` or the real `samples/asgi_server.py` end to end.
