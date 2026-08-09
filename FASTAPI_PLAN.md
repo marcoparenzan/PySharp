@@ -2379,6 +2379,50 @@ The author's go-ahead ("procedi") to write the actual sample app Phase 4.1 has b
   stable across 5 consecutive full-suite runs (a lighter check than usual since nothing in
   `src/PySharpLib` changed this round).
 
+## Phase 4.3 — refinements: a real `locals()`/`globals()` nested-import scoping bug fixed
+
+The author's go-ahead ("vai di rifiniture") to close a documented, real loose end noted in 4.2's
+"remaining open items" — `import anyio` from inside a function body raised a spurious `NameError:
+name '__value' is not defined`.
+
+- **Root cause**: `locals()`/`globals()` used `Interp.CurrentFrame`, which deliberately searches
+  *past* module-level frames (`Fn == null`) to find the nearest enclosing *function* call — correct
+  for `super()`'s own need (a zero-arg `super()` can only ever be inside a real method body, never a
+  module frame), but wrong for `locals()`/`globals()`: a module imported from inside a function body
+  (`def f(): import anyio`) pushes its own module-level frame *mid-stack*, and `locals()`/`globals()`
+  called from *that* module's own top-level code must see that module's own dict — not skip past it
+  to the calling function's locals/module. Real anyio's own `__init__.py` (and `abc/__init__.py`) do
+  exactly `for __value in list(locals().values()): ...; del __value` at their own top level, to
+  rewrite re-exported names' `__module__` — with the old bug, `locals()` returned the *importing
+  function's* (possibly near-empty) locals instead of anyio's own already-populated module dict, so
+  the loop's target was never actually bound, and the following `del __value` raised the NameError.
+- **Fix**: both builtins now key off `Interp.InnermostFrame` (a simple top-of-stack peek, unlike
+  `CurrentFrame`'s linear search) instead of `CurrentFrame`, correctly reflecting whatever code is
+  running *right now* — a function body, a module's true top level, or (the fixed case) a module
+  pushed mid-stack via a nested/deferred import — while `super()`'s own `CurrentFrame` use is
+  untouched (still correct for its narrower need). Verified by hand against 8 real CPython scenarios:
+  a function's own locals, `globals()` reading/writing the right module from inside a function, module
+  top-level `locals()`/`globals()` after some names are already bound, and (deliberately, as a
+  documented pre-existing gap this fix does *not* touch) confirmed `locals()` inside a class body
+  remains incorrectly scoped to the enclosing module — no Frame is pushed for class-body execution at
+  all, a separate, smaller, unreached-by-anything-real gap worth revisiting on its own.
+- **A false alarm worth recording**: after this change, `dotnet test`/`import fastapi` runs briefly
+  appeared to hang or crash the test host. Bisected carefully with `git stash` (reverting *only* this
+  file, rebuilding, re-running) — the exact same slowness (a full `FastApiSmokeTests` run taking ~45s
+  instead of the usual ~6s) was present *without* the fix too, proving it was this session's
+  accumulated environmental load (a very long day of repeated builds/probes/package
+  installs/reinstalls), not a real regression from this change. The fix itself was independently
+  verified correct via direct hand-derived probes (the exact `import anyio` scenario, plus 8 broader
+  locals()/globals() checks) before this slow-suite scare even came up — worth remembering next time
+  a change "looks like" it broke something: bisect with the actual tool (stash/revert), don't just
+  assume correlation from timing alone.
+- 1 test added: `M5_Imports/ImportTests.cs`'s
+  `Locals_and_globals_at_module_top_level_work_correctly_even_via_a_nested_deferred_import`, a
+  dependency-free repro of the real anyio pattern (a sibling module using the same
+  `for X in locals().values(): ...; del X` idiom, imported from inside a function). Full suite green:
+  1005/1005 (up from 1004), confirmed via multiple full-suite runs once the environmental slowness was
+  isolated as unrelated to the change.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

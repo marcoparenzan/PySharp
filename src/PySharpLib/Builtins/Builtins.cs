@@ -684,11 +684,21 @@ public static class BuiltinsFactory
 
         Add("locals", (interp, _, _) =>
         {
-            var frame = Interp.CurrentFrame;
-            if (frame is null)
-                // Module level: same as globals() — the real currently-executing module's dict,
-                // not the builtins module `module` (this closure's own variable) would give.
-                return Interp.InnermostFrame?.Env.Module.Dict ?? module.Dict;
+            // Real CPython: locals() reflects whatever code is CURRENTLY executing — a function
+            // body's own locals, or a module's own dict at true module-top-level. Deliberately
+            // Interp.InnermostFrame here, not CurrentFrame (which skips past module-level frames to
+            // find the nearest enclosing *function* call — correct for super()'s own need, but
+            // wrong here): a module imported from inside a function body (`def f(): import anyio`)
+            // pushes its own module-level frame *mid-stack*, and locals() called from that module's
+            // own top-level code must see that module's dict, not the calling function's locals.
+            // Found via real anyio's own __init__.py (`for __value in list(locals().values()): ...;
+            // del __value`, rewriting re-exported names' __module__) — raised a spurious
+            // `NameError: name '__value' is not defined` when anyio was imported this way, because
+            // locals() returned the *caller's* (possibly near-empty) locals instead of anyio's own
+            // already-populated module dict, so the for loop's target was never actually bound.
+            var frame = Interp.InnermostFrame;
+            if (frame is null || frame.Fn is null)
+                return frame?.Env.Module.Dict ?? module.Dict;
             var d2 = new PyDict();
             foreach (var kv in frame.Env.Locals)
                 d2[kv.Key] = kv.Value;
@@ -696,11 +706,15 @@ public static class BuiltinsFactory
         });
         Add("globals", (interp, _, _) =>
         {
-            var frame = Interp.CurrentFrame;
-            if (frame is not null)
-                return frame.Fn!.Module.Dict;
-            // No function call active: the innermost frame IS the module frame itself.
-            return Interp.InnermostFrame?.Env.Module.Dict ?? module.Dict;
+            // Same InnermostFrame-vs-CurrentFrame reasoning as locals() above: a function's own
+            // __globals__ is correct via frame.Fn.Module regardless of call-stack depth, but when the
+            // *innermost* frame is itself a module-level frame (reached via a nested/deferred
+            // import), globals() must return that module's own dict, not skip past it to whatever
+            // function triggered the import.
+            var frame = Interp.InnermostFrame;
+            if (frame is not null && frame.Fn is not null)
+                return frame.Fn.Module.Dict;
+            return frame?.Env.Module.Dict ?? module.Dict;
         });
 
         Add("iter", (interp, args, _) =>

@@ -241,6 +241,42 @@ public class ImportTests : IDisposable
     }
 
     [Fact]
+    public void Locals_and_globals_at_module_top_level_work_correctly_even_via_a_nested_deferred_import()
+    {
+        // Regression for a real bug found via real anyio's own __init__.py (FASTAPI_PLAN.md Phase
+        // 4.2), reached by `import anyio` from *inside a function body* (a deferred/local import,
+        // rather than at module top level): anyio's own top-level code does
+        // `for __value in list(locals().values()): ...; del __value`, rewriting re-exported names'
+        // __module__. Interp.CurrentFrame — used by the old locals()/globals() implementation —
+        // deliberately searches *past* module-level frames to find the nearest enclosing function
+        // call (correct for super()'s own need), but that means a module pushed mid-stack via a
+        // nested import had its own top-level locals()/globals() calls incorrectly resolve to the
+        // *importing function's* locals/module instead of its own — here, locals() returned the
+        // (possibly near-empty) caller's locals, so the for loop's target was never bound, and the
+        // following `del __value` raised a spurious NameError. Fixed via Interp.InnermostFrame,
+        // which correctly reflects whatever code is running *right now*, module-level or not,
+        // regardless of what's further down the call stack.
+        WriteModule("selfrewriting.py", """
+            TOP_LEVEL_VALUE = 42
+
+            def get_own_globals():
+                return globals()
+
+            for _v in list(locals().values()):
+                pass
+            del _v
+            """);
+        Assert.Equal("42\nTrue\n", Run("""
+            def load():
+                import selfrewriting
+                return selfrewriting
+            m = load()
+            print(m.TOP_LEVEL_VALUE)
+            print(m.get_own_globals() is m.__dict__)
+            """));
+    }
+
+    [Fact]
     public void Sys_path_insert_from_python_code_actually_changes_where_import_looks()
     {
         // Regression: sys.path was built once as a *snapshot copy* of Importer.SearchPaths at

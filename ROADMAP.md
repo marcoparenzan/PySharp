@@ -645,7 +645,17 @@ in scenario 1).
   over a real HTTP/1.1 connection — every route matched hand-derived expected output exactly, zero new
   bugs found, no interpreter changes needed. This is the live, curl-able version of the
   GET/POST/PUT/DELETE milestone 4.1.10/4.1.11 already verified in-process via `TestClient`.
-- Tests: **1004 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+- **A real `locals()`/`globals()` nested-import scoping bug fixed (Phase 4.3).** `import anyio` from
+  inside a function body raised a spurious `NameError: name '__value' is not defined` — real anyio's
+  own `__init__.py` top-level `for __value in locals().values(): ...; del __value` idiom got the
+  *importing function's* locals instead of anyio's own module dict, because `locals()`/`globals()`
+  used `Interp.CurrentFrame` (which deliberately skips module-level frames to find the nearest
+  enclosing function call — correct for `super()`'s own need, wrong here). Fixed by switching both to
+  `Interp.InnermostFrame`, correctly reflecting whatever code is running right now regardless of what
+  triggered it. `super()` itself untouched. A pre-existing, separate, smaller gap (`locals()` inside a
+  class body — no Frame is pushed for class-body execution at all) was found but deliberately not
+  pursued (nothing real reaches it). Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.
+- Tests: **1005 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed stable across multiple
   consecutive full-suite runs.
 
