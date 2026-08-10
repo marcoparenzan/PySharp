@@ -94,7 +94,7 @@ public static class OsModule
         {
             string p = PathArg(interp, a[0]);
             if (Directory.Exists(p) || File.Exists(p))
-                throw new PyRaise(PyErr.MakeInstance(PyErr.FileExistsErrorClass, new BigInteger(17), "File exists", p));
+                throw new PyRaise(PyErr.MakeOSError(PyErr.FileExistsErrorClass, 17, "File exists", p));
             Directory.CreateDirectory(p);
             return PyNone.Instance;
         });

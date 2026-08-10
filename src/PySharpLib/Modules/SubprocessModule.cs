@@ -249,8 +249,8 @@ public static class SubprocessModule
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
-                throw new PyRaise(PyErr.MakeInstance(PyErr.FileNotFoundErrorClass,
-                    $"[Errno {ex.NativeErrorCode}] {ex.Message}: '{psi.FileName}'"));
+                throw new PyRaise(PyErr.MakeOSError(PyErr.FileNotFoundErrorClass,
+                    ex.NativeErrorCode, ex.Message, psi.FileName));
             }
 
             inst.Dict[ProcKey] = process;

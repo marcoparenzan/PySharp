@@ -105,6 +105,34 @@ public static class PyErr
             return $"{inst.Class.Name}({args})";
         });
 
+        // Real CPython OSError.__str__: when a real errno/strerror pair is set, formats as
+        // "[Errno N] strerror" (plus ": 'filename'" when a filename is set too) instead of the
+        // generic args-tuple formatting every other exception uses — found via real pika's own
+        // logging of a caught FileNotFoundError/BlockingIOError needing the familiar
+        // "[Errno 2] No such file or directory: '...'" shape. Falls back to the ordinary
+        // args-based formatting for an OSError built without a real errno (e.g. `OSError("msg")`).
+        OSErrorClass.Dict["__str__"] = new PyBuiltinFunction("OSError.__str__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            bool hasErrno = inst.Dict.TryGet("errno", out var errnoObj) && errnoObj is not PyNone;
+            bool hasStrerror = inst.Dict.TryGet("strerror", out var strerrorObj) && strerrorObj is not PyNone;
+            if (hasErrno && hasStrerror)
+            {
+                string head = $"[Errno {PyOps.Str(interp, errnoObj)}] {PyOps.Str(interp, strerrorObj)}";
+                return inst.Dict.TryGet("filename", out var filenameObj) && filenameObj is not PyNone
+                    ? $"{head}: {PyOps.Repr(interp, filenameObj)}"
+                    : head;
+            }
+            if (inst.Dict.TryGet("args", out var argsObj) && argsObj is PyTuple t)
+                return t.Items.Length switch
+                {
+                    0 => "",
+                    1 => PyOps.Str(interp, t.Items[0]),
+                    _ => PyOps.Repr(interp, argsObj),
+                };
+            return "";
+        });
+
         // Real CPython BaseExceptionGroup.__new__: auto-upgrades to a real ExceptionGroup instance
         // when every given exception is an Exception (not just BaseException) — matching real
         // CPython's own actual type-selection rule — and rejects mixing a bare BaseException into
@@ -246,6 +274,21 @@ public static class PyErr
 
     public static PyRaise Raise(PyClass cls, string message)
         => new(MakeInstance(cls, message));
+
+    /// <summary>A real OSError-family construction: sets `.errno`/`.strerror` (and `.filename`,
+    /// when given) as real attributes, not just `.args` entries — matching real CPython's own
+    /// `OSError.__new__` unpacking of a 2/3-arg call, and needed because `MakeInstance` (the
+    /// generic path) deliberately never runs `__init__`. `.args` itself mirrors real CPython too:
+    /// a `filename` is folded into the `.filename` attribute but excluded from `.args`.</summary>
+    public static PyInstance MakeOSError(PyClass cls, System.Numerics.BigInteger errno, string strerror, object? filename = null)
+    {
+        var inst = new PyInstance(cls);
+        inst.Dict["args"] = new PyTuple(new object[] { errno, strerror });
+        inst.Dict["errno"] = errno;
+        inst.Dict["strerror"] = strerror;
+        inst.Dict["filename"] = filename ?? (object)PyNone.Instance;
+        return inst;
+    }
 
     public static PyRaise TypeError(string msg) => Raise(TypeErrorClass, msg);
     public static PyRaise ValueError(string msg) => Raise(ValueErrorClass, msg);

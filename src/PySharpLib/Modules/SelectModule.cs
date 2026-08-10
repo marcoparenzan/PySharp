@@ -84,6 +84,13 @@ public static class SelectModule
 
     private static Socket? GetRawSocket(object o)
     {
+        // Real CPython's select.select() accepts a raw integer file descriptor (fileno()'s own
+        // return value) just as readily as a socket object — found via real pika's own
+        // `select_connection.py` `SelectPoller`, which tracks connections purely by fileno() int
+        // and calls `select.select(fd_list, ...)` directly with those ints. Resolved back to a
+        // real Socket via the same fd registry `fileno()`/asyncio's add_reader/add_writer use.
+        if (o is System.Numerics.BigInteger fd)
+            return SocketModule.TryResolveHandle((long)fd, out var resolved) ? resolved : null;
         if (o is not PyInstance inst)
             return null;
         if (inst.Dict.TryGet(SslModule.WrapKey, out var ssl))

@@ -1012,6 +1012,12 @@ public static class BuiltinsFactory
             "Coroutine" => obj is PyCoroutine,
             "Generator" => obj is PyGenerator,
             "Awaitable" => obj is PyCoroutine or PyFuture or PyGenerator || HasDunder("__await__"),
+            // Real `numbers` ABC tower: int/bool satisfy every level (real CPython registers `int`
+            // only against Integral, but Integral IS-A Rational IS-A Real IS-A Complex IS-A Number
+            // through real class inheritance); float satisfies everything except the two
+            // exact-rational levels.
+            "Integral" or "Rational" => obj is BigInteger or bool,
+            "Real" or "Complex" or "Number" => obj is BigInteger or bool or double,
             _ => false,
         };
     }

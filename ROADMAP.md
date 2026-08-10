@@ -43,16 +43,16 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 4 | **HTTP client** (requests-like) | [samples/requests_demo.py](samples/requests_demo.py) | ✅ **Done** | real `http.client` (subclassable HTTPConnection/HTTPSConnection/HTTPResponse) ✅ — the real, unmodified `requests` package runs live over real HTTPS (GET/POST/redirects/sessions/cookies), see HTTP_PLAN.md |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
 | 6 | **MQTT broker** (server) | [samples/mqtt_broker_demo.py](samples/mqtt_broker_demo.py) | ✅ **Done** | a real, hand-rolled MQTT 3.1.1 broker on this project's own `socket`/`asyncio`/`struct`/`threading` — no interpreter changes needed, every primitive it exercises was already solid |
-| 7 | **AMQP / RabbitMQ** | _to be created_ | ⚪ Planned | AMQP 0-9-1 client (e.g. pure `pika`) on the `socket`, or a C# shim on `RabbitMQ.Client` |
+| 7 | **AMQP / RabbitMQ** | [samples/amqp_broker_demo.py](samples/amqp_broker_demo.py) | ✅ **Done** | real, unmodified `pika` (PyPI) driving a hand-rolled real AMQP 0-9-1 broker — no RabbitMQ server/Docker available, so both sides run locally, matching scenario 6's own strategy; 8 real gaps found and fixed along the way (`ast`, `numbers`, `heapq` — 3 new modules — plus real fixes to `ABCMeta`, `defaultdict`, `bytes.split()`, `OSError.errno`/`.strerror`, `select.select()`/`getsockopt()`) |
 | 8 | **File system API** | [samples/filesystem_demo.py](samples/filesystem_demo.py) | ✅ **Done** | new C# **`glob`**/**`shutil`** modules; `os`/`os.path` fspath (`__fspath__`) coercion for every path-taking function; `pathlib.Path.glob`/`rglob`/`iterdir`/`relative_to`/ordering — see FILESYSTEM_PLAN.md |
 | 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
 | T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` exists; for rich APIs a dedicated **C# wrapper/shim** is created |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
-Scenarios 4–9 are **backlog** collected with the author. **4** (HTTP client), **5** (MQTT subscribe),
-**6** (MQTT broker), **8** (File system API), and **9** (JSON+YAML) are **already done** (see below);
-**7** (AMQP/RabbitMQ) remains to be prioritized.
+Scenarios 4–9, the full backlog collected with the author, are now **all done** (see below): **4**
+(HTTP client), **5** (MQTT subscribe), **6** (MQTT broker), **7** (AMQP/RabbitMQ), **8** (File system
+API), **9** (JSON+YAML).
 
 > **Realism note on ordering.** Technically scenario 3 (SQL) is **simpler** than scenario 2 (FastAPI):
 > SQLite is a well-bounded C# shim, whereas FastAPI requires the **heaviest work of all** — `async`/
@@ -310,6 +310,75 @@ full real pub/sub round trip with no external network dependency, since both the
 clients are local) in
 [MqttBrokerSampleTests.cs](src/PySharp.Tests/M20_MqttBroker/MqttBrokerSampleTests.cs).
 
+### Scenario 7 — AMQP / RabbitMQ ✅
+
+Full blow-by-blow lives in [AMQP_BROKER_PLAN.md](AMQP_BROKER_PLAN.md). The script
+[samples/amqp_broker_demo.py](samples/amqp_broker_demo.py): no real, publicly reachable
+AMQP test broker exists the way `test.mosquitto.org` does for MQTT, and no Docker/local RabbitMQ
+instance was available — so, following the exact same strategy scenario 6 used for MQTT, the
+*server* side is a real, hand-rolled AMQP 0-9-1 broker on this project's own
+`socket`/`asyncio`/`struct`/`threading`, and a **real, unmodified `pika`** (PyPI's pure-Python AMQP
+0-9-1 client) drives it over a real loopback TCP socket: the real 8-byte protocol header, real
+Connection.Start/Start-Ok/Tune/Tune-Ok/Open/Open-Ok negotiation, real Channel.Open, real
+Queue.Declare, real Basic.Consume/Cancel, real Basic.Publish (method frame + content-header frame +
+content-body frame(s)), real Basic.Deliver fan-out to a registered consumer, and a real
+Channel.Close/Connection.Close shutdown handshake.
+
+Unlike scenario 6, this one needed real interpreter/stdlib work — 8 distinct gaps, found in the
+usual "run it, see what breaks" order:
+
+- **Two new, real (if scoped) C# modules real pika imports unconditionally at load time**: `ast`
+  (`literal_eval`, a genuine recursive-descent walk of this project's own parser output — never
+  actually invoking anything, so a non-literal expression correctly raises `ValueError`, not runs)
+  and `numbers` (the real ABC numeric tower — `int`/`bool`/`float` recognized against
+  `Integral`/`Real`/etc. via the same duck-typed-ABC mechanism `collections.abc.Iterable`/`Set`
+  already use).
+- **A third new module, `heapq`** (`heappush`/`heappop`/`heapify`/`heappushpop`/`heapreplace`, a
+  direct port of real CPython's own sift-up/sift-down algorithm using this project's own
+  `interp.Compare` so heap elements can be arbitrary `__lt__`-comparable objects) — pika's own
+  `select_connection.py` keeps its connection-timeout queue in one.
+- **`ABCMeta(name, bases, namespace)`** (the classic dynamic-class-creation call, real because
+  `ABCMeta` genuinely *is* a subclass of `type`) raised `TypeError: ABCMeta() takes no arguments` —
+  found via real pika's own `compat.py`. Fixed by special-casing it in `Interp.Call` the same way
+  the `type(...)` builtin itself already handles its own 3-arg form.
+- **`defaultdict` was missing `__delitem__`/`clear`/`pop`/`popitem`/`setdefault`/`update`** — only
+  `__getitem__`/`__setitem__`/`keys`/`values`/`items`/`get` existed. Found via real pika's own
+  connection-teardown path (`del self._fd_events[...]`).
+- **`bytes.split()` (no separator) didn't exist** — only the explicit-separator form did. Real
+  CPython's no-arg form splits on runs of ASCII whitespace, discarding empties; found via real
+  pika's own `credentials.py` (`as_bytes(start.mechanisms).split()`, splitting the real
+  space-separated SASL mechanism list straight off the wire).
+- **`OSError`-family exceptions never actually carried `.errno`/`.strerror`/`.filename`** — the
+  values were folded into `.args` (or, worse, a single pre-formatted string) but never set as real
+  attributes, since `PyErr.MakeInstance` (the fast, generic exception constructor) deliberately
+  never runs `__init__`. Found via real pika's own `io_services_utils.py` reading `caught_exc.errno`
+  off a real `BlockingIOError` from a non-blocking `connect()` in progress. Fixed with a new
+  `PyErr.MakeOSError` helper (used at every real errno-carrying construction site) plus two general
+  guarantees any OSError now gets regardless of how it was built: `.errno`/`.strerror`/`.filename`
+  default to `None` (matching real CPython), and `OSError.__str__` formats as
+  `"[Errno N] strerror: 'filename'"` when a real errno is set, falling back to the ordinary
+  args-based formatting otherwise.
+- **`select.select()` only recognized socket objects, never raw integer file descriptors** — real
+  CPython's `select.select()` accepts either. Found via real pika's own `SelectPoller`, which
+  tracks connections purely by `fileno()` int and calls `select.select(fd_list, ...)` directly;
+  previously every such call silently saw an empty selectable set and always timed out (surfacing
+  as a spurious "TCP connection attempt timed out"). Fixed by resolving a raw fd back to its real
+  `Socket` via the same fd registry `fileno()`/asyncio's `add_reader`/`add_writer` already use.
+- **`socket.getsockopt()` didn't exist at all** — the classic post-nonblocking-connect
+  `getsockopt(SOL_SOCKET, SO_ERROR)` check (how real code learns whether a `connect()` actually
+  succeeded once `select()`/`poll()` reports the fd writable) raised `AttributeError`. Fixed via
+  .NET's own `Socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error)`.
+- Also (in the demo script itself, not the interpreter): pika's `BlockingConnection.close()` sends
+  a real `Basic.Cancel` for every active consumer before closing the channel, and blocks
+  indefinitely waiting for `Basic.Cancel-Ok` — the broker's first cut had no handler for it at all,
+  which silently hung `close()` forever. Fixed by adding real `Basic.Cancel`/`Basic.Cancel-Ok`
+  handling to the broker.
+
+12 new tests (including a full real publish/subscribe round trip between two real
+`pika.BlockingConnection` clients and the hand-rolled broker, all local/no network) in
+[AmqpBrokerSampleTests.cs](src/PySharp.Tests/M21_AmqpBroker/AmqpBrokerSampleTests.cs) and
+[AmqpInterpreterFixesTests.cs](src/PySharp.Tests/M21_AmqpBroker/AmqpInterpreterFixesTests.cs).
+
 ### Scenario 8 — File system API ✅
 
 Full blow-by-blow lives in [FILESYSTEM_PLAN.md](FILESYSTEM_PLAN.md). The script
@@ -403,7 +472,7 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 ### Axis B — Stdlib
 
-Implemented **~72 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
+Implemented **~75 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
 stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `os.path`, `glob`, `shutil`, `time`, `platform`,
 `errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio` (incl. real `Runner`/`Task`/protocols hierarchy), `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
@@ -415,8 +484,8 @@ previously misclassified — and real coroutine-state constants/`getcoroutinesta
 `concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.client`, `http.cookies`,
 `http.cookiejar`, `email.utils`, `email.message`, `email.errors`, `encodings` (`.aliases`/`.idna`),
 `html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `zipfile`, `calendar`,
-`random`, `pyodbc`; real (not stub) `typing` (incl. `Protocol`/`@runtime_checkable` structural
-`isinstance()`) and `dataclasses`; stub `__future__`.
+`random`, `pyodbc`, `ast` (`literal_eval`), `numbers`, `heapq`; real (not stub) `typing` (incl.
+`Protocol`/`@runtime_checkable` structural `isinstance()`) and `dataclasses`; stub `__future__`.
 
 **High-priority missing**: a Postgres DB-API module (scenario 3b, blocked on server availability).
 
@@ -854,5 +923,11 @@ in scenario 1).
   **1083 green** (up from 1079 — 4 new broker tests, including a full real pub/sub round trip
   between two real paho-mqtt clients and a hand-rolled broker, all local/no network), confirmed
   via 5 consecutive full-suite runs.
+- AMQP / RabbitMQ (scenario 7) (see full entry above): a real, hand-rolled AMQP 0-9-1 broker
+  driving a real, unmodified `pika` client — 3 new modules (`ast`, `numbers`, `heapq`) plus real
+  fixes to `ABCMeta`'s 3-arg call, `defaultdict`'s missing mixin methods, `bytes.split()`'s no-arg
+  form, `OSError.errno`/`.strerror`/`.filename`, and `select.select()`/`getsockopt()` for raw file
+  descriptors. Tests: **1095 green** (up from 1083 — 12 new tests), confirmed via multiple
+  consecutive full-suite runs.
 
 _Update these numbers at every milestone._

@@ -137,10 +137,17 @@ public static class SocketModule
             return inst;
         });
 
-        d["getaddrinfo"] = new PyBuiltinFunction("getaddrinfo", (_, a, _) =>
+        d["getaddrinfo"] = new PyBuiltinFunction("getaddrinfo", (_, a, kwargs) =>
         {
-            string host = (string)a[0];
-            object port = a.Length > 1 ? a[1] : PyNone.Instance;
+            // Real CPython signature: getaddrinfo(host, port, family=0, type=0, proto=0, flags=0)
+            // — found via real pika's own `selector_ioloop_adapter.py`, which calls this entirely
+            // by keyword (`socket.getaddrinfo(host=..., port=..., family=..., ...)`), a shape the
+            // previous positional-only `a[0]`/`a[1]` reads never handled.
+            string host = a.Length > 0 ? (string)a[0]
+                : kwargs is not null && kwargs.TryGetValue("host", out var h) ? (string)h
+                : throw PyErr.TypeError("getaddrinfo() missing required argument: 'host'");
+            object port = a.Length > 1 ? a[1]
+                : kwargs is not null && kwargs.TryGetValue("port", out var p) ? p : PyNone.Instance;
             IPAddress[] addresses;
             try
             {
@@ -196,23 +203,27 @@ public static class SocketModule
             return HandleRegistry.TryGetValue(handle, out sock);
     }
 
-    /// <summary>Converte SocketException in eccezione Python appropriata.</summary>
+    /// <summary>Converte SocketException in eccezione Python appropriata. Uses `PyErr.MakeOSError`
+    /// (not the generic `MakeInstance`) so the resulting exception carries real `.errno`/
+    /// `.strerror` attributes, not just `.args` — found via real pika's own
+    /// `io_services_utils.py` reading `caught_exc.errno` off a real `BlockingIOError` from a
+    /// non-blocking `connect()` in progress.</summary>
     public static PyRaise Translate(SocketException ex) => ex.SocketErrorCode switch
     {
         SocketError.WouldBlock or SocketError.InProgress or SocketError.AlreadyInProgress
-            => new PyRaise(PyErr.MakeInstance(PyErr.BlockingIOErrorClass,
-                new BigInteger(11), "Resource temporarily unavailable")),
+            => new PyRaise(PyErr.MakeOSError(PyErr.BlockingIOErrorClass,
+                11, "Resource temporarily unavailable")),
         SocketError.TimedOut => new PyRaise(PyErr.MakeInstance(TimeoutClass, "timed out")),
-        SocketError.ConnectionRefused => new PyRaise(PyErr.MakeInstance(
-            PyErr.ConnectionRefusedErrorClass, new BigInteger(111), "Connection refused")),
-        SocketError.ConnectionReset => new PyRaise(PyErr.MakeInstance(
-            PyErr.ConnectionResetErrorClass, new BigInteger(104), "Connection reset by peer")),
-        SocketError.ConnectionAborted => new PyRaise(PyErr.MakeInstance(
-            PyErr.ConnectionAbortedErrorClass, new BigInteger(103), "Connection aborted")),
+        SocketError.ConnectionRefused => new PyRaise(PyErr.MakeOSError(
+            PyErr.ConnectionRefusedErrorClass, 111, "Connection refused")),
+        SocketError.ConnectionReset => new PyRaise(PyErr.MakeOSError(
+            PyErr.ConnectionResetErrorClass, 104, "Connection reset by peer")),
+        SocketError.ConnectionAborted => new PyRaise(PyErr.MakeOSError(
+            PyErr.ConnectionAbortedErrorClass, 103, "Connection aborted")),
         SocketError.HostNotFound or SocketError.NoData => new PyRaise(PyErr.MakeInstance(
             GaiErrorClass, "Name or service not known")),
-        _ => new PyRaise(PyErr.MakeInstance(PyErr.OSErrorClass,
-            new BigInteger((int)ex.SocketErrorCode), ex.Message)),
+        _ => new PyRaise(PyErr.MakeOSError(PyErr.OSErrorClass,
+            (int)ex.SocketErrorCode, ex.Message)),
     };
 
     private static PyClass BuildSocketClass()
@@ -408,6 +419,24 @@ public static class SocketModule
         });
 
         Add("setsockopt", (_, _, _) => PyNone.Instance);
+
+        // Real getsockopt(SOL_SOCKET, SO_ERROR): the classic post-nonblocking-connect check (once
+        // select()/poll() reports the fd writable, this is how real code learns whether connect()
+        // actually succeeded or failed) — 0 means no pending error. Every other (level, optname)
+        // combination returns 0 too (matching this module's existing setsockopt no-op — nothing
+        // reachable queries a *real* option value besides SO_ERROR). Found via real pika's own
+        // `select_connection.py` (`_on_writable`: `sock.getsockopt(SOL_SOCKET, SO_ERROR)`).
+        Add("getsockopt", (_, a, _) =>
+        {
+            var sock = Wrap(a[0]).Socket;
+            bool isSoError = a.Length > 1 && a[1] is BigInteger opt && opt == 4;
+            if (isSoError)
+            {
+                var err = (int?)sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error) ?? 0;
+                return new BigInteger(err);
+            }
+            return new BigInteger(0);
+        });
 
         Add("settimeout", (_, a, _) =>
         {

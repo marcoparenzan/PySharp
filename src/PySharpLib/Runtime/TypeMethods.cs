@@ -1176,6 +1176,27 @@ public static class BytesMethods
         Add("split", (_, a, _) =>
         {
             var data = B(a).Data;
+            // Real CPython bytes.split() / bytes.split(None): no separator means "split on runs
+            // of ASCII whitespace, discarding empty pieces" — a distinct mode from splitting on a
+            // literal single-byte/multi-byte separator. Found via real pika's own `credentials.py`
+            // (`as_bytes(start.mechanisms).split()`, splitting the real space-separated SASL
+            // mechanism list straight off the wire).
+            if (a.Length < 2 || a[1] is PyNone)
+            {
+                var pieces = new List<object>();
+                int i = 0;
+                while (i < data.Length)
+                {
+                    while (i < data.Length && IsWs(data[i]))
+                        i++;
+                    int start = i;
+                    while (i < data.Length && !IsWs(data[i]))
+                        i++;
+                    if (i > start)
+                        pieces.Add(new PyBytes(data[start..i]));
+                }
+                return new PyList(pieces);
+            }
             var sep = ((PyBytes)a[1]).Data;
             if (sep.Length == 0)
                 throw PyErr.ValueError("empty separator");

@@ -196,6 +196,12 @@ public static class CollectionsModule
             D(a[0])[a[1]] = a[2];
             return PyNone.Instance;
         });
+        Add("__delitem__", (_, a, _) =>
+        {
+            if (!D(a[0]).Remove(a[1]))
+                throw PyErr.KeyError(a[1]);
+            return PyNone.Instance;
+        });
         Add("__contains__", (_, a, _) => D(a[0]).ContainsKey(a[1]));
         Add("__len__", (_, a, _) => new BigInteger(D(a[0]).Count));
         Add("__iter__", (_, a, _) => new PyIterator(D(a[0]).Keys.ToList().GetEnumerator()));
@@ -204,6 +210,60 @@ public static class CollectionsModule
         Add("items", (_, a, _) =>
             new PyList(D(a[0]).Entries.Select(e => (object)new PyTuple(new[] { e.Key, e.Value }))));
         Add("get", (_, a, _) => D(a[0]).TryGet(a[1], out var v) ? v : a.Length > 2 ? a[2] : PyNone.Instance);
+        Add("pop", (_, a, _) =>
+        {
+            var d = D(a[0]);
+            if (d.TryGet(a[1], out var v))
+            {
+                d.Remove(a[1]);
+                return v;
+            }
+            if (a.Length > 2)
+                return a[2];
+            throw PyErr.KeyError(a[1]);
+        });
+        Add("popitem", (_, a, _) =>
+        {
+            var d = D(a[0]);
+            var last = d.LastEntry ?? throw PyErr.KeyError("popitem(): dictionary is empty");
+            d.Remove(last.Key);
+            return new PyTuple(new[] { last.Key, last.Value });
+        });
+        Add("setdefault", (_, a, _) =>
+        {
+            var d = D(a[0]);
+            if (d.TryGet(a[1], out var v))
+                return v;
+            var def = a.Length > 2 ? a[2] : PyNone.Instance;
+            d[a[1]] = def;
+            return def;
+        });
+        Add("update", (interp, a, kwargs) =>
+        {
+            var d = D(a[0]);
+            if (a.Length > 1)
+            {
+                if (a[1] is PyDict other)
+                    d.Update(other);
+                else
+                    foreach (var pair in PyOps.Iterate(interp, a[1]))
+                    {
+                        var kv = PyOps.Iterate(interp, pair).ToList();
+                        if (kv.Count != 2)
+                            throw PyErr.ValueError("dictionary update sequence element is not a pair");
+                        d[kv[0]] = kv[1];
+                    }
+            }
+            if (kwargs is not null)
+                foreach (var pair in kwargs)
+                    d[pair.Key] = pair.Value;
+            return PyNone.Instance;
+        });
+        Add("clear", (_, a, _) =>
+        {
+            D(a[0]).Clear();
+            return PyNone.Instance;
+        });
         return cls;
     }
 

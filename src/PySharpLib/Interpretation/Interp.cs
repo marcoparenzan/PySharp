@@ -1715,6 +1715,12 @@ public sealed class Interp
                 return CallFunction(fn, args, kwargs);
 
             case PyClass cls:
+                // Real ABCMeta IS a subclass of `type`, so calling it with the same 3-arg
+                // (name, bases, namespace) shape `type(...)` accepts dynamically builds a class
+                // the same way — found via real pika's own `compat.py`:
+                // `AbstractBase = abc.ABCMeta('AbstractBase', (object,), {})`.
+                if (cls == PySharpLib.Modules.AbcModule.AbcMetaClass && args.Length >= 3)
+                    return TypeConstructorMethods.BuildClass((string)args[0], args[1], args[2]);
                 return Instantiate(cls, args, kwargs);
 
             case PyInstance inst:
@@ -2646,6 +2652,19 @@ public sealed class Interp
                 // standard exception attributes, None by default
                 if (name is "__cause__" or "__context__" or "__traceback__"
                     && inst.Class.IsSubclassOf(PyErr.BaseException))
+                {
+                    value = PyNone.Instance;
+                    return true;
+                }
+                // Real CPython: every OSError instance genuinely has `.errno`/`.strerror`/
+                // `.filename`/`.filename2`/`.winerror`, defaulting to None regardless of how it was
+                // constructed — the specific call sites that actually know an errno (e.g.
+                // SocketModule.Translate) set them for real via PyErr.MakeOSError; this is just the
+                // real "None by default" guarantee for every other OSError. Found via real pika's
+                // own `io_services_utils.py` reading `exc.errno` off a caught BlockingIOError from a
+                // real non-blocking connect().
+                if (name is "errno" or "strerror" or "filename" or "filename2" or "winerror"
+                    && inst.Class.IsSubclassOf(PyErr.OSErrorClass))
                 {
                     value = PyNone.Instance;
                     return true;
