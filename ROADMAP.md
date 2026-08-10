@@ -202,13 +202,13 @@ as the test bench.
   `FastAPI()` app to the real `asgi_server.py` and was run live as a background process, driven
   entirely with real `curl` over real HTTP/1.1 — every route (full CRUD, typed path/query params,
   pydantic validation, `HTTPException`) matched expected output exactly, zero new bugs.
-  ~~Open: WebSocket support in the sample itself~~ ✅ **Done** (Phase 4.3.1/4.3.2): `asgi_server.py`
-  now speaks a real RFC 6455 handshake, real frame framing/masking, real fragmented-message
-  reassembly, and a real closing handshake, verified live over a real socket with a from-scratch
-  WebSocket client, zero bugs found. Still open: a real uvicorn-equivalent process manager (graceful
-  shutdown/reload — today's `serve()` has neither), and threading WebSocket support through
-  `fastapi_demo.py` itself (verified so far against the dependency-free `demo_app`, not yet against
-  the real `FastAPI()` app in that sample).
+  ~~Open: WebSocket support in the sample itself~~ ✅ **Done** (Phase 4.3.1/4.3.2/4.3.3):
+  `asgi_server.py` now speaks a real RFC 6455 handshake, real frame framing/masking, real
+  fragmented-message reassembly, and a real closing handshake — verified live over a real socket both
+  with a from-scratch WebSocket client and, separately, through a real `@app.websocket("/ws")` route
+  in `fastapi_demo.py` using real starlette's own `WebSocket`/`WebSocketDisconnect`. Zero bugs found
+  anywhere in this chain. Still open: a real uvicorn-equivalent process manager (graceful
+  shutdown/reload — today's `serve()` has neither).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -678,7 +678,14 @@ in scenario 1).
   instead of crashing, and calling `receive()` again after a disconnect stays well-defined instead of
   reading a closing socket. Every behavior verified by hand, live over a real socket, before any test
   was written. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.2.
-- Tests: **1014 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+- **WebSocket threaded through `fastapi_demo.py` itself (Phase 4.3.3).** A real `@app.websocket("/ws")`
+  route using real starlette's own `WebSocket`/`WebSocketDisconnect` — the same class already verified
+  against hand-built ASGI triples — now runs for the first time over `asgi_server.py`'s real
+  raw-socket RFC 6455 implementation. Verified live: real handshake, two echoed messages, a
+  client-initiated close correctly completing the real closing handshake, and (separately) a real
+  abrupt disconnect correctly raising and catching starlette's own `WebSocketDisconnect` server-side —
+  zero bugs found. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.3.
+- Tests: **1015 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed stable across multiple
   consecutive full-suite runs.
 

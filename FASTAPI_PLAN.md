@@ -2505,6 +2505,32 @@ deliberately left open, plus two smaller defensive gaps found while reviewing th
   mid-fragment ping, the closing handshake (echoed code, then real EOF), and the missing-key 400.
   Full suite green: 1014/1014 (up from 1011), confirmed via 5 consecutive full-suite runs.
 
+### 4.3.3 — WebSocket threaded through fastapi_demo.py: real starlette WebSocket over the real socket server
+
+The author's go-ahead ("procedi") to close the other remaining WebSocket item noted at the end of
+4.3.1: WebSocket support had only been verified against `asgi_server.py`'s own dependency-free
+`demo_app`, not against the real `FastAPI()` app in `samples/fastapi_demo.py`.
+
+- **A real `@app.websocket("/ws")` route added to `fastapi_demo.py`**, using real starlette's own
+  `WebSocket`/`WebSocketDisconnect` (`await websocket.accept()`, `receive_text()`/`send_text()` in a
+  loop, `except WebSocketDisconnect: pass`) — the exact same real starlette WebSocket class already
+  verified against hand-built ASGI triples back in Phase 3.1.11/3.1.12, now driven for the first time
+  over `asgi_server.py`'s real raw-socket RFC 6455 implementation instead.
+- **Verified live over a real socket — zero bugs found on the very first run**: the real handshake, two
+  sequential echoed text messages, and a client-initiated close correctly echoed back with the same
+  code (1000) — exercising 4.3.2's freshly-hardened closing handshake through real starlette's own
+  WebSocket implementation, not just `demo_app`. Separately verified the abrupt-disconnect path too
+  (closing the TCP connection with no close frame at all): real starlette's `WebSocketDisconnect`
+  fired and was caught cleanly by the route's own `except`, no traceback, no error logged server-side —
+  confirming `asgi_server.py`'s `{"type": "websocket.disconnect", "code": 1006}` synthesis (used when
+  `_recv_ws_frame` hits real EOF) integrates correctly with real starlette's own exception-based
+  disconnect signaling, not just the demo app's plain `event["type"] == "websocket.disconnect"` check.
+- 1 test added to `M16_FastApi/FastApiDemoSampleTests.cs`: a real-socket test (mirroring
+  `AsgiServerSampleTests`'s own live-socket pattern, including `FastApiInstallFixture`'s site-packages
+  on the search path) driving `fastapi_demo.app`'s real WebSocket route through the real handshake,
+  two echoed messages, and the closing handshake. Full suite green: 1015/1015 (up from 1014),
+  confirmed via 6 consecutive full-suite runs (back to a healthy ~18s for the whole suite).
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

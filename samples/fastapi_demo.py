@@ -31,11 +31,13 @@
 #   curl -X PUT http://127.0.0.1:8000/items/1 -H "Content-Type: application/json" -d "{\"name\": \"widget\", \"price\": 9.5}"
 #   curl -X DELETE http://127.0.0.1:8000/items/1
 #   curl http://127.0.0.1:8000/items/1     # 404 after the delete above
+#   (WebSocket: connect to ws://127.0.0.1:8000/ws and send text — echoes back "echo: ...",
+#    driven by real starlette's own WebSocket class, not asgi_server.py's dependency-free demo)
 
 import asyncio
 
 from asgi_server import serve
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -81,6 +83,17 @@ async def create_item(item: Item):
 @app.get("/search")
 async def search(q: str = "", limit: int = 10):
     return {"q": q, "limit": limit}
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text("echo: " + data)
+    except WebSocketDisconnect:
+        pass
 
 
 if __name__ == "__main__":
