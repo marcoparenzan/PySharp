@@ -107,6 +107,11 @@ public static class BuiltinsFactory
 
         foreach (var cls in PyErr.AllClasses())
             d[cls.Name] = cls;
+        // Real CPython: IOError/EnvironmentError are historic (Python 2-era) aliases for OSError,
+        // still real names in builtins today. Found via urllib3's own `contrib/emscripten/fetch.py`
+        // (`except (IOError, OSError):`), reachable from `import requests`.
+        d["IOError"] = PyErr.OSErrorClass;
+        d["EnvironmentError"] = PyErr.OSErrorClass;
 
         d["None"] = PyNone.Instance;
         d["True"] = true;
@@ -256,7 +261,27 @@ public static class BuiltinsFactory
         d["complex"] = ComplexType.ComplexClass;
 
         Add("bool", (interp, args, _) => args.Length > 0 && PyOps.Truthy(interp, args[0]));
-        Add("str", (interp, args, _) => args.Length == 0 ? "" : PyOps.Str(interp, args[0]));
+        // Real CPython: str(object='') is the repr-ish single-arg form, but str(bytes_or_buffer,
+        // encoding, errors='strict') is a genuinely different overload — decodes like
+        // bytes.decode(encoding, errors) rather than stringifying the bytes object itself. Found
+        // live via real requests' own `models.py` (`Response.text`: `str(self.content, encoding or
+        // "utf-8", errors="replace")`), reachable from `import requests`.
+        Add("str", (interp, args, kwargs) =>
+        {
+            if (args.Length == 0)
+                return "";
+            if (args.Length >= 2 || (kwargs is not null && kwargs.ContainsKey("encoding")))
+            {
+                byte[] data = args[0] switch
+                {
+                    PyBytes b => b.Data,
+                    PyByteArray ba => ba.Data.ToArray(),
+                    _ => throw PyErr.TypeError("decoding to str: need a bytes-like object"),
+                };
+                return interp.CallMethod(new PyBytes(data), "decode", args.Skip(1).ToArray(), kwargs);
+            }
+            return PyOps.Str(interp, args[0]);
+        });
         Add("repr", (interp, args, _) => PyOps.Repr(interp, args[0]));
 
         Add("bytes", (interp, args, _) =>
@@ -717,6 +742,21 @@ public static class BuiltinsFactory
             return frame?.Env.Module.Dict ?? module.Dict;
         });
 
+        // __import__(name, globals=None, locals=None, fromlist=(), level=0): the real builtin the
+        // `import` statement itself desugars to — found via real requests' own `packages.py`
+        // (`locals()[package] = __import__(package)`, a backwards-compat shim aliasing
+        // `requests.packages.urllib3` to the real top-level `urllib3`), reachable from `import
+        // requests`. Scoped to absolute imports (level=0) with a name that has no dots and no
+        // fromlist, matching every real reachable call site — CPython's own fuller semantics
+        // (submodule-vs-package return value depending on fromlist, relative-import level
+        // resolution against the caller's package) aren't needed by anything in scope.
+        Add("__import__", (interp, args, kwargs) =>
+        {
+            string name = (string)args[0];
+            var current = Interp.InnermostFrame?.Env.Module ?? module;
+            return interp.ImportHook!(interp, name, 0, current);
+        });
+
         Add("iter", (interp, args, _) =>
         {
             // iter(callable, sentinel)
@@ -845,6 +885,10 @@ public static class BuiltinsFactory
             case PyTuple t:
                 return t.Items.Any(x => IsInstance(obj, x));
             case PyClass cls:
+                if (cls.Dict.TryGet("__protocol_attrs__", out var protoAttrs) && protoAttrs is PyList protoNames)
+                    return obj is PyInstance protoInst
+                        ? protoNames.Items.All(n => protoInst.Class.TryLookup((string)n, out _))
+                        : protoNames.Items.All(n => BuiltinHasMethod(obj, (string)n));
                 if (obj is PyInstance inst)
                     return inst.Class.IsSubclassOf(cls) || SatisfiesAbcByDuckType(obj, cls.Name);
                 if (cls.Name == "object")
@@ -865,6 +909,22 @@ public static class BuiltinsFactory
                 throw PyErr.TypeError("isinstance() arg 2 must be a type or tuple of types");
         }
     }
+
+    /// <summary>Structural Protocol-attribute check (see `runtime_checkable` in MiscModules.cs) for
+    /// a builtin (non-PyInstance) value — checks the matching Table dispatch dict directly rather
+    /// than a PyClass's own method dict, since builtins don't route through Interp.TryGetAttr's
+    /// PyInstance branch. Found live via `isinstance({"X": "1"}, SupportsItems)` (real requests'
+    /// own `to_key_val_list`), reachable from `import requests`.</summary>
+    private static bool BuiltinHasMethod(object obj, string name) => obj switch
+    {
+        PyDict => DictMethods.Table.ContainsKey(name),
+        PyList => ListMethods.Table.ContainsKey(name),
+        PyTuple => TupleMethods.Table.ContainsKey(name),
+        PySet or PyFrozenSet => SetMethods.Table.ContainsKey(name),
+        PyBytes => BytesMethods.Table.ContainsKey(name),
+        PyByteArray => ByteArrayMethods.Table.ContainsKey(name),
+        _ => false,
+    };
 
     internal static bool IsSubclass(PyClass cls, object classInfo)
     {

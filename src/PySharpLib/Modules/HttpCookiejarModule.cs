@@ -23,8 +23,15 @@ public static class HttpCookiejarModule
         var m = new PyModule("http.cookiejar");
         m.Dict["Cookie"] = CookieClass;
         m.Dict["CookieJar"] = CookieJarClass;
+        // Real name only (no policy-checking logic) — nothing reachable calls a policy method
+        // directly, it's only ever referenced as a type annotation / `get_policy()` return type.
+        // Found via real requests' own `cookies.py` (`from http.cookiejar import ..., CookiePolicy`),
+        // reachable from `import requests`.
+        m.Dict["CookiePolicy"] = CookiePolicyClass;
         return m;
     }
+
+    public static readonly PyClass CookiePolicyClass = new("CookiePolicy", new List<PyClass>());
 
     public static readonly PyClass CookieClass = BuildCookieClass();
     public static readonly PyClass CookieJarClass = BuildCookieJarClass();
@@ -84,7 +91,36 @@ public static class HttpCookiejarModule
         var cls = new PyClass("CookieJar", new List<PyClass>());
         void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"CookieJar.{n}", fn);
 
-        Add("__init__", (_, a, _) => { Jar((PyInstance)a[0]); return PyNone.Instance; });
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            Jar(inst);
+            // Real CPython CookieJar.__init__(self, policy=None): self._policy = policy or
+            // DefaultCookiePolicy() — a REAL, plain (not double-underscore-mangled) attribute, since
+            // real subclasses (real requests' own `RequestsCookieJar`) read `self._policy` directly,
+            // bypassing this class's own get_policy() override entirely. No policy-checking logic
+            // behind it here (see this module's own doc comment on why: scoped to the interface real
+            // callers actually drive, not a full RFC 2965/2109 policy engine) — found via real
+            // requests' own `cookies.py` (`RequestsCookieJar.get_policy(self): return self._policy`,
+            // called while `Session.resolve_redirects` copies the jar), reachable from `import
+            // requests` when following an HTTP redirect.
+            object policy = a.Length > 1 && a[1] is not PyNone ? a[1]
+                : kwargs is not null && kwargs.TryGetValue("policy", out var p) && p is not PyNone ? p
+                : new PyInstance(CookiePolicyClass);
+            inst.Dict["_policy"] = policy;
+            return PyNone.Instance;
+        });
+
+        Add("set_policy", (_, a, _) =>
+        {
+            ((PyInstance)a[0]).Dict["_policy"] = a[1];
+            return PyNone.Instance;
+        });
+        Add("get_policy", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            return inst.Dict.TryGet("_policy", out var p) ? p : PyNone.Instance;
+        });
 
         Add("set_cookie", (_, a, _) =>
         {

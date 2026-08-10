@@ -118,20 +118,10 @@ public static class HttpModule
         return m;
     }
 
-    /// <summary>http.client: just `responses` (a real status-code -> reason-phrase dict, the same
-    /// data `http.HTTPStatus` above already carries — not a stub subset) — the only thing needed so
-    /// far. Found via fastapi's real `openapi/utils.py`: `import http.client` at module load time,
-    /// then `http.client.responses.get(int(status_code))` to default a response's OpenAPI
-    /// description from the real reason phrase when none was given explicitly.</summary>
-    public static PyModule CreateClient()
-    {
-        var m = new PyModule("http.client");
-        var responses = new PyDict();
-        foreach (var (code, _, phrase) in Statuses)
-            responses[(System.Numerics.BigInteger)code] = phrase;
-        m.Dict["responses"] = responses;
-        return m;
-    }
+    /// <summary>http.client: delegates to <see cref="HttpClientModule"/> for the real
+    /// HTTPConnection/HTTPSConnection/HTTPResponse/HTTPMessage/exception-hierarchy implementation.
+    /// See HTTP_PLAN.md.</summary>
+    public static PyModule CreateClient() => HttpClientModule.Create();
 }
 
 /// <summary>http.cookies: a real (simplified) port of CPython's Lib/http/cookies.py — real

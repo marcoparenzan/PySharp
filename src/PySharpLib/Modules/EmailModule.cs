@@ -27,7 +27,71 @@ public static class EmailModule
         var m = new PyModule("email");
         m.Dict["utils"] = CreateUtils();
         m.Dict["message"] = CreateMessage();
+        m.Dict["errors"] = CreateErrors();
         return m;
+    }
+
+    /// <summary>email.errors: the real MIME-parsing exception/"defect" hierarchy. Found via
+    /// urllib3's own `exceptions.py` (`from email.errors import MessageDefect`) and
+    /// `util/response.py` (`MultipartInvariantViolationDefect`, `StartBoundaryNotFoundDefect`) —
+    /// reachable from `import requests`. Classes only (the full real hierarchy, for completeness and
+    /// isinstance/except compatibility) — nothing here needed custom construction logic beyond the
+    /// inherited default Exception.__init__, since nothing reachable actually raises one of these at
+    /// runtime, only imports the names.</summary>
+    public static PyModule CreateErrors()
+    {
+        var m = new PyModule("email.errors");
+        var d = m.Dict;
+
+        var messageError = new PyClass("MessageError", new List<PyClass> { PyErr.Exception });
+        var messageParseError = new PyClass("MessageParseError", new List<PyClass> { messageError });
+        var multipartConversionError = new PyClass("MultipartConversionError", new List<PyClass> { messageError, PyErr.TypeErrorClass });
+        var messageDefect = new PyClass("MessageDefect", new List<PyClass> { PyErr.ValueErrorClass });
+        PyClass Defect(string name) => new(name, new List<PyClass> { messageDefect });
+        var headerDefect = Defect("HeaderDefect");
+        PyClass HeaderDefectSub(string name) => new(name, new List<PyClass> { headerDefect });
+
+        d["MessageError"] = messageError;
+        d["MessageParseError"] = messageParseError;
+        d["HeaderParseError"] = new PyClass("HeaderParseError", new List<PyClass> { messageParseError });
+        d["BoundaryError"] = new PyClass("BoundaryError", new List<PyClass> { messageParseError });
+        d["MultipartConversionError"] = multipartConversionError;
+        d["CharsetError"] = new PyClass("CharsetError", new List<PyClass> { messageError });
+
+        d["MessageDefect"] = messageDefect;
+        d["NoBoundaryInMultipartDefect"] = Defect("NoBoundaryInMultipartDefect");
+        d["StartBoundaryNotFoundDefect"] = Defect("StartBoundaryNotFoundDefect");
+        d["CloseBoundaryNotFoundDefect"] = Defect("CloseBoundaryNotFoundDefect");
+        d["FirstHeaderLineIsContinuationDefect"] = Defect("FirstHeaderLineIsContinuationDefect");
+        d["MisplacedEnvelopeHeaderDefect"] = Defect("MisplacedEnvelopeHeaderDefect");
+        d["MissingHeaderBodySeparatorDefect"] = Defect("MissingHeaderBodySeparatorDefect");
+        d["MultipartInvariantViolationDefect"] = Defect("MultipartInvariantViolationDefect");
+        d["InvalidMultipartContentTransferEncodingDefect"] = Defect("InvalidMultipartContentTransferEncodingDefect");
+        d["UndecodableBytesDefect"] = Defect("UndecodableBytesDefect");
+        d["InvalidBase64PaddingDefect"] = Defect("InvalidBase64PaddingDefect");
+        d["InvalidBase64CharactersDefect"] = Defect("InvalidBase64CharactersDefect");
+        d["InvalidBase64LengthDefect"] = Defect("InvalidBase64LengthDefect");
+        d["HeaderDefect"] = headerDefect;
+        d["InvalidHeaderDefect"] = HeaderDefectSub("InvalidHeaderDefect");
+        d["HeaderMissingRequiredValue"] = HeaderDefectSub("HeaderMissingRequiredValue");
+        d["NonPrintableDefect"] = HeaderDefectSub("NonPrintableDefect");
+        d["ObsoleteHeaderDefect"] = HeaderDefectSub("ObsoleteHeaderDefect");
+        d["NonASCIILocalPartDefect"] = HeaderDefectSub("NonASCIILocalPartDefect");
+
+        return m;
+    }
+
+    /// <summary>Builds a ready-to-use Message instance directly from C# (bypassing the Python-level
+    /// __init__ call), pre-populated with the given headers in order — used by http.client to hand
+    /// a real HTTPMessage to HTTPResponse.headers/.msg.</summary>
+    public static PyInstance BuildMessage(IEnumerable<(string Name, string Value)> headers)
+    {
+        var inst = new PyInstance(MessageClass);
+        inst.Dict[HeadersKey] = new PyList();
+        inst.Dict[DefaultTypeKey] = "text/plain";
+        foreach (var (name, value) in headers)
+            Headers(inst).Items.Add(new PyTuple(new object[] { name, value }));
+        return inst;
     }
 
     public static PyModule CreateUtils()
@@ -66,7 +130,10 @@ public static class EmailModule
 
     private const string HeadersKey = "__headers__";
     private const string DefaultTypeKey = "__default_type__";
-    private static readonly PyClass MessageClass = BuildMessageClass();
+    /// <summary>Public so http.client can reuse it directly as HTTPMessage — real CPython's
+    /// http.client.HTTPMessage literally *is* email.message.Message (parsed via
+    /// email.parser.Parser().parsestr(...)), not a separate implementation.</summary>
+    public static readonly PyClass MessageClass = BuildMessageClass();
 
     /// <summary>
     /// email.message.Message: real header storage (repeated __setitem__ appends, case-insensitive
@@ -179,6 +246,22 @@ public static class EmailModule
         Add("get_content_subtype", (interp, a, _) =>
             ((string)interp.CallMethod(a[0], "get_content_type", Array.Empty<object>())).Split('/')[1]);
 
+        // Real Message.is_multipart()/.get_payload()/.defects — found via real urllib3's own
+        // `util/response.py` (`assert_header_parsing`, checking a real HTTPResponse's parsed
+        // headers for RFC 2822 defects after every request), reachable from `import requests`.
+        // Scoped to what that function actually reads: no payload/defects are ever set on the
+        // HTTPMessage this project's http.client builds (only real, already-split header lines),
+        // so `get_payload()` returning None and `.defects` staying empty both correctly mean "no
+        // parsing errors" — not stubbed-away behavior, just the real state for headers we always
+        // hand over pre-parsed.
+        Add("is_multipart", (interp, a, _) =>
+            ((string)interp.CallMethod(a[0], "get_content_maintype", Array.Empty<object>())) == "multipart");
+        Add("get_payload", (_, a, _) => PyNone.Instance);
+        cls.Dict["defects"] = new PyProperty
+        {
+            Getter = new PyBuiltinFunction("Message.defects", (_, _, _) => new PyList()),
+        };
+
         // Real (scoped) Message.get_content_charset(failobj=None): parses the `charset=` parameter
         // off the Content-Type header. Found via httpx's own `_utils.py`'s
         // `parse_content_type_charset`, used to pick a decode charset for `Response.json()`. v1
@@ -193,6 +276,22 @@ public static class EmailModule
                 ? charset.ToLowerInvariant()
                 : failobj;
         });
+
+        // Real CPython Message.keys()/.items(): one entry per stored header line, duplicates
+        // included, in insertion order — found via urllib3's own `HTTPHeaderDict(headers)`
+        // constructor (MutableMapping.update()'s `hasattr(other, 'keys')` mapping-protocol check),
+        // reachable from `import requests`. See HTTP_PLAN.md.
+        Add("keys", (_, a, _) =>
+            new PyList(Headers((PyInstance)a[0]).Items.Select(item => ((PyTuple)item).Items[0])));
+        Add("items", (_, a, _) =>
+            new PyList(Headers((PyInstance)a[0]).Items.Select(item =>
+                (object)new PyTuple(new[] { ((PyTuple)item).Items[0], ((PyTuple)item).Items[1] }))));
+        Add("values", (_, a, _) =>
+            new PyList(Headers((PyInstance)a[0]).Items.Select(item => ((PyTuple)item).Items[1])));
+        Add("__contains__", (_, a, _) => TryGetHeader((PyInstance)a[0], (string)a[1], out _));
+        Add("__len__", (_, a, _) => (BigInteger)Headers((PyInstance)a[0]).Items.Count);
+        Add("__iter__", (interp, a, _) =>
+            PyOps.GetIter(interp, new PyList(Headers((PyInstance)a[0]).Items.Select(item => ((PyTuple)item).Items[0]))));
 
         return cls;
     }

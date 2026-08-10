@@ -270,7 +270,31 @@ public static class MiscModules
                 fn.Attributes["__override__"] = true;
             return a[0];
         });
-        d["runtime_checkable"] = new PyBuiltinFunction("runtime_checkable", (_, a, _) => a[0]);
+        // Real CPython: @runtime_checkable lets isinstance()/issubclass() do a *structural* check
+        // against a Protocol class (does the object have every method the protocol declares?)
+        // instead of the normal nominal class-hierarchy check. PySharp's `class X(Protocol): def
+        // items(self) -> ...: ...` parses as an ordinary class, so without this the protocol class
+        // has no real subclass relationship to anything — isinstance() would always say False.
+        // Tags the class with its own directly-declared method names for Builtins.IsInstance to
+        // check structurally. Found via real requests' own `_types.py`
+        // (`@runtime_checkable class SupportsItems(Protocol[...]): def items(self)...`), used by
+        // `requests.utils.to_key_val_list`'s `isinstance(value, SupportsItems)` to decide whether to
+        // call `.items()` or iterate the value directly as (key, value) pairs — reachable from
+        // `import requests`. Scoped to PyInstance targets (real Python-defined classes); a raw
+        // builtin value (e.g. a literal dict) structurally satisfying a Protocol isn't checked here,
+        // since nothing reachable needs that.
+        d["runtime_checkable"] = new PyBuiltinFunction("runtime_checkable", (_, a, _) =>
+        {
+            if (a[0] is PyClass protoCls)
+            {
+                var names = protoCls.Dict.Entries
+                    .Where(e => e.Key is string s && !s.StartsWith("__"))
+                    .Select(e => e.Key)
+                    .ToList();
+                protoCls.Dict["__protocol_attrs__"] = new PyList(names);
+            }
+            return a[0];
+        });
         d["no_type_check"] = new PyBuiltinFunction("no_type_check", (_, a, _) => a[0]);
         // Type-checker-only marker (no runtime effect): a decorator *factory* — the call itself
         // (with whatever eq_default/order_default/etc. kwargs) returns an identity decorator.

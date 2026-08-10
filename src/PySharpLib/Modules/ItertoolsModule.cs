@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -43,7 +44,43 @@ public static class ItertoolsModule
             return new PyIterator(ZipLongest(iters, fill).GetEnumerator());
         });
 
+        d["takewhile"] = new PyBuiltinFunction("takewhile", (interp, a, _) =>
+        {
+            object pred = a[0];
+            var src = PyOps.Iterate(interp, a[1]);
+            return new PyIterator(TakeWhile(interp, pred, src).GetEnumerator());
+        });
+
+        d["dropwhile"] = new PyBuiltinFunction("dropwhile", (interp, a, _) =>
+        {
+            object pred = a[0];
+            var src = PyOps.Iterate(interp, a[1]);
+            return new PyIterator(DropWhile(interp, pred, src).GetEnumerator());
+        });
+
         return m;
+    }
+
+    private static IEnumerable<object> TakeWhile(Interp interp, object pred, IEnumerable<object> src)
+    {
+        foreach (var item in src)
+        {
+            if (!PyOps.Truthy(interp, interp.Call(pred, new[] { item })))
+                yield break;
+            yield return item;
+        }
+    }
+
+    private static IEnumerable<object> DropWhile(Interp interp, object pred, IEnumerable<object> src)
+    {
+        bool dropping = true;
+        foreach (var item in src)
+        {
+            if (dropping && PyOps.Truthy(interp, interp.Call(pred, new[] { item })))
+                continue;
+            dropping = false;
+            yield return item;
+        }
     }
 
     private static IEnumerable<object> Sliced(IEnumerable<object> src, int start, int stop, int step)

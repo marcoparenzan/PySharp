@@ -18,7 +18,30 @@ public static class JsonModule
         var m = new PyModule("json");
         var d = m.Dict;
 
+        // Real CPython json.JSONDecodeError.__init__(msg, doc, pos): computes lineno/colno from
+        // doc+pos and exposes them (plus msg/doc/pos) as real attributes, not just a pre-formatted
+        // args string — found via real requests' own `models.py` (`raise
+        // RequestsJSONDecodeError(e.msg, e.doc, e.pos)`, reading a caught JSONDecodeError's `.msg`/
+        // `.doc`/`.pos`), reachable from `import requests` (`Response.json()`).
         var decodeError = new PyClass("JSONDecodeError", new List<PyClass> { PyErr.ValueErrorClass });
+        decodeError.Dict["__init__"] = new PyBuiltinFunction("JSONDecodeError.__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string msg = (string)a[1];
+            string doc = (string)a[2];
+            int pos = (int)PyOps.AsBigInt(a[3], "pos");
+            int lineno = doc[..Math.Min(pos, doc.Length)].Count(c => c == '\n') + 1;
+            int lastNewline = doc.LastIndexOf('\n', Math.Max(0, Math.Min(pos, doc.Length) - 1));
+            int colno = pos - lastNewline;
+            string errmsg = $"{msg}: line {lineno} column {colno} (char {pos})";
+            inst.Dict["args"] = new PyTuple(new object[] { errmsg });
+            inst.Dict["msg"] = msg;
+            inst.Dict["doc"] = doc;
+            inst.Dict["pos"] = (BigInteger)pos;
+            inst.Dict["lineno"] = (BigInteger)lineno;
+            inst.Dict["colno"] = (BigInteger)colno;
+            return PyNone.Instance;
+        });
         d["JSONDecodeError"] = decodeError;
 
         d["dumps"] = new PyBuiltinFunction("dumps", (interp, a, kwargs) =>
@@ -205,7 +228,23 @@ public static class JsonModule
         public bool AtEnd => _pos >= _s.Length;
 
         public PyRaise Error(string message)
-            => new(PyErr.MakeInstance(_errorClass, $"{message}: char {_pos}"));
+        {
+            // Mirrors JSONDecodeError.__init__'s own lineno/colno algorithm above — duplicated
+            // rather than routed through a real Instantiate()/__init__ call here, since that would
+            // need threading an Interp through JsonParser for this one call. Cheap, self-contained
+            // computation; kept in sync by being right next to the class construction it mirrors.
+            int lineno = _s[..Math.Min(_pos, _s.Length)].Count(c => c == '\n') + 1;
+            int lastNewline = _s.LastIndexOf('\n', Math.Max(0, Math.Min(_pos, _s.Length) - 1));
+            int colno = _pos - lastNewline;
+            var inst = new PyInstance(_errorClass);
+            inst.Dict["args"] = new PyTuple(new object[] { $"{message}: line {lineno} column {colno} (char {_pos})" });
+            inst.Dict["msg"] = message;
+            inst.Dict["doc"] = _s;
+            inst.Dict["pos"] = (BigInteger)_pos;
+            inst.Dict["lineno"] = (BigInteger)lineno;
+            inst.Dict["colno"] = (BigInteger)colno;
+            return new PyRaise(inst);
+        }
 
         public void SkipWhitespace()
         {

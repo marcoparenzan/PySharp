@@ -294,6 +294,31 @@ public static class CollectionsModule
                 return def!;
             }
         });
+        // Real Mapping mixin: __contains__/keys/items/values, all built on the subclass's own
+        // __iter__ (yielding keys) + __getitem__ — real CPython returns lazy KeysView/ItemsView/
+        // ValuesView objects here; this returns a materialized list instead (same simplification
+        // already used elsewhere in this project, e.g. email.message.Message's own keys()/items()).
+        // Found via real requests' own `structures.py` (`CaseInsensitiveDict(MutableMapping)`,
+        // whose `.items()` is called directly by `requests.models.merge_setting`), reachable from
+        // `import requests`.
+        mapping.Dict["__contains__"] = new PyBuiltinFunction("Mapping.__contains__", (interp, a, _) =>
+        {
+            try
+            {
+                interp.GetItem(a[0], a[1]);
+                return true;
+            }
+            catch (PyRaise ex) when (ex.Value.Class.IsSubclassOf(PyErr.KeyErrorClass))
+            {
+                return false;
+            }
+        });
+        mapping.Dict["keys"] = new PyBuiltinFunction("Mapping.keys", (interp, a, _) =>
+            new PyList(PyOps.Iterate(interp, a[0])));
+        mapping.Dict["items"] = new PyBuiltinFunction("Mapping.items", (interp, a, _) =>
+            new PyList(PyOps.Iterate(interp, a[0]).Select(k => (object)new PyTuple(new[] { k, interp.GetItem(a[0], k) }))));
+        mapping.Dict["values"] = new PyBuiltinFunction("Mapping.values", (interp, a, _) =>
+            new PyList(PyOps.Iterate(interp, a[0]).Select(k => interp.GetItem(a[0], k))));
         return mapping;
     }
 
@@ -356,6 +381,41 @@ public static class CollectionsModule
                 interp.SetItem(a[0], a[1], def);
                 return def;
             }
+        });
+        // Real MutableMapping.update(other=(), **kwds): a real Mapping (or anything with a real
+        // `keys()`) is applied key-by-key via __getitem__/__setitem__; anything else is iterated as
+        // (key, value) pairs, matching real CPython's own algorithm. Found via real requests' own
+        // `structures.py` (`CaseInsensitiveDict(MutableMapping)`, whose own `__init__` calls
+        // `self.update(data, **kwargs)`, relying on this exact inherited mixin method), reachable
+        // from `import requests`.
+        mutableMapping.Dict["update"] = new PyBuiltinFunction("MutableMapping.update", (interp, a, kwargs) =>
+        {
+            if (a.Length > 1 && a[1] is not PyNone)
+            {
+                object other = a[1];
+                if (other is PyDict pd)
+                {
+                    foreach (var e in pd.Entries)
+                        interp.SetItem(a[0], e.Key, e.Value);
+                }
+                else if (interp.TryCallMethod(other, "keys", Array.Empty<object>(), out var keysResult))
+                {
+                    foreach (var k in PyOps.Iterate(interp, keysResult))
+                        interp.SetItem(a[0], k, interp.GetItem(other, k));
+                }
+                else
+                {
+                    foreach (var pair in PyOps.Iterate(interp, other))
+                    {
+                        var kv = PyOps.Iterate(interp, pair).ToArray();
+                        interp.SetItem(a[0], kv[0], kv[1]);
+                    }
+                }
+            }
+            if (kwargs is not null)
+                foreach (var (k, v) in kwargs)
+                    interp.SetItem(a[0], k, v);
+            return PyNone.Instance;
         });
         // Real MutableMapping.clear(): repeatedly popitem() until empty.
         mutableMapping.Dict["clear"] = new PyBuiltinFunction("MutableMapping.clear", (interp, a, _) =>

@@ -129,6 +129,13 @@ public sealed class PyModule
     {
         Name = name;
         Dict["__name__"] = name;
+        // Real CPython: every module has a real `__doc__` global (its docstring, or None when
+        // absent) — found via real requests' own `models.py` module-level `_init` referencing the
+        // bare name `__doc__`, reachable from `import requests`. Defaulting to None here (rather
+        // than leaving it unbound, which raised NameError) matches the same "not a byte-identical
+        // docstring capture, just a real always-present default" simplification already accepted
+        // for class __doc__ elsewhere in this project.
+        Dict["__doc__"] = PyNone.Instance;
     }
 
     /// <summary>Wraps an *existing* dict as this module's namespace (instead of a fresh one) —

@@ -58,7 +58,65 @@ public static class TimeModule
             return DateToStructTime(when);
         });
 
+        // Real (not stubbed) strptime — Python strftime-style directives translated to .NET custom
+        // date-format tokens, non-directive characters individually literal-escaped (so a literal
+        // "GMT" in the format string, e.g., isn't misread as the .NET month/AM-PM specifiers it
+        // happens to contain). Found via real requests' own `cookies.py` (`calendar.timegm(
+        // time.strptime(morsel["expires"], "%a, %d-%b-%Y %H:%M:%S GMT"))`, parsing a cookie's real
+        // `expires=` attribute), reachable from `import requests`. Directives beyond the common
+        // Y/y/m/d/H/M/S/a/A/b/B/p set (e.g. %z/%j) are out of scope — nothing reachable needs them.
+        d["strptime"] = new PyBuiltinFunction("strptime", (_, args, _) =>
+        {
+            string value = (string)args[0];
+            string fmt = args.Length > 1 ? (string)args[1] : "%a %b %d %H:%M:%S %Y";
+            string netFmt = ConvertStrptimeFormat(fmt);
+            if (!DateTime.TryParseExact(value, netFmt, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var dt))
+                throw PyErr.ValueError($"time data '{value}' does not match format '{fmt}'");
+            return DateToStructTime(dt);
+        });
+
         return m;
+    }
+
+    /// <summary>Real CPython's calendar.timegm needs exactly this: a struct_time's components,
+    /// treated as UTC, converted to a DateTime — public so CalendarModule can reuse it directly
+    /// rather than re-deriving struct_time field extraction.</summary>
+    public static DateTime StructTimeToDateTime(object structTimeOrTuple)
+        => StructTimeToDate(StructValues(structTimeOrTuple));
+
+    private static string ConvertStrptimeFormat(string pyFormat)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < pyFormat.Length; i++)
+        {
+            char c = pyFormat[i];
+            if (c == '%' && i + 1 < pyFormat.Length)
+            {
+                sb.Append(pyFormat[++i] switch
+                {
+                    'Y' => "yyyy",
+                    'y' => "yy",
+                    'm' => "MM",
+                    'd' => "dd",
+                    'H' => "HH",
+                    'M' => "mm",
+                    'S' => "ss",
+                    'a' => "ddd",
+                    'A' => "dddd",
+                    'b' => "MMM",
+                    'B' => "MMMM",
+                    'p' => "tt",
+                    '%' => "\\%",
+                    _ => "",
+                });
+            }
+            else
+            {
+                sb.Append('\\').Append(c);
+            }
+        }
+        return sb.ToString();
     }
 
     private static readonly PyClass StructTimeClass = BuildStructTimeClass();

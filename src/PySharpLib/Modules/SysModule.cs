@@ -24,6 +24,12 @@ public static class SysModule
         d["maxsize"] = new BigInteger(long.MaxValue);
         d["maxunicode"] = new BigInteger(0x10FFFF);
         d["argv"] = new PyList(interp.Argv.Select(x => (object)x));
+        // Real CPython: sys.audit(event, *args) fires registered audit hooks (PEP 578) — a real
+        // no-op here since nothing calls sys.addaudithook to register one. Found via real urllib3's
+        // own `connection.py` (`sys.audit("http.client.connect", self, self.host, self.port)`),
+        // reachable from `import requests`.
+        d["audit"] = new PyBuiltinFunction("audit", (_, _, _) => PyNone.Instance);
+        d["addaudithook"] = new PyBuiltinFunction("addaudithook", (_, _, _) => PyNone.Instance);
         d["modules"] = importer.Modules;
         // A live PyList, not a snapshot: kept on the Importer too (PythonSysPath) so a script's
         // own sys.path.insert(...)/.append(...) genuinely changes where `import` looks next.

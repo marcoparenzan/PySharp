@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using PySharpLib.Interpretation;
@@ -109,6 +110,44 @@ public static class TypeMethods
                 value = (object?)task.FutWaiter ?? PyNone.Instance;
                 return true;
             }
+        }
+        // Universal fallback: __iter__/__len__/__contains__ as real, hasattr()-visible *methods* for
+        // any builtin value that structurally supports the corresponding protocol via PyOps (dict/
+        // list/tuple/set/str/bytes/range/...). The language's own syntax (`for x in d`, `len(d)`, `x
+        // in d`) already dispatches straight to PyOps and never needed a Table entry for these names
+        // — but explicitly calling them as methods (`d.__iter__()`) or checking `hasattr(d,
+        // "__iter__")` (a common real duck-typing idiom) always failed before, since no per-type
+        // Table entry existed. Found live via real requests' own `models.py`
+        // (`_encode_params`: `hasattr(data, "__iter__")` on a plain dict, deciding whether to
+        // urlencode it), reachable from `import requests`.
+        if (name == "__iter__")
+        {
+            try
+            {
+                PyOps.GetIter(interp, obj); // validate obj is actually iterable; recomputed fresh below
+                value = new PyBuiltinFunction("__iter__", (i2, _, _) => PyOps.GetIter(i2, obj));
+                return true;
+            }
+            catch (PyRaise)
+            {
+            }
+        }
+        if (name == "__len__")
+        {
+            try
+            {
+                int len = PyOps.Len(interp, obj);
+                value = new PyBuiltinFunction("__len__", (_, _, _) => (System.Numerics.BigInteger)len);
+                return true;
+            }
+            catch (PyRaise)
+            {
+            }
+        }
+        if (name == "__contains__")
+        {
+            value = new PyBuiltinFunction("__contains__", (i2, a2, _) => PyOps.Contains(i2, obj, a2[0]));
+            return true;
         }
         // Universal fallback: `x.__class__` for any builtin value (PyInstance has its own, correct,
         // earlier in Interp.GetAttr's switch — this only runs for everything else: None, str, int,
@@ -282,11 +321,17 @@ public static class StrModules
             string encoding = a.Length > 1 ? TypeMethods.StrArg(a[1], "encoding")
                 : kw is not null && kw.TryGetValue("encoding", out var e) ? TypeMethods.StrArg(e, "encoding")
                 : "utf-8";
+            if (IsIdna(encoding))
+                return new PyBytes(Encoding.ASCII.GetBytes(EncodeIdna(S(a))));
             return new PyBytes(GetEncoding(encoding).GetBytes(S(a)));
         });
         Add("format", (interp, a, kw) => FormatMethod(interp, S(a), a.Skip(1).ToArray(), kw));
         Add("isdigit", (_, a, _) => S(a).Length > 0 && S(a).All(char.IsDigit));
         Add("isalpha", (_, a, _) => S(a).Length > 0 && S(a).All(char.IsLetter));
+        // Real CPython: isascii() is True for an empty string too (unlike isdigit/isalpha above).
+        // Found via real urllib3's own `util/url.py` (`unicode_is_ascii` helper doing
+        // `str.isascii(s)`), reachable from `import requests`.
+        Add("isascii", (_, a, _) => S(a).All(c => c < 128));
         Add("isalnum", (_, a, _) => S(a).Length > 0 && S(a).All(char.IsLetterOrDigit));
         Add("isspace", (_, a, _) => S(a).Length > 0 && S(a).All(char.IsWhiteSpace));
         Add("isupper", (_, a, _) => S(a).Any(char.IsLetter) && !S(a).Any(char.IsLower));
@@ -325,6 +370,41 @@ public static class StrModules
         "utf16be" => Encoding.BigEndianUnicode,
         _ => throw PyErr.Raise(PyErr.LookupError, $"unknown encoding: {name}"),
     };
+
+    internal static bool IsIdna(string name) => name.ToLowerInvariant().Replace("-", "").Replace("_", "") == "idna";
+
+    /// <summary>Real IDNA hostname encoding (RFC 3490, "punycode" labels) via .NET's own
+    /// System.Globalization.IdnMapping — not a byte<->char System.Text.Encoding at all (a
+    /// string-to-string transformation), so it needs its own path rather than fitting GetEncoding's
+    /// switch. Found via urllib3's own `util/connection.py` (`host.encode("idna")`, used to detect
+    /// whether a hostname is IDNA-encodable before an IPv6-vs-IPv4 DNS lookup decision) and real
+    /// requests' own `models.py` (`import encodings.idna` — a module-level "make sure this codec is
+    /// registered" import with no functional call at that point), both reachable from `import
+    /// requests`. A failure raises the real `UnicodeError` (not e.g. LookupError), matching urllib3's
+    /// own `except UnicodeError:` around this exact call.</summary>
+    internal static string EncodeIdna(string s)
+    {
+        try
+        {
+            return new IdnMapping().GetAscii(s);
+        }
+        catch (ArgumentException ex)
+        {
+            throw PyErr.Raise(PyErr.UnicodeErrorClass, ex.Message);
+        }
+    }
+
+    internal static string DecodeIdna(byte[] data)
+    {
+        try
+        {
+            return new IdnMapping().GetUnicode(Encoding.ASCII.GetString(data));
+        }
+        catch (ArgumentException ex)
+        {
+            throw PyErr.Raise(PyErr.UnicodeErrorClass, ex.Message);
+        }
+    }
 
     private static object StripImpl(string s, object? charsArg, bool both, bool left)
     {
@@ -1070,6 +1150,8 @@ public static class BytesMethods
             string encoding = a.Length > 1 ? TypeMethods.StrArg(a[1], "encoding")
                 : kw is not null && kw.TryGetValue("encoding", out var e) ? TypeMethods.StrArg(e, "encoding")
                 : "utf-8";
+            if (StrModules.IsIdna(encoding))
+                return StrModules.DecodeIdna(B(a).Data);
             return StrModules.GetEncoding(encoding).GetString(B(a).Data);
         });
         Add("hex", (_, a, _) => Convert.ToHexString(B(a).Data).ToLowerInvariant());
@@ -1248,6 +1330,8 @@ public static class ByteArrayMethods
         Add("decode", (_, a, _) =>
         {
             string encoding = a.Length > 1 ? TypeMethods.StrArg(a[1], "encoding") : "utf-8";
+            if (StrModules.IsIdna(encoding))
+                return StrModules.DecodeIdna(BA(a).Data.ToArray());
             return StrModules.GetEncoding(encoding).GetString(BA(a).Data.ToArray());
         });
         Add("clear", (_, a, _) =>

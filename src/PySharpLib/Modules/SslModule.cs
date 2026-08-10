@@ -62,6 +62,29 @@ public static class SslModule
         d["OP_NO_SSLv3"] = new BigInteger(0x02000000);
         d["OP_NO_TLSv1"] = new BigInteger(0x04000000);
         d["OP_NO_TLSv1_1"] = new BigInteger(0x10000000);
+        d["OP_NO_COMPRESSION"] = new BigInteger(0x20000);
+        d["OP_NO_TICKET"] = new BigInteger(0x4000);
+        d["VERIFY_X509_PARTIAL_CHAIN"] = new BigInteger(0x80000);
+        d["VERIFY_X509_STRICT"] = new BigInteger(0x20000000);
+        d["HAS_NEVER_CHECK_COMMON_NAME"] = false;
+        // Backed by .NET's own TLS stack (SChannel/OpenSSL depending on platform), not literally
+        // OpenSSL — a real, plausible-format version string so real callers that pattern-match
+        // against it (urllib3's own LibreSSL-bug detection, e.g.) see an ordinary modern OpenSSL
+        // string rather than nothing. Found via urllib3's own `util/ssl_.py`
+        // (`from ssl import (..., OPENSSL_VERSION, ...)`), reachable from `import requests`.
+        d["OPENSSL_VERSION"] = "OpenSSL 3.0.13 30 Jan 2024";
+        d["OPENSSL_VERSION_NUMBER"] = new BigInteger(0x30000130);
+        d["OPENSSL_VERSION_INFO"] = new PyTuple(new object[] { new BigInteger(3), new BigInteger(0), new BigInteger(13), new BigInteger(0), new BigInteger(0) });
+
+        var tlsVersionClass = new PyClass("TLSVersion", new List<PyClass>());
+        tlsVersionClass.Dict["MINIMUM_SUPPORTED"] = new BigInteger(-2);
+        tlsVersionClass.Dict["MAXIMUM_SUPPORTED"] = new BigInteger(-1);
+        tlsVersionClass.Dict["SSLv3"] = new BigInteger(768);
+        tlsVersionClass.Dict["TLSv1"] = new BigInteger(769);
+        tlsVersionClass.Dict["TLSv1_1"] = new BigInteger(770);
+        tlsVersionClass.Dict["TLSv1_2"] = new BigInteger(771);
+        tlsVersionClass.Dict["TLSv1_3"] = new BigInteger(772);
+        d["TLSVersion"] = tlsVersionClass;
 
         d["SSLError"] = SslErrorClass;
         d["SSLWantReadError"] = SslWantReadClass;
@@ -81,6 +104,10 @@ public static class SslModule
             inst.Dict[CtxKey] = new CtxState();
             inst.Dict["check_hostname"] = true;
             inst.Dict["verify_mode"] = new BigInteger(2); // CERT_REQUIRED
+            inst.Dict["options"] = new BigInteger(0x02000000 | 0x01000000 | 0x20000);
+            inst.Dict["minimum_version"] = PyNone.Instance;
+            inst.Dict["maximum_version"] = PyNone.Instance;
+            inst.Dict["verify_flags"] = BigInteger.Zero; // real default: ssl.VERIFY_DEFAULT (0)
             return inst;
         });
 
@@ -114,6 +141,16 @@ public static class SslModule
             // defaults like CPython for PROTOCOL_TLS_CLIENT: host verification + cert required
             inst.Dict["check_hostname"] = true;
             inst.Dict["verify_mode"] = new BigInteger(2); // CERT_REQUIRED
+            // Real CPython's default SSLContext.options already has OP_NO_SSLv2/OP_NO_SSLv3/
+            // OP_NO_COMPRESSION set; real code (urllib3's own `util/ssl_.py`) reads/OR-assigns into
+            // this — the wrap_socket() below always negotiates TLS1.2+/no compression regardless, so
+            // this attribute's value doesn't otherwise change behavior, it just needs to exist as a
+            // real int. Found via real urllib3's own `create_urllib3_context`, reachable from
+            // `import requests`.
+            inst.Dict["options"] = new BigInteger(0x02000000 | 0x01000000 | 0x20000);
+            inst.Dict["minimum_version"] = PyNone.Instance;
+            inst.Dict["maximum_version"] = PyNone.Instance;
+            inst.Dict["verify_flags"] = BigInteger.Zero; // real default: ssl.VERIFY_DEFAULT (0)
             return PyNone.Instance;
         });
 
@@ -336,7 +373,33 @@ public static class SslModule
         });
 
         Add("do_handshake", (_, _, _) => PyNone.Instance); // already done in wrap_socket
-        Add("getpeercert", (_, _, _) => new PyDict());
+        // Real (not stubbed) peer certificate details — SslStream itself already validated the
+        // certificate/hostname during the handshake (AuthenticateAsClient above), but real urllib3
+        // does its *own* independent application-level hostname check against getpeercert()'s
+        // subjectAltName (a defense-in-depth cross-check, `_match_hostname` in its vendored
+        // `ssl_match_hostname.py`), so an empty dict here made every real HTTPS request fail with
+        // "empty or no certificate". Found live via `import requests` making a real HTTPS GET.
+        Add("getpeercert", (_, a, _) =>
+        {
+            var result = new PyDict();
+            if (Wrap(a[0]).Stream.RemoteCertificate is X509Certificate2 cert)
+            {
+                var sanEntries = new List<object>();
+                foreach (var ext in cert.Extensions)
+                {
+                    if (ext is X509SubjectAlternativeNameExtension sanExt)
+                        foreach (var dns in sanExt.EnumerateDnsNames())
+                            sanEntries.Add(new PyTuple(new object[] { "DNS", dns }));
+                }
+                result["subjectAltName"] = new PyTuple(sanEntries.ToArray());
+                string cn = cert.GetNameInfo(X509NameType.SimpleName, false);
+                result["subject"] = new PyTuple(new object[]
+                {
+                    new PyTuple(new object[] { new PyTuple(new object[] { "commonName", cn }) }),
+                });
+            }
+            return result;
+        });
         Add("version", (_, a, _) => Wrap(a[0]).Stream.SslProtocol.ToString());
         Add("selected_alpn_protocol", (_, _, _) => PyNone.Instance);
         Add("fileno", (_, a, _) =>

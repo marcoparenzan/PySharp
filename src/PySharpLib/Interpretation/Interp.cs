@@ -642,6 +642,18 @@ public sealed class Interp
         }
 
         cls.Dict["_fields"] = new PyTuple(fields.Select(f => (object)f).ToArray());
+        // Real CPython: `class Foo(NamedTuple): ...` never actually keeps typing.NamedTuple as a
+        // real base at runtime (Foo.__bases__ is really (tuple,)) — here, `NamedTuple` stays a real
+        // shared PyClass in cls.Bases (for the "is a subclass of NamedTuple" MRO check other code
+        // might rely on), but it also carries a `__new__` meant only for its *other* job, the
+        // functional syntax `NamedTuple("Name", [...])` (see MiscModules.cs) — expecting a typename
+        // string as the first positional arg. Inherited unmodified, calling `Foo(a=1, b=2)` (no
+        // positional args) would hit that same __new__ and immediately IndexOutOfRange on a missing
+        // a[1], surfacing as a confusing "NamedTuple.__new__() missing required argument". Explicitly
+        // overriding __new__ back to the ordinary blank-instance behavior here shadows it. Found live
+        // via real urllib3's own `poolmanager.py` (`class PoolKey(typing.NamedTuple): ...` then
+        // `PoolKey(**context)`), reachable from `import requests`.
+        cls.Dict["__new__"] = ObjectNewFallback;
         cls.Dict["__init__"] = new PyBuiltinFunction($"{cls.Name}.__init__", (_, a, kwargs) =>
         {
             var inst = (PyInstance)a[0];

@@ -19,7 +19,43 @@ public static class BinasciiModule
     public static PyModule Create()
     {
         var m = new PyModule("binascii");
-        m.Dict["Error"] = ErrorClass;
+        var d = m.Dict;
+        d["Error"] = ErrorClass;
+
+        // Real hexlify/unhexlify — found via urllib3's real `util/ssltransport.py` /
+        // `util/ssl_.py` (certificate fingerprint handling), reachable from `import requests`.
+        d["hexlify"] = new PyBuiltinFunction("hexlify", (_, a, _) =>
+        {
+            byte[] data = a[0] switch
+            {
+                PyBytes b => b.Data,
+                PyByteArray ba => ba.Data.ToArray(),
+                _ => throw PyErr.TypeError($"a bytes-like object is required, not '{PyOps.TypeName(a[0])}'"),
+            };
+            return new PyBytes(System.Text.Encoding.ASCII.GetBytes(Convert.ToHexString(data).ToLowerInvariant()));
+        });
+
+        d["unhexlify"] = new PyBuiltinFunction("unhexlify", (_, a, _) =>
+        {
+            string hex = a[0] switch
+            {
+                string s => s,
+                PyBytes b => System.Text.Encoding.ASCII.GetString(b.Data),
+                PyByteArray ba => System.Text.Encoding.ASCII.GetString(ba.Data.ToArray()),
+                _ => throw PyErr.TypeError($"argument should be bytes, not '{PyOps.TypeName(a[0])}'"),
+            };
+            if (hex.Length % 2 != 0)
+                throw new PyRaise(PyErr.MakeInstance(ErrorClass, "Odd-length string"));
+            try
+            {
+                return new PyBytes(Convert.FromHexString(hex));
+            }
+            catch (FormatException)
+            {
+                throw new PyRaise(PyErr.MakeInstance(ErrorClass, "Non-hexadecimal digit found"));
+            }
+        });
+
         return m;
     }
 }

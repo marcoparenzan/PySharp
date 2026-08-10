@@ -52,12 +52,114 @@ public static class CodecsModule
         return m;
     }
 
+    /// <summary>Real CPython's `codecs.CodecInfo` is a `tuple` subclass — `(encode, decode,
+    /// streamreader, streamwriter, ...)` — and real code indexes into it directly. Found via
+    /// urllib3's own `filepost.py`: `writer = codecs.lookup("utf-8")[3]`, then `writer(body).write(s)`
+    /// to encode-and-append a str field onto a multipart/form-data body — reachable from `import
+    /// requests`.</summary>
     private static PyInstance MakeCodecInfo(string name, Encoding enc)
     {
         var cls = new PyClass("CodecInfo", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"CodecInfo.{n}", fn);
+
+        Add("__getitem__", (_, a, _) =>
+        {
+            int idx = (int)PyOps.AsBigInt(a[1], "index");
+            return idx switch
+            {
+                0 => MakeEncodeFn(name, enc),
+                1 => MakeDecodeFn(name, enc),
+                2 => MakeStreamReaderClass(name, enc),
+                3 => MakeStreamWriterClass(name, enc),
+                _ => throw PyErr.IndexError("CodecInfo index out of range"),
+            };
+        });
+
         var inst = new PyInstance(cls);
         inst.Dict["name"] = enc.WebName;
+        inst.Dict["encode"] = MakeEncodeFn(name, enc);
+        inst.Dict["decode"] = MakeDecodeFn(name, enc);
+        inst.Dict["streamreader"] = MakeStreamReaderClass(name, enc);
+        inst.Dict["streamwriter"] = MakeStreamWriterClass(name, enc);
         return inst;
+    }
+
+    private static PyBuiltinFunction MakeEncodeFn(string name, Encoding enc) =>
+        new($"{name}.encode", (_, a, kwargs) =>
+        {
+            string s = (string)a[0];
+            string errors = a.Length > 1 ? (string)a[1]
+                : kwargs is not null && kwargs.TryGetValue("errors", out var e) ? (string)e : "strict";
+            var bytes = BuildEncodingForErrors(name, errors).GetBytes(s);
+            return new PyTuple(new object[] { new PyBytes(bytes), (System.Numerics.BigInteger)s.Length });
+        });
+
+    private static PyBuiltinFunction MakeDecodeFn(string name, Encoding enc) =>
+        new($"{name}.decode", (_, a, kwargs) =>
+        {
+            byte[] data = CryptoModules.AsBytes(a[0]);
+            string errors = a.Length > 1 ? (string)a[1]
+                : kwargs is not null && kwargs.TryGetValue("errors", out var e) ? (string)e : "strict";
+            string s = BuildEncodingForErrors(name, errors).GetString(data);
+            return new PyTuple(new object[] { s, (System.Numerics.BigInteger)data.Length });
+        });
+
+    private static PyClass MakeStreamWriterClass(string name, Encoding enc)
+    {
+        var cls = new PyClass("StreamWriter", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"StreamWriter.{n}", fn);
+
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict["__stream__"] = a[1];
+            inst.Dict["errors"] = a.Length > 2 ? (string)a[2]
+                : kwargs is not null && kwargs.TryGetValue("errors", out var e) ? (string)e : "strict";
+            return PyNone.Instance;
+        });
+        Add("write", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string s = (string)a[1];
+            string errors = (string)inst.Dict["errors"];
+            var bytes = BuildEncodingForErrors(name, errors).GetBytes(s);
+            interp.CallMethod(inst.Dict["__stream__"], "write", new object[] { new PyBytes(bytes) });
+            return PyNone.Instance;
+        });
+        Add("writelines", (interp, a, _) =>
+        {
+            foreach (var line in PyOps.Iterate(interp, a[1]))
+                interp.CallMethod(a[0], "write", new[] { line });
+            return PyNone.Instance;
+        });
+
+        return cls;
+    }
+
+    private static PyClass MakeStreamReaderClass(string name, Encoding enc)
+    {
+        var cls = new PyClass("StreamReader", new List<PyClass>());
+        void Add(string n, BuiltinFn fn) => cls.Dict[n] = new PyBuiltinFunction($"StreamReader.{n}", fn);
+
+        Add("__init__", (_, a, kwargs) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict["__stream__"] = a[1];
+            inst.Dict["errors"] = a.Length > 2 ? (string)a[2]
+                : kwargs is not null && kwargs.TryGetValue("errors", out var e) ? (string)e : "strict";
+            return PyNone.Instance;
+        });
+        Add("read", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            object size = a.Length > 1 ? a[1] : (object)(System.Numerics.BigInteger)(-1);
+            var raw = interp.CallMethod(inst.Dict["__stream__"], "read", new[] { size });
+            byte[] data = CryptoModules.AsBytes(raw);
+            string errors = (string)inst.Dict["errors"];
+            return BuildEncodingForErrors(name, errors).GetString(data);
+        });
+
+        return cls;
     }
 
     private static Encoding BuildEncodingForErrors(string name, string errors)

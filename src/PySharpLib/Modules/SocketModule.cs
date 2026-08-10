@@ -30,6 +30,8 @@ public static class SocketModule
     public static readonly PyClass GaiErrorClass = new("gaierror", new List<PyClass> { PyErr.OSErrorClass });
     public static readonly PyClass SocketClass = BuildSocketClass();
 
+    private static double? DefaultTimeout;
+
     public static PyModule Create(Interp interp)
     {
         var m = new PyModule("socket");
@@ -81,6 +83,14 @@ public static class SocketModule
         d["timeout"] = TimeoutClass;
         d["gaierror"] = GaiErrorClass;
         d["socket"] = SocketClass;
+
+        d["getdefaulttimeout"] = new PyBuiltinFunction("getdefaulttimeout", (_, _, _) =>
+            DefaultTimeout is double dt ? dt : PyNone.Instance);
+        d["setdefaulttimeout"] = new PyBuiltinFunction("setdefaulttimeout", (_, a, _) =>
+        {
+            DefaultTimeout = a.Length > 0 && a[0] is not PyNone ? PyOps.AsDouble(a[0]) : null;
+            return PyNone.Instance;
+        });
 
         d["create_connection"] = new PyBuiltinFunction("create_connection", (interp, a, kwargs) =>
         {
@@ -210,13 +220,20 @@ public static class SocketModule
         var cls = new PyClass("socket", new List<PyClass>());
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"socket.{name}", fn);
 
-        Add("__init__", (_, a, _) =>
+        Add("__init__", (_, a, kwargs) =>
         {
             var inst = (PyInstance)a[0];
-            inst.Dict[WrapKey] = new SockWrap
-            {
-                Socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp),
-            };
+            int family = a.Length > 1 ? (int)PyOps.AsBigInt(a[1], "family")
+                : kwargs is not null && kwargs.TryGetValue("family", out var f) ? (int)PyOps.AsBigInt(f, "family")
+                : 2; // AF_INET
+            int type = a.Length > 2 ? (int)PyOps.AsBigInt(a[2], "type")
+                : kwargs is not null && kwargs.TryGetValue("type", out var t) ? (int)PyOps.AsBigInt(t, "type")
+                : 1; // SOCK_STREAM
+            var af = family == 10 ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork;
+            var (sockType, proto) = type == 2
+                ? (SocketType.Dgram, ProtocolType.Udp)
+                : (SocketType.Stream, ProtocolType.Tcp);
+            inst.Dict[WrapKey] = new SockWrap { Socket = new Socket(af, sockType, proto) };
             return PyNone.Instance;
         });
 
@@ -335,8 +352,19 @@ public static class SocketModule
             var addr = (PyTuple)a[1];
             string host = (string)addr.Items[0];
             int port = (int)PyOps.AsBigInt(addr.Items[1], "port");
-            w.Socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            w.Socket.Bind(new IPEndPoint(IPAddress.Parse(host), port));
+            try
+            {
+                w.Socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                w.Socket.Bind(new IPEndPoint(IPAddress.Parse(host), port));
+            }
+            catch (SocketException ex)
+            {
+                throw Translate(ex);
+            }
+            catch (FormatException)
+            {
+                throw new PyRaise(PyErr.MakeInstance(GaiErrorClass, $"'{host}' is not a valid address"));
+            }
             return PyNone.Instance;
         });
 

@@ -28,6 +28,12 @@ public static class IoModule
         m.Dict["SEEK_SET"] = (BigInteger)0;
         m.Dict["SEEK_CUR"] = (BigInteger)1;
         m.Dict["SEEK_END"] = (BigInteger)2;
+        // Real CPython: io.UnsupportedOperation is a real diamond multiple-inheritance class
+        // (OSError, ValueError) — raised for e.g. calling .fileno() on an in-memory stream. Found
+        // via real requests' own `models.py` (`from io import UnsupportedOperation`), reachable
+        // from `import requests`.
+        m.Dict["UnsupportedOperation"] = new PyClass("UnsupportedOperation",
+            new List<PyClass> { PyErr.OSErrorClass, PyErr.ValueErrorClass });
         return m;
     }
 

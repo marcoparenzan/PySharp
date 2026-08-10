@@ -24,6 +24,10 @@ public static class StdlibModules
         importer.RegisterBuiltin("sys", interp => SysModule.Create(interp, importer));
         importer.RegisterBuiltin("time", _ => TimeModule.Create());
         importer.RegisterBuiltin("os", _ => OsModule.Create());
+        // Real CPython: `os.path` is importable both as `os.path` (an attribute reached only after
+        // `import os`) and as its own dotted module name (`import os.path` directly) — found via
+        // real requests' own `certs.py`, reachable from `import requests`.
+        importer.RegisterBuiltin("os.path", _ => (PyModule)OsModule.Create().Dict["path"]);
         importer.RegisterBuiltin("pathlib", _ => PathlibModule.Create());
         importer.RegisterBuiltin("errno", _ => MiscModules.CreateErrno());
         importer.RegisterBuiltin("platform", _ => MiscModules.CreatePlatform());
@@ -91,6 +95,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("email", _ => EmailModule.Create());
         importer.RegisterBuiltin("email.utils", _ => EmailModule.CreateUtils());
         importer.RegisterBuiltin("email.message", _ => EmailModule.CreateMessage());
+        importer.RegisterBuiltin("email.errors", _ => EmailModule.CreateErrors());
         importer.RegisterBuiltin("mimetypes", _ => MimetypesModule.Create());
         importer.RegisterBuiltin("secrets", _ => SecretsModule.Create());
         importer.RegisterBuiltin("array", _ => ArrayModule.Create());
@@ -104,6 +109,13 @@ public static class StdlibModules
         importer.RegisterBuiltin("inspect", _ => InspectModule.Create());
         importer.RegisterBuiltin("sqlite3", _ => Sqlite3Module.Create());
         importer.RegisterBuiltin("pyodbc", _ => PyodbcModule.Create());
+        importer.RegisterBuiltin("random", _ => RandomModule.Create());
+        importer.RegisterBuiltin("importlib.metadata", _ => ImportlibMetadataModule.Create(importer));
+        importer.RegisterBuiltin("zipfile", _ => ZipfileModule.Create());
+        importer.RegisterBuiltin("calendar", _ => CalendarModule.Create());
+        importer.RegisterBuiltin("encodings", _ => new PyModule("encodings"));
+        importer.RegisterBuiltin("encodings.aliases", _ => EncodingsAliasesModule.Create());
+        importer.RegisterBuiltin("encodings.idna", _ => EncodingsIdnaModule.Create());
         // `import builtins` gets the same module every name implicitly falls back to.
         importer.RegisterBuiltin("builtins", _ => importer.BuiltinsModule);
     }

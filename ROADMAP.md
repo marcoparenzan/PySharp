@@ -40,7 +40,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
 | 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel + 30-pattern robustness sweep, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
 | 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | 🟡 In progress (3a ✅ sqlite3, 3c ✅ SQL Server, 3b ⚪ blocked — no Postgres server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅; Postgres (`Npgsql`) blocked on server availability — see SQL_PLAN.md |
-| 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
+| 4 | **HTTP client** (requests-like) | [samples/requests_demo.py](samples/requests_demo.py) | ✅ **Done** | real `http.client` (subclassable HTTPConnection/HTTPSConnection/HTTPResponse) ✅ — the real, unmodified `requests` package runs live over real HTTPS (GET/POST/redirects/sessions/cookies), see HTTP_PLAN.md |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
 | 6 | **MQTT broker** (server) | _to be created_ | ⚪ Planned | MQTT server on the C# `socket`: MQTT packet parsing (`struct`), session/topic management |
 | 7 | **AMQP / RabbitMQ** | _to be created_ | ⚪ Planned | AMQP 0-9-1 client (e.g. pure `pika`) on the `socket`, or a C# shim on `RabbitMQ.Client` |
@@ -50,8 +50,8 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
-Scenarios 4–9 are **backlog** collected with the author. **5** (MQTT subscribe) and **9** (JSON+YAML)
-are **already done** (see below); **4/6/7/8** remain to be prioritized.
+Scenarios 4–9 are **backlog** collected with the author. **4** (HTTP client), **5** (MQTT subscribe),
+and **9** (JSON+YAML) are **already done** (see below); **6/7/8** remain to be prioritized.
 
 > **Realism note on ordering.** Technically scenario 3 (SQL) is **simpler** than scenario 2 (FastAPI):
 > SQLite is a well-bounded C# shim, whereas FastAPI requires the **heaviest work of all** — `async`/
@@ -253,6 +253,29 @@ checkpoint but the plan doc is the live source of truth while 3b is in progress.
   [PyodbcTests.cs](src/PySharp.Tests/M6_Stdlib/PyodbcTests.cs) (skip, not fail, on a machine with no
   LocalDB — see `SqlServerLocalDbFixture.cs`).
 
+### Scenario 4 — HTTP client ✅
+
+Full blow-by-blow lives in [HTTP_PLAN.md](HTTP_PLAN.md). The real, unmodified `requests` package
+(→ `urllib3` → this project's own `http.client`) runs live: `GET`/`POST` with query params and real
+JSON bodies, a `Session` following real redirects and persisting real cookies, and a caught
+`requests.exceptions.HTTPError` from `raise_for_status()` — all verified against a real public
+server (`httpbin.org`). urllib3's own `HTTPConnection`/`HTTPSConnection` genuinely subclass
+`http.client`'s and drive it via `super()`, so a lightweight requests-shaped shim wouldn't have
+worked — a real `http.client.HTTPConnection`/`HTTPSConnection`/`HTTPResponse` was built instead
+([HttpClientModule.cs](src/PySharpLib/Modules/HttpClientModule.cs)), reusing the existing real
+`socket`/`ssl` modules for all I/O rather than a separate raw-socket layer. Along the way, 25 real
+gaps were found and fixed — about half genuinely new stdlib modules/functions (`email.errors`,
+`zipfile`, `calendar.timegm`/`time.strptime`, `encodings`/`encodings.aliases`/`encodings.idna`,
+`random`, `importlib.metadata`, `IOError`/`EnvironmentError`, ...), the other half real,
+general-purpose interpreter bugs unrelated to HTTP specifically and never exercised by any prior
+scenario (`str(bytes, encoding, errors)`'s decode overload, `hasattr(x, "__iter__")` on builtin
+containers, `typing.Protocol`/`@runtime_checkable` structural `isinstance()`,
+`collections.abc.Mapping`/`MutableMapping`'s missing `update`/`items`/`keys`/`values` mixins, a
+`class Foo(typing.NamedTuple):` construction bug, a missing module-level `__doc__` default, a
+missing `__import__` builtin). Verified live via
+[samples/requests_demo.py](samples/requests_demo.py); 9 tests (against a real local TCP server, no
+external dependency) in [HttpClientTests.cs](src/PySharp.Tests/M18_Http/HttpClientTests.cs).
+
 ### Scenario 5 — MQTT subscribe on a broker ✅
 
 The script [samples/mqtt_subscribe.py](samples/mqtt_subscribe.py) performs a **real MQTT round-trip**:
@@ -332,18 +355,20 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 ### Axis B — Stdlib
 
-Implemented **~61 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
-stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `time`, `platform`,
+Implemented **~70 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
+stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `os.path`, `time`, `platform`,
 `errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio` (incl. real `Runner`/`Task`/protocols hierarchy), `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
 (`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
 `re` (real regex engine, incl. `pos`/`endpos` and `Match.groups(default)` positionally), `datetime`, `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`,
 `decimal`, `itertools`, `operator`, `types`, `abc`, `contextlib` (incl. `asynccontextmanager` at
 decoration time), `inspect` (incl. a real `isfunction` fix — async/generator functions were
-previously misclassified — and real coroutine-state constants/`getcoroutinestate`), `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`,
-`concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`,
-`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `pyodbc`; real (not stub)
-`typing` and `dataclasses`; stub `__future__`.
+previously misclassified — and real coroutine-state constants/`getcoroutinestate`), `shlex`, `contextvars`, `importlib`, `importlib.metadata`, `textwrap`, `signal`,
+`concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.client`, `http.cookies`,
+`http.cookiejar`, `email.utils`, `email.message`, `email.errors`, `encodings` (`.aliases`/`.idna`),
+`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `zipfile`, `calendar`,
+`random`, `pyodbc`; real (not stub) `typing` (incl. `Protocol`/`@runtime_checkable` structural
+`isinstance()`) and `dataclasses`; stub `__future__`.
 
 **High-priority missing**: a Postgres DB-API module (scenario 3b, blocked on server availability).
 
@@ -748,9 +773,9 @@ in scenario 1).
   isinstance duck-typing support (breaking `.dict(exclude=/include=)`), `dict.fromkeys` didn't exist,
   and `inspect.getdoc` didn't exist (breaking `.schema()`). Full blow-by-blow in `FASTAPI_PLAN.md`
   Phase 4.5.
-- Tests: **1065 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+- Tests: **1072 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
   across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between, plus 13 new sqlite3 tests + 11 new
-  pyodbc tests), confirmed via 5 consecutive full-suite runs.
+  pyodbc tests + 9 new http.client tests), confirmed via 7 consecutive full-suite runs.
 - `sqlite3` (scenario 3a): a real DB-API 2.0 shim over `Microsoft.Data.Sqlite` —
   `connect`/`Connection`/`Cursor`, real transactions matching CPython's own legacy transaction
   control, `row_factory`/`sqlite3.Row`, the real PEP 249 exception hierarchy. Full blow-by-blow in
@@ -760,5 +785,11 @@ in scenario 1).
   pyodbc's own autocommit=False transaction model, a real `lastrowid` via a combined-batch
   `SCOPE_IDENTITY()` (a real cross-batch-scoping gotcha found and fixed live), real
   `date`/`time`/`datetime` round-tripping. Full blow-by-blow in `SQL_PLAN.md` Phase 3.
+- `http.client` (scenario 4): a real, subclassable HTTPConnection/HTTPSConnection/HTTPResponse —
+  the real, unmodified `requests` package (→ `urllib3`) runs live over real HTTPS. 25 real gaps
+  found and fixed along the way, about half genuine new stdlib modules and half general interpreter
+  bugs unrelated to HTTP (`str(bytes, encoding, errors)`, `hasattr` on builtin containers,
+  `typing.Protocol` structural `isinstance()`, `Mapping`/`MutableMapping` mixins, a `NamedTuple`
+  construction bug, and more). Full blow-by-blow in `HTTP_PLAN.md`.
 
 _Update these numbers at every milestone._
