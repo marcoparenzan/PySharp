@@ -102,6 +102,8 @@ public static class StdlibModules
         importer.RegisterBuiltin("contextlib", _ => ContextlibModule.Create());
         importer.RegisterBuiltin("abc", _ => AbcModule.Create());
         importer.RegisterBuiltin("inspect", _ => InspectModule.Create());
+        importer.RegisterBuiltin("sqlite3", _ => Sqlite3Module.Create());
+        importer.RegisterBuiltin("pyodbc", _ => PyodbcModule.Create());
         // `import builtins` gets the same module every name implicitly falls back to.
         importer.RegisterBuiltin("builtins", _ => importer.BuiltinsModule);
     }

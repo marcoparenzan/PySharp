@@ -39,7 +39,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
 | 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel + 30-pattern robustness sweep, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
-| 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
+| 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | 🟡 In progress (3a ✅ sqlite3, 3c ✅ SQL Server, 3b ⚪ blocked — no Postgres server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅; Postgres (`Npgsql`) blocked on server availability — see SQL_PLAN.md |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
 | 6 | **MQTT broker** (server) | _to be created_ | ⚪ Planned | MQTT server on the C# `socket`: MQTT packet parsing (`struct`), session/topic management |
@@ -228,12 +228,30 @@ scenario-2 status, including the pydantic v1 probe-driven blow-by-blow, lives in
 this roadmap entry is kept in sync at each major checkpoint but the plan doc is the live source of
 truth while 2d/2e are in progress.
 
-### Scenario 3 — SQL access ⚪
+### Scenario 3 — SQL access 🟡
 
-- **3a — `sqlite3` DB-API.** New C# module in `Modules/` exposing `connect`/`Connection`/`Cursor`/
-  `execute`/`executemany`/`fetchone`/`fetchall`, backed by `Microsoft.Data.Sqlite`. Open decision:
-  whether the NuGet dependency goes on "pure" `PySharpLib` or an isolated project/module.
-- **3b — Postgres.** Same DB-API shape backed by `Npgsql` (when a server is available).
+Full blow-by-blow lives in [SQL_PLAN.md](SQL_PLAN.md) — this entry is kept in sync at each
+checkpoint but the plan doc is the live source of truth while 3b is in progress.
+
+- **3a — `sqlite3` DB-API ✅.** [Sqlite3Module.cs](src/PySharpLib/Modules/Sqlite3Module.cs) —
+  `connect`/`Connection`/`Cursor`, `execute`/`executemany`/`executescript`, `fetchone`/`fetchmany`/
+  `fetchall`, real transactions (implicit BEGIN/COMMIT matching CPython's own legacy transaction
+  control, `with conn:`), `row_factory`/`sqlite3.Row`, the real PEP 249 exception hierarchy — backed
+  by `Microsoft.Data.Sqlite`, added directly to `PySharpLib.csproj`. Verified live via
+  [samples/sqlite_demo.py](samples/sqlite_demo.py); 13 tests in
+  [Sqlite3Tests.cs](src/PySharp.Tests/M6_Stdlib/Sqlite3Tests.cs).
+- **3b — Postgres ⚪.** Same DB-API shape backed by `Npgsql`. Blocked: no Postgres server reachable
+  in this dev environment (checked 2026-08-10 — see SQL_PLAN.md).
+- **3c — SQL Server ✅.** [PyodbcModule.cs](src/PySharpLib/Modules/PyodbcModule.cs), registered as
+  `pyodbc` — `connect`/`Connection`/`Cursor`, real `pyodbc.Row` (tuple-*and*-attribute access),
+  pyodbc's own autocommit=False transaction model (deliberately different from sqlite3's DDL-vs-DML
+  heuristic — confirmed live), a real `lastrowid` via a combined-batch `SCOPE_IDENTITY()` (its own
+  cross-batch scoping quirk found and worked around live), real `date`/`time`/`datetime`
+  round-tripping — backed by `Microsoft.Data.SqlClient`, verified live against a real SQL Server
+  LocalDB instance (`MSSQLLocalDB`, already provisioned on this machine). Verified live via
+  [samples/pyodbc_demo.py](samples/pyodbc_demo.py); 11 tests in
+  [PyodbcTests.cs](src/PySharp.Tests/M6_Stdlib/PyodbcTests.cs) (skip, not fail, on a machine with no
+  LocalDB — see `SqlServerLocalDbFixture.cs`).
 
 ### Scenario 5 — MQTT subscribe on a broker ✅
 
@@ -314,7 +332,8 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 ### Axis B — Stdlib
 
-Implemented **~59 modules** against CPython's **~200**. Present today: `sys`, `os`, `time`, `platform`,
+Implemented **~61 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
+stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `time`, `platform`,
 `errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio` (incl. real `Runner`/`Task`/protocols hierarchy), `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
 (`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
@@ -323,10 +342,10 @@ Implemented **~59 modules** against CPython's **~200**. Present today: `sys`, `o
 decoration time), `inspect` (incl. a real `isfunction` fix — async/generator functions were
 previously misclassified — and real coroutine-state constants/`getcoroutinestate`), `shlex`, `contextvars`, `importlib`, `textwrap`, `signal`,
 `concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.cookies`, `email.utils`,
-`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`; real (not stub) `typing`
-and `dataclasses`; stub `__future__`.
+`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `pyodbc`; real (not stub)
+`typing` and `dataclasses`; stub `__future__`.
 
-**High-priority missing**: `sqlite3` (scenario 3).
+**High-priority missing**: a Postgres DB-API module (scenario 3b, blocked on server availability).
 
 ### Axis C — Native extensions (C/Rust)
 
@@ -729,8 +748,17 @@ in scenario 1).
   isinstance duck-typing support (breaking `.dict(exclude=/include=)`), `dict.fromkeys` didn't exist,
   and `inspect.getdoc` didn't exist (breaking `.schema()`). Full blow-by-blow in `FASTAPI_PLAN.md`
   Phase 4.5.
-- Tests: **1041 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 8 consecutive
-  full-suite runs.
+- Tests: **1065 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between, plus 13 new sqlite3 tests + 11 new
+  pyodbc tests), confirmed via 5 consecutive full-suite runs.
+- `sqlite3` (scenario 3a): a real DB-API 2.0 shim over `Microsoft.Data.Sqlite` —
+  `connect`/`Connection`/`Cursor`, real transactions matching CPython's own legacy transaction
+  control, `row_factory`/`sqlite3.Row`, the real PEP 249 exception hierarchy. Full blow-by-blow in
+  `SQL_PLAN.md` Phase 1.
+- `pyodbc` (scenario 3c): a real DB-API 2.0 shim over `Microsoft.Data.SqlClient`, verified live
+  against a real SQL Server LocalDB instance — real `pyodbc.Row` (tuple + attribute access),
+  pyodbc's own autocommit=False transaction model, a real `lastrowid` via a combined-batch
+  `SCOPE_IDENTITY()` (a real cross-batch-scoping gotcha found and fixed live), real
+  `date`/`time`/`datetime` round-tripping. Full blow-by-blow in `SQL_PLAN.md` Phase 3.
 
 _Update these numbers at every milestone._
