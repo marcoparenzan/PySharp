@@ -5,6 +5,7 @@
 
 using System.Numerics;
 using System.Security.Cryptography;
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -21,6 +22,17 @@ public static class OsModule
 
     private const int S_IFDIR = 0x4000;
     private const int S_IFREG = 0x8000;
+
+    /// <summary>Real CPython: every os/os.path function accepts a str *or* a path-like object
+    /// (anything with `__fspath__`, e.g. a real `pathlib.Path`) — coerces via the real `__fspath__`
+    /// protocol rather than requiring a plain string. Found live via samples/filesystem_demo.py
+    /// (scenario 8): `os.path.relpath(p, root)` with `root` a real `Path` instance.</summary>
+    internal static string PathArg(Interp interp, object o) => o switch
+    {
+        string s => s,
+        PyInstance inst when interp.TryCallMethod(inst, "__fspath__", Array.Empty<object>(), out var r) && r is string rs => rs,
+        _ => throw PyErr.TypeError($"expected str, bytes or os.PathLike object, not {PyOps.TypeName(o)}"),
+    };
 
     public static PyModule Create()
     {
@@ -53,44 +65,72 @@ public static class OsModule
             new PyBytes(RandomNumberGenerator.GetBytes((int)PyOps.AsBigInt(a[0], "n"))));
         d["getpid"] = new PyBuiltinFunction("getpid", (_, _, _) =>
             new BigInteger(Environment.ProcessId));
-        d["listdir"] = new PyBuiltinFunction("listdir", (_, a, _) =>
+        d["listdir"] = new PyBuiltinFunction("listdir", (interp, a, _) =>
         {
-            string path = a.Length > 0 ? (string)a[0] : ".";
+            string path = a.Length > 0 ? PathArg(interp, a[0]) : ".";
             return new PyList(Directory.EnumerateFileSystemEntries(path)
                 .Select(p => (object)Path.GetFileName(p)));
         });
-        d["makedirs"] = new PyBuiltinFunction("makedirs", (_, a, _) =>
+        // Real (not stubbed) os.walk: recurses through the real filesystem topdown by default,
+        // yielding one (dirpath, dirnames, filenames) real tuple per directory — dirnames is read
+        // *after* being yielded, so real code that mutates it in place (`dirnames[:] = [...]`, the
+        // standard real way to prune traversal) is honored, matching real CPython. Real bottom-up
+        // (`topdown=False`) is supported too; `onerror`/`followlinks` are accepted but not wired to
+        // anything (nothing reachable needs them — unreadable subdirectories are silently skipped).
+        // Found via samples/filesystem_demo.py (scenario 8, File system API).
+        d["walk"] = new PyBuiltinFunction("walk", (interp, a, kwargs) =>
         {
-            Directory.CreateDirectory((string)a[0]);
+            string top = PathArg(interp, a[0]);
+            bool topDown = a.Length > 1 ? a[1] is not false
+                : !(kwargs is not null && kwargs.TryGetValue("topdown", out var td) && td is false);
+            return new PyIterator(Walk(top, topDown).GetEnumerator());
+        });
+        d["chdir"] = new PyBuiltinFunction("chdir", (interp, a, _) =>
+        {
+            Directory.SetCurrentDirectory(PathArg(interp, a[0]));
             return PyNone.Instance;
         });
-        d["remove"] = new PyBuiltinFunction("remove", (_, a, _) =>
+        d["mkdir"] = new PyBuiltinFunction("mkdir", (interp, a, _) =>
         {
-            File.Delete((string)a[0]);
+            string p = PathArg(interp, a[0]);
+            if (Directory.Exists(p) || File.Exists(p))
+                throw new PyRaise(PyErr.MakeInstance(PyErr.FileExistsErrorClass, new BigInteger(17), "File exists", p));
+            Directory.CreateDirectory(p);
             return PyNone.Instance;
         });
-        d["rmdir"] = new PyBuiltinFunction("rmdir", (_, a, _) =>
+        d["makedirs"] = new PyBuiltinFunction("makedirs", (interp, a, _) =>
         {
-            Directory.Delete((string)a[0]);
+            Directory.CreateDirectory(PathArg(interp, a[0]));
             return PyNone.Instance;
         });
-        d["removedirs"] = new PyBuiltinFunction("removedirs", (_, a, _) =>
+        d["remove"] = new PyBuiltinFunction("remove", (interp, a, _) =>
         {
-            Directory.Delete((string)a[0]);
+            File.Delete(PathArg(interp, a[0]));
             return PyNone.Instance;
         });
-        d["rename"] = new PyBuiltinFunction("rename", (_, a, _) =>
+        d["unlink"] = d["remove"]; // real CPython: unlink is a plain alias for remove
+        d["rmdir"] = new PyBuiltinFunction("rmdir", (interp, a, _) =>
         {
-            string src = (string)a[0], dst = (string)a[1];
+            Directory.Delete(PathArg(interp, a[0]));
+            return PyNone.Instance;
+        });
+        d["removedirs"] = new PyBuiltinFunction("removedirs", (interp, a, _) =>
+        {
+            Directory.Delete(PathArg(interp, a[0]));
+            return PyNone.Instance;
+        });
+        d["rename"] = new PyBuiltinFunction("rename", (interp, a, _) =>
+        {
+            string src = PathArg(interp, a[0]), dst = PathArg(interp, a[1]);
             if (File.Exists(src))
                 File.Move(src, dst, overwrite: true);
             else
                 Directory.Move(src, dst);
             return PyNone.Instance;
         });
-        d["chmod"] = new PyBuiltinFunction("chmod", (_, a, _) =>
+        d["chmod"] = new PyBuiltinFunction("chmod", (interp, a, _) =>
         {
-            string path = (string)a[0];
+            string path = PathArg(interp, a[0]);
             int mode = (int)PyOps.AsBigInt(a[1], "mode");
             if (OperatingSystem.IsWindows())
             {
@@ -115,51 +155,54 @@ public static class OsModule
         // synthesizes meaningless values for these on Windows; nothing in the reachable path reads
         // them). Found via `import importlib.util` (staticfiles.py's own module-load-time import)
         // unblocking `os.stat`/`os.stat_result` as the next real gap.
-        d["stat"] = new PyBuiltinFunction("stat", (_, a, _) => BuildStatResult((string)a[0]));
+        d["stat"] = new PyBuiltinFunction("stat", (interp, a, _) => BuildStatResult(PathArg(interp, a[0])));
 
         // os.path
         var path = new PyModule("os.path");
         var pd = path.Dict;
-        pd["join"] = new PyBuiltinFunction("join", (_, a, _) =>
-            Path.Combine(a.Select(x => (string)x).ToArray()));
-        pd["exists"] = new PyBuiltinFunction("exists", (_, a, _) =>
-            File.Exists((string)a[0]) || Directory.Exists((string)a[0]));
-        pd["isfile"] = new PyBuiltinFunction("isfile", (_, a, _) => File.Exists((string)a[0]));
-        pd["isdir"] = new PyBuiltinFunction("isdir", (_, a, _) => Directory.Exists((string)a[0]));
-        pd["basename"] = new PyBuiltinFunction("basename", (_, a, _) => Path.GetFileName((string)a[0]));
-        pd["dirname"] = new PyBuiltinFunction("dirname", (_, a, _) =>
-            Path.GetDirectoryName((string)a[0]) ?? "");
-        pd["abspath"] = new PyBuiltinFunction("abspath", (_, a, _) => Path.GetFullPath((string)a[0]));
-        pd["expanduser"] = new PyBuiltinFunction("expanduser", (_, a, _) =>
+        pd["join"] = new PyBuiltinFunction("join", (interp, a, _) =>
+            Path.Combine(a.Select(x => PathArg(interp, x)).ToArray()));
+        pd["exists"] = new PyBuiltinFunction("exists", (interp, a, _) =>
         {
-            string p = (string)a[0];
+            string p = PathArg(interp, a[0]);
+            return File.Exists(p) || Directory.Exists(p);
+        });
+        pd["isfile"] = new PyBuiltinFunction("isfile", (interp, a, _) => File.Exists(PathArg(interp, a[0])));
+        pd["isdir"] = new PyBuiltinFunction("isdir", (interp, a, _) => Directory.Exists(PathArg(interp, a[0])));
+        pd["basename"] = new PyBuiltinFunction("basename", (interp, a, _) => Path.GetFileName(PathArg(interp, a[0])));
+        pd["dirname"] = new PyBuiltinFunction("dirname", (interp, a, _) =>
+            Path.GetDirectoryName(PathArg(interp, a[0])) ?? "");
+        pd["abspath"] = new PyBuiltinFunction("abspath", (interp, a, _) => Path.GetFullPath(PathArg(interp, a[0])));
+        pd["expanduser"] = new PyBuiltinFunction("expanduser", (interp, a, _) =>
+        {
+            string p = PathArg(interp, a[0]);
             return p.StartsWith('~')
                 ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + p[1..]
                 : p;
         });
-        pd["splitext"] = new PyBuiltinFunction("splitext", (_, a, _) =>
+        pd["splitext"] = new PyBuiltinFunction("splitext", (interp, a, _) =>
         {
-            string p = (string)a[0];
+            string p = PathArg(interp, a[0]);
             string ext = Path.GetExtension(p);
             return new PyTuple(new object[] { ext.Length > 0 ? p[..^ext.Length] : p, ext });
         });
-        pd["getsize"] = new PyBuiltinFunction("getsize", (_, a, _) =>
-            new BigInteger(new FileInfo((string)a[0]).Length));
+        pd["getsize"] = new PyBuiltinFunction("getsize", (interp, a, _) =>
+            new BigInteger(new FileInfo(PathArg(interp, a[0])).Length));
         // Real CPython's normpath: collapses redundant separators and ".."/"." segments
         // *lexically*, without touching the filesystem or changing a relative path into an
         // absolute one (unlike Path.GetFullPath). Found via starlette's real staticfiles.py:
         // `os.path.normpath(os.path.join(spec.origin, "..", statics_dir))`, deriving a package's
         // bundled-statics directory from its __init__.py's path.
-        pd["normpath"] = new PyBuiltinFunction("normpath", (_, a, _) => NormPath((string)a[0]));
+        pd["normpath"] = new PyBuiltinFunction("normpath", (interp, a, _) => NormPath(PathArg(interp, a[0])));
         // Real symlink resolution (via FileSystemInfo.ResolveLinkTarget) when the path is actually
         // a symlink, falling back to the same absolute-path canonicalization as abspath otherwise —
         // matching real CPython's realpath for the common (non-symlink) case. Found via starlette's
         // real staticfiles.py: `os.path.realpath(full_path)` when resolving a requested static
         // asset, to check it's still contained within the configured directory (path-traversal
         // guard, e.g. against `..`-laden request paths).
-        pd["realpath"] = new PyBuiltinFunction("realpath", (_, a, _) =>
+        pd["realpath"] = new PyBuiltinFunction("realpath", (interp, a, _) =>
         {
-            string full = Path.GetFullPath((string)a[0]);
+            string full = Path.GetFullPath(PathArg(interp, a[0]));
             FileSystemInfo? info = File.Exists(full) ? new FileInfo(full)
                 : Directory.Exists(full) ? new DirectoryInfo(full) : null;
             var target = info?.ResolveLinkTarget(returnFinalTarget: true);
@@ -173,7 +216,7 @@ public static class OsModule
         // empty sequence — not exercised by the reachable path.
         pd["commonpath"] = new PyBuiltinFunction("commonpath", (interp, a, _) =>
         {
-            var normed = PyOps.Iterate(interp, a[0]).Select(p => NormPath((string)p)).ToList();
+            var normed = PyOps.Iterate(interp, a[0]).Select(p => NormPath(PathArg(interp, p))).ToList();
             bool rooted = normed[0].Length > 0 && (normed[0][0] == '/' || normed[0][0] == '\\');
             var partsList = normed.Select(p => p.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries)).ToList();
             var common = partsList[0];
@@ -190,9 +233,142 @@ public static class OsModule
             string joined = string.Join(sep, common);
             return rooted ? sep + joined : joined;
         });
+        // Real (not stubbed) os.path completions — found via samples/filesystem_demo.py (scenario
+        // 8, File system API): a real file-organizer script needing to compute a relative display
+        // path (`os.path.relpath`) while walking a real tree with `os.walk`.
+        pd["relpath"] = new PyBuiltinFunction("relpath", (interp, a, _) =>
+        {
+            string p = PathArg(interp, a[0]);
+            string start = a.Length > 1 ? PathArg(interp, a[1]) : Directory.GetCurrentDirectory();
+            return Path.GetRelativePath(start, p);
+        });
+        pd["isabs"] = new PyBuiltinFunction("isabs", (interp, a, _) => Path.IsPathRooted(PathArg(interp, a[0])));
+        pd["split"] = new PyBuiltinFunction("split", (interp, a, _) =>
+        {
+            string p = PathArg(interp, a[0]);
+            return new PyTuple(new object[] { Path.GetDirectoryName(p) ?? "", Path.GetFileName(p) });
+        });
+        pd["splitdrive"] = new PyBuiltinFunction("splitdrive", (interp, a, _) =>
+        {
+            string p = PathArg(interp, a[0]);
+            if (!OperatingSystem.IsWindows())
+                return new PyTuple(new object[] { "", p });
+            if (p.Length >= 2 && p[1] == ':' && char.IsLetter(p[0]))
+                return new PyTuple(new object[] { p[..2], p[2..] });
+            if (p.StartsWith(@"\\") || p.StartsWith("//"))
+            {
+                var parts = p[2..].Split(new[] { '\\', '/' }, 3);
+                if (parts.Length >= 2)
+                {
+                    string drive = p[..2] + parts[0] + p[2] + parts[1];
+                    string rest = parts.Length > 2 ? p[2] + parts[2] : "";
+                    return new PyTuple(new object[] { drive, rest });
+                }
+            }
+            return new PyTuple(new object[] { "", p });
+        });
+        pd["normcase"] = new PyBuiltinFunction("normcase", (interp, a, _) =>
+        {
+            string p = PathArg(interp, a[0]).Replace('/', Path.DirectorySeparatorChar);
+            return OperatingSystem.IsWindows() ? p.ToLowerInvariant() : p;
+        });
+        pd["islink"] = new PyBuiltinFunction("islink", (interp, a, _) =>
+        {
+            try
+            {
+                return File.GetAttributes(PathArg(interp, a[0])).HasFlag(FileAttributes.ReparsePoint);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        });
+        pd["lexists"] = new PyBuiltinFunction("lexists", (interp, a, _) =>
+        {
+            try
+            {
+                File.GetAttributes(PathArg(interp, a[0]));
+                return true;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+        });
+        pd["samefile"] = new PyBuiltinFunction("samefile", (interp, a, _) =>
+        {
+            string Real(string p)
+            {
+                string full = Path.GetFullPath(p);
+                FileSystemInfo? info = File.Exists(full) ? new FileInfo(full)
+                    : Directory.Exists(full) ? new DirectoryInfo(full) : null;
+                var target = info?.ResolveLinkTarget(returnFinalTarget: true);
+                return target is not null ? target.FullName : full;
+            }
+            string cmp1 = Real(PathArg(interp, a[0]));
+            string cmp2 = Real(PathArg(interp, a[1]));
+            return OperatingSystem.IsWindows()
+                ? string.Equals(cmp1, cmp2, StringComparison.OrdinalIgnoreCase)
+                : cmp1 == cmp2;
+        });
+        pd["getmtime"] = new PyBuiltinFunction("getmtime", (interp, a, _) =>
+            new DateTimeOffset(File.GetLastWriteTimeUtc(PathArg(interp, a[0]))).ToUnixTimeMilliseconds() / 1000.0);
+        pd["getatime"] = new PyBuiltinFunction("getatime", (interp, a, _) =>
+            new DateTimeOffset(File.GetLastAccessTimeUtc(PathArg(interp, a[0]))).ToUnixTimeMilliseconds() / 1000.0);
+        pd["getctime"] = new PyBuiltinFunction("getctime", (interp, a, _) =>
+            new DateTimeOffset(File.GetCreationTimeUtc(PathArg(interp, a[0]))).ToUnixTimeMilliseconds() / 1000.0);
+
         d["path"] = path;
 
         return m;
+    }
+
+    private static IEnumerable<object> Walk(string top, bool topDown)
+    {
+        List<string> entries;
+        try
+        {
+            entries = Directory.EnumerateFileSystemEntries(top).ToList();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            yield break;
+        }
+
+        var dirs = new List<string>();
+        var files = new List<string>();
+        foreach (var e in entries)
+        {
+            if (Directory.Exists(e))
+                dirs.Add(Path.GetFileName(e));
+            else
+                files.Add(Path.GetFileName(e));
+        }
+        var dirsList = new PyList(dirs.Cast<object>());
+        var filesList = new PyList(files.Cast<object>());
+        var entry = new PyTuple(new object[] { top, dirsList, filesList });
+
+        if (topDown)
+        {
+            yield return entry;
+            // Read dirsList.Items *after* yielding: real os.walk honors in-place mutation of
+            // dirnames (the standard way real scripts prune traversal) since the caller had a
+            // chance to edit the same list object before we recurse into it.
+            foreach (var name in dirsList.Items.ToList())
+                foreach (var sub in Walk(Path.Combine(top, (string)name), topDown))
+                    yield return sub;
+        }
+        else
+        {
+            foreach (var name in dirs)
+                foreach (var sub in Walk(Path.Combine(top, name), topDown))
+                    yield return sub;
+            yield return entry;
+        }
     }
 
     private static string NormPath(string p)

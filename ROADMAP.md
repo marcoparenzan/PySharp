@@ -44,14 +44,15 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
 | 6 | **MQTT broker** (server) | _to be created_ | ⚪ Planned | MQTT server on the C# `socket`: MQTT packet parsing (`struct`), session/topic management |
 | 7 | **AMQP / RabbitMQ** | _to be created_ | ⚪ Planned | AMQP 0-9-1 client (e.g. pure `pika`) on the `socket`, or a C# shim on `RabbitMQ.Client` |
-| 8 | **File system API** | _to be created_ | 🟡 Partial | `os`/`io`/`open` partly exist; complete `os.path`, `pathlib`, `shutil`, `glob` |
+| 8 | **File system API** | [samples/filesystem_demo.py](samples/filesystem_demo.py) | ✅ **Done** | new C# **`glob`**/**`shutil`** modules; `os`/`os.path` fspath (`__fspath__`) coercion for every path-taking function; `pathlib.Path.glob`/`rglob`/`iterdir`/`relative_to`/ordering — see FILESYSTEM_PLAN.md |
 | 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
 | T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` exists; for rich APIs a dedicated **C# wrapper/shim** is created |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
 Scenarios 4–9 are **backlog** collected with the author. **4** (HTTP client), **5** (MQTT subscribe),
-and **9** (JSON+YAML) are **already done** (see below); **6/7/8** remain to be prioritized.
+**8** (File system API), and **9** (JSON+YAML) are **already done** (see below); **6/7** remain to be
+prioritized.
 
 > **Realism note on ordering.** Technically scenario 3 (SQL) is **simpler** than scenario 2 (FastAPI):
 > SQLite is a well-bounded C# shim, whereas FastAPI requires the **heaviest work of all** — `async`/
@@ -284,6 +285,28 @@ publishes 3 JSON messages there and receives them back via `on_message`. **No in
 paho's subscribe side already ran since scenario 1 (which used `client.subscribe`). It confirms the
 MQTT/network engine is solid outside the IoT Hub case too. Prerequisite: `pysharp install paho-mqtt`.
 
+### Scenario 8 — File system API ✅
+
+Full blow-by-blow lives in [FILESYSTEM_PLAN.md](FILESYSTEM_PLAN.md). The script
+[samples/filesystem_demo.py](samples/filesystem_demo.py) is a real file-organizer: it builds a real
+temp directory tree, walks it (`os.walk`), finds files two different ways (`glob.glob("**/*.py",
+recursive=True)` and `pathlib.Path.rglob("*.py")`), packages a release directory (`shutil.copy2`,
+`shutil.copytree`), then cleans up and reorganizes it (`shutil.rmtree`, `shutil.move`,
+`Path.iterdir()`, `shutil.which`, `shutil.disk_usage`) — all verified against the real filesystem, no
+stubs. Two new C# modules were built from scratch, since neither existed before: **`glob`**
+([GlobModule.cs](src/PySharpLib/Modules/GlobModule.cs) — a real segment-by-segment directory walk,
+`*`/`?`/`[...]` translated to regex, real recursive `**` support) and **`shutil`**
+([ShutilModule.cs](src/PySharpLib/Modules/ShutilModule.cs) — thin, real wrappers over
+`File.Copy`/`Directory.CreateDirectory`/`Directory.Delete`/`File.Move`/`DriveInfo`). Along the way, a
+pervasive, previously-unexercised gap surfaced: **no `os`/`os.path` function coerced a path-like
+(`__fspath__`) argument** — every prior scenario had only ever passed plain strings. Fixed with a new
+`OsModule.PathArg(interp, o)` helper, now used by every path-taking function in both `os` and
+`os.path` after a full-file rewrite. `pathlib.Path` also gained `glob`/`rglob`/`iterdir`/`relative_to`
+and real ordering (`__lt__`/`__le__`/`__gt__`/`__ge__`, needed for `sorted()` over a list of `Path`
+objects — real pathlib compares by parts tuple, string comparison of the normalized path matches for
+every case reachable here). 7 new tests in
+[FilesystemTests.cs](src/PySharp.Tests/M19_Filesystem/FilesystemTests.cs).
+
 ### Scenario 9 — JSON + YAML (de)serialization ✅
 
 The script [samples/config_yaml.py](samples/config_yaml.py) loads a **YAML** configuration, inspects
@@ -355,8 +378,8 @@ Four independent axes. Compatibility with "any PyPI package" would require closi
 
 ### Axis B — Stdlib
 
-Implemented **~70 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
-stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `os.path`, `time`, `platform`,
+Implemented **~72 modules** against CPython's **~200** (plus `pyodbc`, a real PyPI package — not
+stdlib — given the same native-C#-shim treatment as `yaml`). Present today: `sys`, `os`, `os.path`, `glob`, `shutil`, `time`, `platform`,
 `errno`, `io` (incl. `TextIOWrapper`), `warnings`, `copy`, `socket`, `ssl`, `select`, `threading`, `asyncio` (incl. real `Runner`/`Task`/protocols hierarchy), `struct`, `hashlib`,
 `hmac`, `base64`, `string`, `urllib(.parse/.request)`, `uuid`, `json`, `yaml`, `collections`
 (`Counter`/`ChainMap`/`deque`), `collections.abc`, `enum`, `functools`, `math`, `logging`, `ctypes`,
@@ -791,5 +814,14 @@ in scenario 1).
   bugs unrelated to HTTP (`str(bytes, encoding, errors)`, `hasattr` on builtin containers,
   `typing.Protocol` structural `isinstance()`, `Mapping`/`MutableMapping` mixins, a `NamedTuple`
   construction bug, and more). Full blow-by-blow in `HTTP_PLAN.md`.
+- File system API (scenario 8): new **`glob`** and **`shutil`** C# modules built from scratch (neither
+  existed before), plus a pervasive fix — `os`/`os.path` never coerced path-like (`__fspath__`)
+  arguments (e.g. a real `pathlib.Path` passed to `os.path.relpath`), fixed with a new
+  `OsModule.PathArg` helper used across a full-file rewrite of `OsModule.cs`. `pathlib.Path` gained
+  `glob`/`rglob`/`iterdir`/`relative_to` and real ordering operators (needed for `sorted()` over
+  `Path` objects). Verified live via `samples/filesystem_demo.py`. Full blow-by-blow in
+  `FILESYSTEM_PLAN.md`.
+- Tests: **1079 green** (up from 1072 — 7 new filesystem tests), confirmed via 5 consecutive
+  full-suite runs.
 
 _Update these numbers at every milestone._

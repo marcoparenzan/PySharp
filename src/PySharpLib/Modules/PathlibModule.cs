@@ -76,6 +76,14 @@ public static class PathlibModule
             && Value(a[0]) == Value(a[1]));
         Add("__hash__", (_, a, _) => (System.Numerics.BigInteger)Value(a[0]).GetHashCode());
 
+        // Real pathlib orders paths by their parts tuple (lexicographic on each component), which
+        // string comparison of the normalized path matches for every case reachable here (no mixed
+        // separators once normalized). Needed by `sorted()` over a list of Path objects.
+        Add("__lt__", (_, a, _) => string.CompareOrdinal(Value(a[0]), Str(a[1])) < 0);
+        Add("__le__", (_, a, _) => string.CompareOrdinal(Value(a[0]), Str(a[1])) <= 0);
+        Add("__gt__", (_, a, _) => string.CompareOrdinal(Value(a[0]), Str(a[1])) > 0);
+        Add("__ge__", (_, a, _) => string.CompareOrdinal(Value(a[0]), Str(a[1])) >= 0);
+
         Add("__truediv__", (_, a, _) => Make(NormalizeSeparators(Path.Combine(Value(a[0]), Str(a[1])))));
 
         cls.Dict["name"] = MakeProperty(self => Path.GetFileName(Value(self)));
@@ -142,6 +150,48 @@ public static class PathlibModule
         Add("write_text", (_, a, _) => { File.WriteAllText(Value(a[0]), (string)a[1]); return new System.Numerics.BigInteger(((string)a[1]).Length); });
         Add("open", (interp, a, kwargs) =>
             FileObject.Open(interp, new object[] { Value(a[0]) }.Concat(a.Skip(1)).ToArray(), kwargs));
+
+        // Real recursive/non-recursive globbing, reusing glob.iglob()'s own real segment-by-segment
+        // filesystem walk (GlobModule.Iglob) rather than duplicating it. rglob("*.py") == real
+        // CPython's `glob(f"**/{pattern}", recursive=True)`; glob() only walks recursively when the
+        // pattern itself contains "**" (real pathlib semantics, distinct from the glob module's own
+        // opt-in `recursive=` flag).
+        Add("glob", (_, a, _) =>
+        {
+            string pattern = (string)a[1];
+            bool recursive = pattern.Contains("**");
+            return new PyList(GlobModule.Iglob(Path.Combine(Value(a[0]), pattern), recursive).Select(p => (object)Make(NormalizeSeparators(p))));
+        });
+        Add("rglob", (_, a, _) =>
+        {
+            string pattern = (string)a[1];
+            return new PyList(GlobModule.Iglob(Path.Combine(Value(a[0]), "**", pattern), true).Select(p => (object)Make(NormalizeSeparators(p))));
+        });
+
+        // Real directory listing — one Path per real entry directly inside this directory (not
+        // recursive; matches real CPython's Path.iterdir()).
+        Add("iterdir", (_, a, _) =>
+        {
+            string dir = Value(a[0]);
+            return new PyList(Directory.EnumerateFileSystemEntries(dir).Select(p => (object)Make(NormalizeSeparators(p))));
+        });
+
+        // Real Path.relative_to(): the portion of this path after `other`, computed purely from the
+        // path strings (no filesystem access), raising a real ValueError when this path doesn't
+        // actually start with `other` — matching real CPython.
+        Add("relative_to", (_, a, _) =>
+        {
+            string self = Value(a[0]);
+            string other = Str(a[1]);
+            string selfFull = NormalizeSeparators(Path.GetFullPath(self));
+            string otherFull = NormalizeSeparators(Path.GetFullPath(other));
+            if (selfFull == otherFull)
+                return Make(".");
+            string prefix = otherFull.EndsWith("/", StringComparison.Ordinal) ? otherFull : otherFull + "/";
+            if (!selfFull.StartsWith(prefix, StringComparison.Ordinal))
+                throw PyErr.ValueError($"'{self}' is not in the subpath of '{other}'");
+            return Make(selfFull[prefix.Length..]);
+        });
 
         return cls;
     }
