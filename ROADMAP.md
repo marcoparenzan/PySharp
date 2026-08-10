@@ -42,7 +42,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | 🟡 In progress (3a ✅ sqlite3, 3c ✅ SQL Server, 3b ⚪ blocked — no Postgres server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅; Postgres (`Npgsql`) blocked on server availability — see SQL_PLAN.md |
 | 4 | **HTTP client** (requests-like) | [samples/requests_demo.py](samples/requests_demo.py) | ✅ **Done** | real `http.client` (subclassable HTTPConnection/HTTPSConnection/HTTPResponse) ✅ — the real, unmodified `requests` package runs live over real HTTPS (GET/POST/redirects/sessions/cookies), see HTTP_PLAN.md |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
-| 6 | **MQTT broker** (server) | _to be created_ | ⚪ Planned | MQTT server on the C# `socket`: MQTT packet parsing (`struct`), session/topic management |
+| 6 | **MQTT broker** (server) | [samples/mqtt_broker_demo.py](samples/mqtt_broker_demo.py) | ✅ **Done** | a real, hand-rolled MQTT 3.1.1 broker on this project's own `socket`/`asyncio`/`struct`/`threading` — no interpreter changes needed, every primitive it exercises was already solid |
 | 7 | **AMQP / RabbitMQ** | _to be created_ | ⚪ Planned | AMQP 0-9-1 client (e.g. pure `pika`) on the `socket`, or a C# shim on `RabbitMQ.Client` |
 | 8 | **File system API** | [samples/filesystem_demo.py](samples/filesystem_demo.py) | ✅ **Done** | new C# **`glob`**/**`shutil`** modules; `os`/`os.path` fspath (`__fspath__`) coercion for every path-taking function; `pathlib.Path.glob`/`rglob`/`iterdir`/`relative_to`/ordering — see FILESYSTEM_PLAN.md |
 | 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
@@ -51,8 +51,8 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
 Scenarios 4–9 are **backlog** collected with the author. **4** (HTTP client), **5** (MQTT subscribe),
-**8** (File system API), and **9** (JSON+YAML) are **already done** (see below); **6/7** remain to be
-prioritized.
+**6** (MQTT broker), **8** (File system API), and **9** (JSON+YAML) are **already done** (see below);
+**7** (AMQP/RabbitMQ) remains to be prioritized.
 
 > **Realism note on ordering.** Technically scenario 3 (SQL) is **simpler** than scenario 2 (FastAPI):
 > SQLite is a well-bounded C# shim, whereas FastAPI requires the **heaviest work of all** — `async`/
@@ -284,6 +284,31 @@ it connects to a public broker (`test.mosquitto.org:1883`, plaintext), subscribe
 publishes 3 JSON messages there and receives them back via `on_message`. **No interpreter changes**:
 paho's subscribe side already ran since scenario 1 (which used `client.subscribe`). It confirms the
 MQTT/network engine is solid outside the IoT Hub case too. Prerequisite: `pysharp install paho-mqtt`.
+
+### Scenario 6 — MQTT broker (server) ✅
+
+The script [samples/mqtt_broker_demo.py](samples/mqtt_broker_demo.py) is a real, hand-rolled MQTT
+3.1.1 broker — unlike scenarios 1/1b/5 (a real, unmodified paho-mqtt/aiomqtt *client* talking to
+somebody else's broker), this is the *server* side. Built directly on this project's own
+`socket`/`asyncio`/`struct`/`threading` — the same async-socket-server pattern already proven by
+`samples/asgi_server.py` (scenario 2's `loop.sock_accept`/`sock_recv`/`sock_sendall` on a
+non-blocking socket), applied to the MQTT wire protocol instead of HTTP: real fixed-header/
+remaining-length variable-int parsing, real CONNECT/CONNACK/SUBSCRIBE/SUBACK/PUBLISH/PUBACK/
+PINGREQ/PINGRESP/UNSUBSCRIBE/UNSUBACK framing, real `+`/`#` topic-filter wildcard matching, real
+fan-out to every currently-connected matching subscriber. The broker runs in a background thread
+(its own independent `asyncio.run()` event loop — the same thread-isolation semantics
+FASTAPI_PLAN.md Phase 4.2 already established); two **real, unmodified** `paho.mqtt.client`
+instances (the same PyPI package already verified against a real Azure IoT Hub and a real public
+broker in scenarios 1/5) connect to it over a real loopback TCP socket and exchange 3 messages —
+a genuine wire-protocol round trip, not an in-process shortcut. **Zero interpreter changes were
+needed**: every primitive this exercises (`socket`, `asyncio`'s thread-isolated event loop,
+`struct`, `threading.Thread`/`Lock`) was already solid from prior scenarios — the only bug found
+was in the *demo script itself* (a startup race: publishing before the broker had processed the
+subscriber's SUBSCRIBE, fixed by waiting for a real SUBACK via `on_subscribe` before publishing,
+the same discipline any real MQTT client needs against any real broker). 4 new tests (including a
+full real pub/sub round trip with no external network dependency, since both the broker and the
+clients are local) in
+[MqttBrokerSampleTests.cs](src/PySharp.Tests/M20_MqttBroker/MqttBrokerSampleTests.cs).
 
 ### Scenario 8 — File system API ✅
 
@@ -821,7 +846,13 @@ in scenario 1).
   `glob`/`rglob`/`iterdir`/`relative_to` and real ordering operators (needed for `sorted()` over
   `Path` objects). Verified live via `samples/filesystem_demo.py`. Full blow-by-blow in
   `FILESYSTEM_PLAN.md`.
-- Tests: **1079 green** (up from 1072 — 7 new filesystem tests), confirmed via 5 consecutive
-  full-suite runs.
+- File system API (scenario 8) (see full entry above): **1079 green** (up from 1072 — 7 new
+  filesystem tests), confirmed via 5 consecutive full-suite runs.
+- MQTT broker (scenario 6): a real, hand-rolled MQTT 3.1.1 broker on this project's own
+  `socket`/`asyncio`/`struct`/`threading` (see full entry above) — the first scenario since 5 to
+  need **zero interpreter changes**, every primitive it touches was already solid. Tests:
+  **1083 green** (up from 1079 — 4 new broker tests, including a full real pub/sub round trip
+  between two real paho-mqtt clients and a hand-rolled broker, all local/no network), confirmed
+  via 5 consecutive full-suite runs.
 
 _Update these numbers at every milestone._
