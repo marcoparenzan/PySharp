@@ -93,6 +93,48 @@ public class AsyncioSyncPrimitivesTests
             """));
 
     [Fact]
+    public void Event_set_still_notifies_a_real_waiter_even_with_a_stale_cancelled_one_ahead_of_it()
+        // Real regression found chasing FASTAPI_PLAN.md Phase 4.4's graceful-shutdown drain logic:
+        // `asyncio.wait({accept_task, stop_task}, return_when=FIRST_COMPLETED)` racing a real
+        // `sock_accept()` against `stop_event.wait()`, in a loop — the *losing* side's task gets
+        // `.cancel()`ed each iteration a connection wins the race, but cancelling the wrapping Task
+        // never removed its underlying wait()-future from the Event's own internal waiter list.
+        // `Event.set()` iterated that list unconditionally; hitting the stale, already-cancelled
+        // waiter first threw "invalid state: future already done" *mid-loop*, silently abandoning
+        // every waiter still to come — including the next iteration's genuinely-pending one — so
+        // a real signal (real SIGINT, verified separately by hand in a real terminal) landing
+        // between two `sock_accept` cycles never actually woke the server's shutdown wait, hanging
+        // the whole program. Reproduced here without any socket at all: create a waiter, cancel its
+        // wrapping Task (leaving a stale done-but-not-removed entry in the Event's own list), start
+        // a second real waiter, then set() — the second waiter must still be woken.
+        => Assert.Equal("first cancelled: True\nsecond still resolves: True", Run("""
+            async def main():
+                event = asyncio.Event()
+
+                first_task = asyncio.create_task(event.wait())
+                await asyncio.sleep(0)  # let it actually register as a waiter
+                first_task.cancel()
+                try:
+                    await first_task
+                except asyncio.CancelledError:
+                    pass
+
+                second_task = asyncio.create_task(event.wait())
+                await asyncio.sleep(0)  # let it register too, behind the stale cancelled one
+                event.set()
+                try:
+                    await asyncio.wait_for(second_task, timeout=2)
+                    resolved = True
+                except asyncio.TimeoutError:
+                    resolved = False
+
+                print("first cancelled:", first_task.cancelled())
+                print("second still resolves:", resolved)
+
+            asyncio.run(main())
+            """));
+
+    [Fact]
     public void Semaphore_caps_concurrent_holders()
         => Assert.Equal("2", Run("""
             state = {'active': 0, 'max_active': 0}

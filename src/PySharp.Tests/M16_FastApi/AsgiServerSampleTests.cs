@@ -321,6 +321,118 @@ public class AsgiServerSampleTests
         Assert.Contains("400 Bad Request", head);
     }
 
+    [Fact]
+    public void Graceful_shutdown_drains_an_in_flight_connection_then_stops_accepting_new_ones()
+        // Real regression for a genuine hang found building this exact scenario (FASTAPI_PLAN.md
+        // Phase 4.4): racing a real `loop.sock_accept()` against a real `asyncio.Event` across
+        // more than one `_serve_until_stopped` loop iteration used to hang forever — the losing
+        // side of each race gets `.cancel()`ed, which left a stale, already-cancelled entry in the
+        // Event's own internal waiter list; `Event.set()` then threw "invalid state: future
+        // already done" iterating over it, silently abandoning every waiter still to come,
+        // including the next iteration's genuinely-pending one. Fixed at the root — `Event.set()`
+        // now skips already-done waiters — not papered over in this test. A second, related fix
+        // (guarding `sock_accept`/`sock_recv`/`sock_sendall`'s own late `SetResult`/`SetException`
+        // against an already-cancelled future, and containing any exception that still escapes a
+        // scheduled callback instead of corrupting the whole loop) is exercised the same way: the
+        // cancelled `accept_task`'s still-in-flight `AcceptAsync()` later completes against
+        // `srv.close()`, right in the middle of this very test.
+    {
+        int port = FreeTcpPort();
+        string script = $$"""
+            import sys
+            sys.path.insert(0, {{System.Text.Json.JsonSerializer.Serialize(SamplesDir)}})
+            import asgi_server, asyncio, socket
+
+            async def slow_app(scope, receive, send):
+                if scope["type"] != "http":
+                    return
+                await asyncio.sleep(1.0)
+                body = b"drained ok"
+                await send({
+                    "type": "http.response.start", "status": 200,
+                    "headers": [(b"content-length", str(len(body)).encode())],
+                })
+                await send({"type": "http.response.body", "body": body})
+
+            async def main():
+                loop = asyncio.get_running_loop()
+                srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.bind(("127.0.0.1", {{port}}))
+                srv.listen(64)
+                srv.setblocking(False)
+                stop_event = asyncio.Event()
+
+                async def trigger_stop_later():
+                    # Deliberately generous: this test's own C# TcpClient must connect before this
+                    # fires, and under parallel-test-run load, background-thread scheduling plus
+                    # real interpreter startup can itself eat a meaningful fraction of a second —
+                    # a short window here made the test itself (not the fix) racy/flaky.
+                    await asyncio.sleep(3.0)
+                    stop_event.set()
+
+                asyncio.create_task(trigger_stop_later())
+                await asgi_server._serve_until_stopped(slow_app, srv, loop, stop_event)
+
+            asyncio.run(main())
+            """;
+        Exception? serverError = null;
+        var serverOut = new StringWriter();
+        var server = new Thread(() =>
+        {
+            try { new PyEngine(serverOut).Run(script); }
+            catch (Exception ex) { serverError = ex; }
+        })
+        { IsBackground = true, Name = "pysharp-graceful-shutdown-server" };
+        server.Start();
+
+        // Connect BEFORE the 0.3s stop trigger, so this request is genuinely in flight — its own
+        // handler is still inside `await asyncio.sleep(1.0)` — when shutdown starts.
+        TcpClient client;
+        try
+        {
+            client = ConnectWithRetry("127.0.0.1", port, TimeSpan.FromSeconds(20));
+        }
+        catch (TimeoutException)
+        {
+            throw new Exception($"server never started. stdout: {serverOut}. error: {serverError}");
+        }
+        using var _client = client;
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 10000;
+        byte[] request = Encoding.ASCII.GetBytes(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        stream.Write(request);
+
+        string head = ReadHeadUntil(stream, "\r\n\r\n");
+        Assert.Contains("200 OK", head);
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        Assert.Equal("drained ok", Encoding.UTF8.GetString(ms.ToArray()));
+
+        // A connection attempted once the server has actually shut down must be refused outright —
+        // its listening socket is closed rather than accepting one more. Retried rather than a
+        // single fixed-delay attempt: exactly how long the first connection above took to establish
+        // (itself best-effort under parallel-test-run scheduling) shifts how much longer the 3s
+        // stop trigger (relative to the *server's* own start, not this attempt) still needs.
+        var refusalDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        SocketException? refusal = null;
+        while (refusal is null && DateTime.UtcNow < refusalDeadline)
+        {
+            try
+            {
+                using var second = new TcpClient();
+                second.Connect("127.0.0.1", port);
+                Thread.Sleep(100); // server hasn't stopped yet: connected fine, try again shortly
+            }
+            catch (SocketException ex)
+            {
+                refusal = ex;
+            }
+        }
+        Assert.NotNull(refusal);
+    }
+
     private static void StartServer(int port)
     {
         string script = $$"""

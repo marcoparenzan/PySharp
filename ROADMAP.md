@@ -207,8 +207,13 @@ as the test bench.
   fragmented-message reassembly, and a real closing handshake — verified live over a real socket both
   with a from-scratch WebSocket client and, separately, through a real `@app.websocket("/ws")` route
   in `fastapi_demo.py` using real starlette's own `WebSocket`/`WebSocketDisconnect`. Zero bugs found
-  anywhere in this chain. Still open: a real uvicorn-equivalent process manager (graceful
-  shutdown/reload — today's `serve()` has neither).
+  anywhere in this chain. ~~Still open: a real uvicorn-equivalent process manager (graceful
+  shutdown)~~ ✅ **Done** (Phase 4.4): real `signal.signal()` (SIGINT/SIGTERM) backed by .NET's
+  `PosixSignalRegistration`, wired into `serve()` for a real accept-then-drain shutdown — verified
+  live by hand in a real terminal, plus a real end-to-end drain test over real sockets. Found and
+  fixed two genuine event-loop bugs along the way (`asyncio.Event.set()` abandoning a real pending
+  waiter behind a stale cancelled one; a cancelled socket op resolving its future twice). Still open:
+  hot-reload on file change (a dev-only convenience, not attempted — out of scope for this sample).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
 handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
@@ -685,8 +690,23 @@ in scenario 1).
   client-initiated close correctly completing the real closing handshake, and (separately) a real
   abrupt disconnect correctly raising and catching starlette's own `WebSocketDisconnect` server-side —
   zero bugs found. Full blow-by-blow in `FASTAPI_PLAN.md` Phase 4.3.3.
-- Tests: **1015 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed stable across multiple
-  consecutive full-suite runs.
+- **Real graceful shutdown: `signal.signal()` + two genuine event-loop bugs found building it
+  (Phase 4.4).** Real `signal.signal()`/`getsignal()`/`SIG_DFL`/`SIG_IGN`, backed by .NET's own
+  `PosixSignalRegistration` — verified live by the author's own hand in a real interactive terminal
+  (this session's sandbox has no usable console for automated Ctrl+C testing, confirmed via a minimal
+  PySharp-independent probe hitting the same non-delivery). Caught and fixed a real bug from that same
+  manual test: `SystemExit` raised inside a signal handler surfaced as a raw .NET stack trace instead
+  of a clean process exit. Built real graceful shutdown on top in `samples/asgi_server.py`'s `serve()`
+  (stop accepting new connections immediately on SIGINT/SIGTERM, drain in-flight ones up to 10s) — and
+  while verifying the drain logic against real sockets, found and fixed two genuine, previously-latent
+  event-loop bugs: `asyncio.Event.set()` could silently abandon a real pending waiter behind a stale
+  cancelled one (a real, reproducible hang, not a theoretical gap), and a cancelled `sock_accept`/
+  `sock_recv`/`sock_sendall` could resolve its future a second time when the underlying real socket
+  operation later completed — both now fixed at the root, plus general hardening so an exception
+  escaping any scheduled callback degrades to a stderr message instead of hanging the whole loop. Full
+  blow-by-blow in `FASTAPI_PLAN.md` Phase 4.4.
+- Tests: **1019 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 15 consecutive
+  full-suite runs.
 
 _Update these numbers at every milestone._

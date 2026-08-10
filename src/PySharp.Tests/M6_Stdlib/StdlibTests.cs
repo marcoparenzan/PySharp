@@ -1546,6 +1546,43 @@ public class SignalTests
             print(signal.SIGINT == signal.Signals.SIGINT)
             print(int(signal.SIGTERM))
             """));
+
+    /// <summary>Real signal.signal()/getsignal()/SIG_DFL/SIG_IGN (FASTAPI_PLAN.md Phase 4.4),
+    /// backed by .NET's own PosixSignalRegistration — not a stub. Real OS signal *delivery* was
+    /// verified separately, manually, in a real interactive terminal (a genuine Ctrl+C correctly
+    /// invoked a registered handler and exited cleanly — this sandboxed environment has no usable
+    /// console for xUnit to send a real Ctrl+C itself, confirmed via a minimal PySharp-independent
+    /// probe hitting the same non-delivery). These tests cover the real, verifiable-here part: the
+    /// registration/query API's own semantics.</summary>
+    [Fact]
+    public void Signal_registers_a_handler_and_returns_the_previous_one()
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\n", Py.Run("""
+            import signal
+
+            def handler(signum, frame):
+                pass
+
+            prev = signal.signal(signal.SIGINT, handler)
+            print(prev == signal.SIG_DFL)
+            print(signal.getsignal(signal.SIGINT) is handler)
+
+            prev2 = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            print(prev2 is handler)
+            print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)
+
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            print(signal.getsignal(signal.SIGINT) == signal.SIG_DFL)
+            """));
+
+    [Fact]
+    public void Signal_rejects_a_signal_number_outside_the_real_modeled_set()
+        => Assert.Equal("caught: signal number 999 out of range\n", Py.Run("""
+            import signal
+            try:
+                signal.signal(999, lambda signum, frame: None)
+            except ValueError as e:
+                print("caught:", e)
+            """));
 }
 
 /// <summary>contextlib.ExitStack/AsyncExitStack: real LIFO callback-stack semantics. Found via

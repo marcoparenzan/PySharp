@@ -2531,6 +2531,100 @@ The author's go-ahead ("procedi") to close the other remaining WebSocket item no
   two echoed messages, and the closing handshake. Full suite green: 1015/1015 (up from 1014),
   confirmed via 6 consecutive full-suite runs (back to a healthy ~18s for the whole suite).
 
+## Phase 4.4 — real graceful shutdown: `signal.signal()`, and two genuine event-loop bugs found chasing it
+
+The author's go-ahead ("procedi" → confirmed via `AskUserQuestion` that a real, OS-signal-backed
+implementation was wanted, not a smaller polish item) to close the last tracked open item: a real
+uvicorn-equivalent graceful shutdown for `asgi_server.py`'s `serve()`.
+
+- **Real `signal.signal()`/`getsignal()`/`SIG_DFL`/`SIG_IGN`** (`SignalModule.cs`), backed by .NET's
+  own cross-platform `PosixSignalRegistration` — a real OS signal handler, not a stub. Delivery is
+  marshaled through the currently-running event loop's own `CallSoon` (captured at registration time)
+  when one exists, the same thread-safety pattern `call_soon_threadsafe` already uses elsewhere: a raw
+  OS signal can land on any thread, and this interpreter's coroutines assume only one executes at a
+  time, so the Python-level handler must run through the loop's own single-consumer queue rather than
+  directly on whatever thread .NET delivered the signal on — mirroring real CPython's own safety story
+  (its C-level handler just sets a flag; the Python handler only runs later, at a safe point) without
+  needing bytecode-tick polling, since this interpreter already has a real cross-thread-safe dispatch
+  primitive to reuse.
+- **Verification note — a genuine sandbox limitation, not a code gap**: this session's own tool sandbox
+  turned out to have no usable Win32 console session for automated Ctrl+C testing. Tried three
+  mechanisms (`GenerateConsoleCtrlEvent` with a fresh console, with an inherited console, and bash
+  `kill -INT`) — all failed to deliver. Isolated whether this was a bug in the new C# code or the
+  environment by writing a minimal, PySharp-independent raw `PosixSignalRegistration` probe (no
+  interpreter involved at all): identical non-delivery, confirming it was the sandbox, not the
+  implementation. Real delivery was then verified directly by the author, by hand, in a real
+  interactive terminal — `Ctrl+C` correctly invoked the registered handler and printed its own output.
+- **A real bug found from that exact manual test**: the handler's `raise SystemExit(0)` (a completely
+  standard "clean shutdown" idiom) surfaced as an unhandled *.NET* stack trace
+  (`PySharpLib.Runtime.PyRaise: SystemExit: 0` straight through `PosixSignalRegistration`'s own native
+  callback trampoline) instead of a clean process exit — because the handler invocation happens on a
+  thread never covered by the CLI's own top-level `PyRaise`/`SystemExit` → exit-code translation
+  (`Program.cs`'s `Host.Guard`, which only wraps the main thread's own command execution). Fixed by
+  wrapping every handler invocation in `SignalModule.cs` itself: `SystemExit` now calls
+  `Environment.Exit(code)` cleanly (no traceback), and any other exception escaping the handler prints
+  a real Python-style traceback (`PyErr.FormatTraceback`, already used by the CLI) instead of a raw
+  .NET one. Re-verified by the author, by hand, in the same real terminal — clean exit, no traceback.
+- **Real graceful shutdown built on top, in `samples/asgi_server.py`**: `serve()` now registers
+  SIGINT/SIGTERM handlers that set an `asyncio.Event`; the accept loop races each `sock_accept()`
+  against that event via `asyncio.wait(..., return_when=FIRST_COMPLETED)`, so a signal received while
+  idle between connections stops the server immediately rather than only being noticed after the next
+  one connects. On stop: the listening socket closes right away (no new connections accepted), then
+  up to 10s is spent draining any in-flight connection handlers before actually returning. The core
+  accept-then-drain logic is factored into a separate `_serve_until_stopped(app, srv, loop,
+  stop_event)` specifically so it can be exercised directly with a caller-controlled `stop_event` in
+  tests, without needing a real OS signal for every check (real signal delivery itself is covered by
+  the manual verification above).
+- **Two genuine, previously-latent event-loop bugs found while verifying the drain logic — not
+  edge cases, a real hang reproduced on the very first attempt**: a hand-built repro (server + a real
+  client, both real sockets, no shortcuts) hung forever partway through shutdown. Bisected in stages:
+  1. **`asyncio.Event.set()` could silently abandon a real, still-pending waiter.** Each loop
+     iteration that loses the accept-vs-stop race cancels the *losing* task — but cancelling a Task
+     wrapping `event.wait()` never removed its underlying future from the Event's own internal waiter
+     list. `set()` iterated that list unconditionally; hitting the stale, already-cancelled entry
+     first threw `RuntimeError: invalid state: future already done` *mid-loop*, silently abandoning
+     every waiter still to come — including the very next iteration's genuinely-pending one. A signal
+     landing between two `sock_accept` cycles then never actually woke the shutdown wait, hanging the
+     whole program despite `set()` itself appearing to "succeed" (no exception visible to the caller).
+     Fixed at the root: `Event.set()` now skips already-done waiters instead of erroring in the middle
+     of the notification loop.
+  2. **A cancelled `sock_accept()`/`sock_recv()`/`sock_sendall()` could resolve its future twice.**
+     Cancelling the *Task* wrapping one of these only marks the Python-level future done — the
+     underlying real .NET `Socket.AcceptAsync()`/etc. keeps running in the background regardless (no
+     API cancels it). When it later completes or fails (e.g. because `srv.close()` fires a real
+     `SocketException` on it), the original code unconditionally called `fut.SetResult`/`SetException`
+     a *second* time on an already-done future, throwing unhandled. Fixed by guarding each of these
+     three call sites on `!fut.IsDone` first.
+  3. **A more fundamental hardening, once the above two were understood**: `PyEventLoop`'s own
+     `DrainReady`/`RunDueTimers` invoked every scheduled callback with no exception handling at all —
+     one bad callback (like either bug above, before they were fixed) didn't just fail that one
+     callback, it threw straight out of the loop's own draining method, corrupting *all* other
+     pending/future callback processing and hanging the entire program silently. Real asyncio's own
+     behavior is to report such an exception (via `loop.call_exception_handler`, its default printing
+     to stderr) and keep running everything else scheduled. Matched that: both draining methods now
+     route every callback through a shared `InvokeCallback` that catches and reports (via
+     `PyErr.FormatTraceback` for a real `PyRaise`, `ex.ToString()` otherwise) rather than letting it
+     propagate. This is defense in depth on top of the two specific fixes above, not a replacement for
+     them — but it also means a *class* of future "unhandled exception in a scheduled callback" bugs
+     will degrade to a stderr message instead of a silent whole-program hang.
+- **Verified by hand, real sockets throughout, before any test was written**: a real client connects,
+  the server starts a slow (1s) request handler, a real `stop_event.set()` fires mid-request (the
+  server immediately stops accepting new connections) — the in-flight request still completes and the
+  client receives its full, correct response; the accept-then-drain loop then returns cleanly, having
+  logged exactly how many connections it waited for. Confirmed with the real, unmodified
+  `_serve_until_stopped` (not a simplified stand-in) via a live background process + curl, byte for
+  byte matching hand-derived expectations.
+- 5 tests added: `M6_Stdlib/StdlibTests.cs`'s `SignalTests` (2: `signal.signal()`/`getsignal()`
+  registration/query semantics, the out-of-range `ValueError`), `M10_Async/AsyncioSyncPrimitivesTests
+  .cs` (1: the exact stale-cancelled-waiter repro, without any socket — a cancelled `Task` wrapping
+  `event.wait()` must not prevent a later, real waiter from being notified), and
+  `M16_FastApi/AsgiServerSampleTests.cs` (1 real-socket end-to-end test: an in-flight connection
+  drains to completion while shutting down, and a connection attempted after shutdown completes is
+  refused outright — reproduces the exact hang found above and proves it fixed, not papered over).
+  Full suite green: 1019/1019 (up from 1015), confirmed via 15 consecutive full-suite runs (this
+  round touches core event-loop internals — `Async.cs`/`AsyncioModule.cs` — so held to the project's
+  higher bar for concurrency-sensitive changes).
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

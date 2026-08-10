@@ -501,8 +501,19 @@ public static class AsyncioModule
             if (!w.Flag)
             {
                 w.Flag = true;
+                // A waiter can already be done (typically cancelled — e.g. a `stop_task.cancel()`
+                // after `asyncio.wait(..., return_when=FIRST_COMPLETED)` picks the other side of
+                // the race) without ever being removed from this list, since cancelling the
+                // wrapping Task doesn't know to reach back into the Event's own bookkeeping. Found
+                // the hard way: resolving such a stale waiter unconditionally threw "invalid state:
+                // future already done" *mid-loop*, silently abandoning every waiter still to come —
+                // including the current, genuinely-pending one — so a real `stop_event.wait()`
+                // raced against a real `sock_accept()` across more than one loop iteration would
+                // just hang forever, .set() having already run "successfully". See
+                // FASTAPI_PLAN.md Phase 4.4.
                 foreach (var waiter in w.Waiters)
-                    waiter.SetResult(true);
+                    if (!waiter.IsDone)
+                        waiter.SetResult(true);
                 w.Waiters.Clear();
             }
             return PyNone.Instance;
@@ -907,15 +918,15 @@ public static class AsyncioModule
                         inst,
                         new PyTuple(new object[] { ep.Address.ToString(), new BigInteger(ep.Port) }),
                     });
-                    loop.CallSoon(() => fut.SetResult(tuple));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetResult(tuple); });
                 }
                 catch (SocketException ex)
                 {
-                    loop.CallSoon(() => fut.SetException(SocketModule.Translate(ex)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(SocketModule.Translate(ex)); });
                 }
                 catch (Exception ex)
                 {
-                    loop.CallSoon(() => fut.SetException(PyErr.OSError(ex.Message)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(PyErr.OSError(ex.Message)); });
                 }
             });
             return fut;
@@ -934,15 +945,15 @@ public static class AsyncioModule
                     var buffer = new byte[n];
                     int read = await w.Socket.ReceiveAsync(buffer.AsMemory(0, n), SocketFlags.None);
                     var data = new PyBytes(buffer[..read]);
-                    loop.CallSoon(() => fut.SetResult(data));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetResult(data); });
                 }
                 catch (SocketException ex)
                 {
-                    loop.CallSoon(() => fut.SetException(SocketModule.Translate(ex)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(SocketModule.Translate(ex)); });
                 }
                 catch (Exception ex)
                 {
-                    loop.CallSoon(() => fut.SetException(PyErr.OSError(ex.Message)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(PyErr.OSError(ex.Message)); });
                 }
             });
             return fut;
@@ -961,15 +972,15 @@ public static class AsyncioModule
                     int sent = 0;
                     while (sent < data.Length)
                         sent += await w.Socket.SendAsync(data.AsMemory(sent), SocketFlags.None);
-                    loop.CallSoon(() => fut.SetResult(PyNone.Instance));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetResult(PyNone.Instance); });
                 }
                 catch (SocketException ex)
                 {
-                    loop.CallSoon(() => fut.SetException(SocketModule.Translate(ex)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(SocketModule.Translate(ex)); });
                 }
                 catch (Exception ex)
                 {
-                    loop.CallSoon(() => fut.SetException(PyErr.OSError(ex.Message)));
+                    loop.CallSoon(() => { if (!fut.IsDone) fut.SetException(PyErr.OSError(ex.Message)); });
                 }
             });
             return fut;

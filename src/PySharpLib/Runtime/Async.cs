@@ -868,9 +868,29 @@ public sealed class PyEventLoop
             }
             if (cb is null)
                 return;
-            cb();
+            InvokeCallback(cb);
             if (_stopping)
                 return;
+        }
+    }
+
+    /// <summary>Real asyncio: an exception escaping a call_soon-scheduled callback is reported
+    /// (its own default_exception_handler prints it) but does NOT crash/stop the loop — whatever
+    /// else is scheduled keeps running. Found the hard way: a cancelled sock_accept's still-in-
+    /// flight .NET AcceptAsync() later completing against an already-done PyFuture used to throw
+    /// here uncaught (fixed separately — see PyFuture.SetResult/SetException's own callers now
+    /// guarding on IsDone first), which — since nothing caught it before this method — didn't just
+    /// drop that one callback, it corrupted the loop's own ready-queue/timer draining for every
+    /// other pending callback too, hanging the whole program. See FASTAPI_PLAN.md Phase 4.4.</summary>
+    private static void InvokeCallback(Action cb)
+    {
+        try
+        {
+            cb();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex is PyRaise pr ? PyErr.FormatTraceback(pr) : ex.ToString());
         }
     }
 
@@ -903,7 +923,7 @@ public sealed class PyEventLoop
             }
             if (cb is null)
                 return;
-            cb();
+            InvokeCallback(cb);
             if (_stopping)
                 return;
         }

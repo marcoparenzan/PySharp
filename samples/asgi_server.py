@@ -5,13 +5,14 @@
 
 # asgi_server.py — a minimal, real ASGI/3 HTTP + WebSocket server, run by PySharp.
 #
-# Scenario 2 of the roadmap (phase 3.2, WebSocket support added in phase 4.3): unlike
-# async_api.py (a hand-rolled router that builds its own response objects), this bridges raw
-# HTTP/1.1 (and, for a WebSocket Upgrade request, a real RFC 6455 connection) to the real ASGI
-# protocol (scope/receive/send) — the same interface a real ASGI application (starlette,
-# FastAPI, ...) expects from its server. `serve(app, host, port)` is reusable: pass it any real
-# ASGI callable. The demo app below is hand-written (no external dependency) so this sample runs
-# standalone, but any real ASGI app works identically — see FASTAPI_PLAN.md Phase 3.2/4.3.
+# Scenario 2 of the roadmap (phase 3.2, WebSocket support added in phase 4.3, graceful shutdown
+# in phase 4.4): unlike async_api.py (a hand-rolled router that builds its own response objects),
+# this bridges raw HTTP/1.1 (and, for a WebSocket Upgrade request, a real RFC 6455 connection) to
+# the real ASGI protocol (scope/receive/send) — the same interface a real ASGI application
+# (starlette, FastAPI, ...) expects from its server. `serve(app, host, port)` is reusable: pass it
+# any real ASGI callable. The demo app below is hand-written (no external dependency) so this
+# sample runs standalone, but any real ASGI app works identically — see FASTAPI_PLAN.md
+# Phase 3.2/4.3/4.4.
 #
 # What it exercises in the interpreter (built up across scenarios 1b/2a/2b/2/3):
 #   - the .NET-backed event loop's asynchronous socket I/O
@@ -19,6 +20,8 @@
 #   - the full real ASGI 3.0 http AND websocket scope/receive/send contracts
 #   - a real RFC 6455 WebSocket handshake (SHA1 + base64 on Sec-WebSocket-Key) and real frame
 #     framing/masking (hashlib, base64, struct)
+#   - a real `signal.signal()` (SIGINT/SIGTERM) for graceful shutdown: stop accepting new
+#     connections, drain in-flight ones (up to 10s), then exit — instead of dying mid-request
 #
 # v1 scope, deliberately: request bodies are read fully before the app is invoked (no
 # streaming request bodies), and every HTTP connection closes after one response (no HTTP/1.1
@@ -39,6 +42,7 @@
 import asyncio
 import base64
 import hashlib
+import signal
 import socket
 import struct
 
@@ -375,21 +379,70 @@ async def _handle(loop, conn, addr, app):
         conn.close()
 
 
+async def _serve_until_stopped(app, srv, loop, stop_event):
+    """The real accept-until-stopped-then-drain shutdown sequence, factored out of `serve()` so
+    it can be exercised directly with a caller-controlled `stop_event` — no real OS signal needed
+    to test the actual graceful-shutdown *logic* (draining in-flight connections before the
+    server actually stops); real signal delivery itself (`serve()`'s own SIGINT/SIGTERM handlers)
+    is verified separately, live, in a real interactive terminal — see FASTAPI_PLAN.md Phase 4.4.
+    Races each accept against `stop_event`, so a signal received while idle between connections
+    stops the server immediately rather than only being noticed after the next connection."""
+    connections = set()
+    try:
+        while not stop_event.is_set():
+            accept_task = asyncio.create_task(loop.sock_accept(srv))
+            stop_task = asyncio.create_task(stop_event.wait())
+            done, pending = await asyncio.wait(
+                {accept_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if accept_task in done:
+                stop_task.cancel()
+                conn, addr = accept_task.result()
+                conn.setblocking(False)
+                task = asyncio.create_task(_handle(loop, conn, addr, app))
+                connections.add(task)
+                task.add_done_callback(connections.discard)
+            else:
+                accept_task.cancel()
+    finally:
+        srv.close()
+        if connections:
+            print("shutting down: waiting for " + str(len(connections)) + " active connection(s)...")
+            await asyncio.wait(connections, timeout=10)
+        print("shutdown complete")
+
+
 async def serve(app, host=HOST, port=PORT):
     """Real, minimal ASGI/3 HTTP + WebSocket server: accepts connections and drives `app` (any
     real ASGI callable) with a genuine scope/receive/send triple built from the raw HTTP/1.1
-    bytes, or (for a real WebSocket Upgrade request) a genuine RFC 6455 handshake + framing."""
+    bytes, or (for a real WebSocket Upgrade request) a genuine RFC 6455 handshake + framing.
+
+    Real graceful shutdown on SIGINT/SIGTERM: stops accepting new connections and waits (up to 10s)
+    for in-flight ones to finish before actually closing, instead of dying mid-request. Uses this
+    project's own real `signal.signal()` (FASTAPI_PLAN.md Phase 4.4) — verified by hand, live, in a
+    real interactive terminal (`Ctrl+C` correctly ran the handler and exited cleanly, no traceback)."""
     loop = asyncio.get_running_loop()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen(64)
     srv.setblocking(False)
-    print("listening on http://" + host + ":" + str(port))
-    while True:
-        conn, addr = await loop.sock_accept(srv)
-        conn.setblocking(False)
-        asyncio.create_task(_handle(loop, conn, addr, app))
+
+    stop_event = asyncio.Event()
+
+    def _request_stop(signum, frame):
+        stop_event.set()
+
+    previous = {
+        signal.SIGINT: signal.signal(signal.SIGINT, _request_stop),
+        signal.SIGTERM: signal.signal(signal.SIGTERM, _request_stop),
+    }
+    try:
+        print("listening on http://" + host + ":" + str(port))
+        await _serve_until_stopped(app, srv, loop, stop_event)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 # ------------------------------------------------------------- demo ASGI app (no dependency)
