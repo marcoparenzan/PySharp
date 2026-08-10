@@ -343,4 +343,46 @@ public class ClassTests
             d = copy.deepcopy(s)
             print(d.a, d.b)
             """));
+
+    /// <summary>Real, raw `classmethod`/`staticmethod` objects (built via the plain `classmethod(f)`/
+    /// `staticmethod(f)` constructors, before ever being attached to a class) support `.__func__`
+    /// (the wrapped function) and arbitrary attribute assignment — found via real pydantic v1's own
+    /// `@validator`/`@root_validator` decorators (`class_validators.py`): `f_cls = classmethod(f)`,
+    /// then `f_cls.__func__` to recover the plain function, then `setattr(f_cls,
+    /// '__validator_config__', ...)` to attach registration metadata directly onto the wrapper —
+    /// both previously raised AttributeError. See FASTAPI_PLAN.md Phase 4.5.</summary>
+    [Fact]
+    public void Raw_classmethod_and_staticmethod_objects_expose_dunder_func_and_take_arbitrary_attributes()
+        => Assert.Equal("True\nTrue\nbar\nbaz\n", Py.Run("""
+            def f(x):
+                return x
+
+            cm = classmethod(f)
+            print(cm.__func__ is f)
+            sm = staticmethod(f)
+            print(sm.__func__ is f)
+
+            cm.foo = "bar"
+            print(cm.foo)
+            sm.foo = "baz"
+            print(sm.foo)
+            """));
+
+    [Fact]
+    public void Type_of_a_raw_classmethod_staticmethod_property_matches_real_CPython_names()
+        // Real CPython: type(classmethod(f)).__name__ == "classmethod" (same for staticmethod/
+        // property) — previously fell back to the raw C# wrapper class name ("PyClassMethod" etc.),
+        // breaking isinstance(x, classmethod) too (real pydantic v1's own `is_untouched` check:
+        // `isinstance(v, (property, type, classmethod, staticmethod))`, used by ModelMetaclass to
+        // recognize a decorated validator method isn't a plain field).
+        => Assert.Equal("classmethod\nstaticmethod\nproperty\nTrue\nTrue\n", Py.Run("""
+            def f(x):
+                return x
+
+            print(type(classmethod(f)).__name__)
+            print(type(staticmethod(f)).__name__)
+            print(type(property(f)).__name__)
+            print(isinstance(classmethod(f), classmethod))
+            print(isinstance(staticmethod(f), staticmethod))
+            """));
 }

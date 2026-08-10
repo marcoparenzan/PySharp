@@ -22,6 +22,30 @@ public static class DateTimeModule
 {
     private const string ValueKey = "__value__";
 
+    /// <summary>Real CPython `date`/`time`/`datetime` accept year/month/day/hour/... either
+    /// positionally or by keyword (`datetime(year=2024, month=1, day=15, ...)`) — found via real
+    /// pydantic v1's own `datetime_parse.py` (`parse_date`/`parse_time`/`parse_datetime`), which
+    /// constructs every one of these exclusively via `**kwargs` after regex-parsing an ISO string.
+    /// The previous positional-args-only reading meant any real ISO-datetime-string field silently
+    /// hit "missing required argument" for every real pydantic model using one — not an edge case.</summary>
+    private static int RequiredArg(object[] a, Dictionary<string, object>? kwargs, int index, string name)
+    {
+        if (a.Length > index)
+            return Int(a[index]);
+        if (kwargs is not null && kwargs.TryGetValue(name, out var v))
+            return Int(v);
+        throw PyErr.TypeError($"function missing required argument '{name}' (pos {index})");
+    }
+
+    private static int OptionalArg(object[] a, Dictionary<string, object>? kwargs, int index, string name, int def)
+    {
+        if (a.Length > index)
+            return Int(a[index]);
+        if (kwargs is not null && kwargs.TryGetValue(name, out var v))
+            return Int(v);
+        return def;
+    }
+
     public static readonly PyClass TimeDeltaClass = BuildTimeDeltaClass();
     public static readonly PyClass DateClass = BuildDateClass();
     public static readonly PyClass TimeClass = BuildTimeClass();
@@ -181,9 +205,12 @@ public static class DateTimeModule
         var cls = new PyClass("date", new List<PyClass>());
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"date.{name}", fn);
 
-        Add("__init__", (_, a, _) =>
+        Add("__init__", (_, a, kwargs) =>
         {
-            ((PyInstance)a[0]).Dict[ValueKey] = new DateTime(Int(a[1]), Int(a[2]), Int(a[3]));
+            int year = RequiredArg(a, kwargs, 1, "year");
+            int month = RequiredArg(a, kwargs, 2, "month");
+            int day = RequiredArg(a, kwargs, 3, "day");
+            ((PyInstance)a[0]).Dict[ValueKey] = new DateTime(year, month, day);
             return PyNone.Instance;
         });
 
@@ -252,10 +279,10 @@ public static class DateTimeModule
 
         Add("__init__", (_, a, kwargs) =>
         {
-            int hour = a.Length > 1 ? Int(a[1]) : 0;
-            int minute = a.Length > 2 ? Int(a[2]) : 0;
-            int second = a.Length > 3 ? Int(a[3]) : 0;
-            int micro = a.Length > 4 ? Int(a[4]) : 0;
+            int hour = OptionalArg(a, kwargs, 1, "hour", 0);
+            int minute = OptionalArg(a, kwargs, 2, "minute", 0);
+            int second = OptionalArg(a, kwargs, 3, "second", 0);
+            int micro = OptionalArg(a, kwargs, 4, "microsecond", 0);
             ((PyInstance)a[0]).Dict[ValueKey] = new TimeSpan(0, hour, minute, second, micro / 1000, micro % 1000 * 10 / 10);
             return PyNone.Instance;
         });
@@ -265,7 +292,11 @@ public static class DateTimeModule
         cls.Dict["hour"] = new PyProperty { Getter = new PyBuiltinFunction("time.hour", (_, a, _) => new BigInteger(Value(a[0]).Hours)) };
         cls.Dict["minute"] = new PyProperty { Getter = new PyBuiltinFunction("time.minute", (_, a, _) => new BigInteger(Value(a[0]).Minutes)) };
         cls.Dict["second"] = new PyProperty { Getter = new PyBuiltinFunction("time.second", (_, a, _) => new BigInteger(Value(a[0]).Seconds)) };
-        cls.Dict["microsecond"] = new PyProperty { Getter = new PyBuiltinFunction("time.microsecond", (_, a, _) => new BigInteger(Value(a[0]).Milliseconds * 1000)) };
+        // Real CPython: microsecond is full sub-second precision (0-999999), not just the
+        // millisecond component — `Milliseconds * 1000` silently dropped the last 3 digits (e.g.
+        // 123456 read back as 123000). Ticks-based, matching datetime.microsecond's own (already
+        // correct) formula below.
+        cls.Dict["microsecond"] = new PyProperty { Getter = new PyBuiltinFunction("time.microsecond", (_, a, _) => new BigInteger(Value(a[0]).Ticks % TimeSpan.TicksPerSecond / 10)) };
 
         Add("isoformat", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture));
         Add("__str__", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture));
@@ -296,13 +327,13 @@ public static class DateTimeModule
 
         Add("__init__", (_, a, kwargs) =>
         {
-            int year = Int(a[1]);
-            int month = Int(a[2]);
-            int day = Int(a[3]);
-            int hour = a.Length > 4 ? Int(a[4]) : 0;
-            int minute = a.Length > 5 ? Int(a[5]) : 0;
-            int second = a.Length > 6 ? Int(a[6]) : 0;
-            int micro = a.Length > 7 ? Int(a[7]) : 0;
+            int year = RequiredArg(a, kwargs, 1, "year");
+            int month = RequiredArg(a, kwargs, 2, "month");
+            int day = RequiredArg(a, kwargs, 3, "day");
+            int hour = OptionalArg(a, kwargs, 4, "hour", 0);
+            int minute = OptionalArg(a, kwargs, 5, "minute", 0);
+            int second = OptionalArg(a, kwargs, 6, "second", 0);
+            int micro = OptionalArg(a, kwargs, 7, "microsecond", 0);
             var inst = (PyInstance)a[0];
             inst.Dict[ValueKey] = new DateTime(year, month, day, hour, minute, second, micro / 1000, DateTimeKind.Unspecified)
                 .AddTicks(micro % 1000 * 10);

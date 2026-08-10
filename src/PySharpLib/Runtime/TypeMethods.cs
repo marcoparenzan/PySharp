@@ -937,6 +937,21 @@ public static class DictMethods
             return PyNone.Instance;
         });
         Add("copy", (_, a, _) => D(a).Copy());
+        // Real CPython: dict.fromkeys(iterable, value=None) is a classmethod — called unbound off
+        // the `dict` type itself (`dict.fromkeys(items, ...)`, not `some_dict.fromkeys(...)`), so
+        // the args here are (iterable, value), not (self, ...). Found via real pydantic v1's own
+        // `ValueItems._coerce_items` (utils.py): `dict.fromkeys(items, ...)` turning a real
+        // `.dict(exclude={"field"})` set argument into the internal dict shape it actually needs.
+        // v1 scope: only the unbound `dict.fromkeys(...)` call shape (real code never calls it off
+        // a dict instance — that form would need a different arg layout, out of scope here).
+        Add("fromkeys", (interp, a, _) =>
+        {
+            object value = a.Length > 1 ? a[1] : PyNone.Instance;
+            var result = new PyDict();
+            foreach (var key in PyOps.Iterate(interp, a[0]))
+                result[key] = value;
+            return result;
+        });
         return t;
     }
 

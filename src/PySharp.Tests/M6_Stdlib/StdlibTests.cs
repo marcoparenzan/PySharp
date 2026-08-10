@@ -461,6 +461,29 @@ public class InspectTests
             print(inspect.iscoroutinefunction(c.gen_method))
             print(inspect.isgeneratorfunction(c.coro_method))
             """));
+
+    /// <summary>Real inspect.getdoc(obj): obj.__doc__, cleaned the same way cleandoc() does, or None
+    /// if absent — found via real pydantic v1's own `.schema()` (schema.py: `doc = getdoc(model)`,
+    /// feeding a model's docstring into its generated JSON Schema "description"). Scoped to what's
+    /// actually settable here: PySharp doesn't capture a real docstring literal at class-definition
+    /// time (a separate, pre-existing, out-of-scope limitation — `D.__doc__` itself is already None
+    /// for a class with one), so this only covers an explicitly-assigned `__doc__` and the
+    /// no-docstring-at-all case, not real automatic docstring capture. See FASTAPI_PLAN.md
+    /// Phase 4.5.</summary>
+    [Fact]
+    public void Getdoc_cleans_an_explicitly_set_docstring_and_returns_None_when_absent()
+        => Assert.Equal("'hello\\nworld'\nNone", Run("""
+            import inspect
+
+            def f():
+                pass
+            f.__doc__ = "  hello\n    world\n  "
+            print(repr(inspect.getdoc(f)))
+
+            class C:
+                pass
+            print(inspect.getdoc(C))
+            """));
 }
 
 /// <summary>itertools (chain/islice/zip_longest) and the collections.Counter/ChainMap additions —
@@ -795,6 +818,59 @@ public class DateTimeTests
             tm = datetime.time(9, 30, 0)
             print(tm)
             print(tm.hour, tm.minute)
+            """));
+
+    /// <summary>Real CPython accepts year/month/day/hour/... to date/time/datetime either
+    /// positionally or by keyword — found via real pydantic v1's own `datetime_parse.py`
+    /// (`parse_date`/`parse_time`/`parse_datetime`), which builds every one of these exclusively via
+    /// `**kwargs` after regex-parsing an ISO string. The previous positional-only reading meant any
+    /// real ISO datetime/date/time string field raised "missing required argument" for every model
+    /// using one. See FASTAPI_PLAN.md Phase 4.5.</summary>
+    [Fact]
+    public void Date_time_datetime_accept_keyword_arguments_not_just_positional()
+        => Assert.Equal(
+            "2024 1 15\n2024 1 15\n" +
+            "12 30 45\n12 30 45 123456\n" +
+            "2024 1 15 12 30 45\n2024 1 15 12 30 45 123456\n2024 1 15 9 5",
+            Run("""
+                from datetime import date, time, datetime
+
+                d1 = date(2024, 1, 15)
+                print(d1.year, d1.month, d1.day)
+                d2 = date(year=2024, month=1, day=15)
+                print(d2.year, d2.month, d2.day)
+
+                t1 = time(12, 30, 45)
+                print(t1.hour, t1.minute, t1.second)
+                t2 = time(hour=12, minute=30, second=45, microsecond=123456)
+                print(t2.hour, t2.minute, t2.second, t2.microsecond)
+
+                dt1 = datetime(2024, 1, 15, 12, 30, 45)
+                print(dt1.year, dt1.month, dt1.day, dt1.hour, dt1.minute, dt1.second)
+                dt2 = datetime(year=2024, month=1, day=15, hour=12, minute=30, second=45, microsecond=123456)
+                print(dt2.year, dt2.month, dt2.day, dt2.hour, dt2.minute, dt2.second, dt2.microsecond)
+                dt3 = datetime(2024, 1, 15, hour=9, minute=5)  # mixed positional + keyword
+                print(dt3.year, dt3.month, dt3.day, dt3.hour, dt3.minute)
+                """));
+
+    [Fact]
+    public void Datetime_construction_missing_a_required_argument_raises_TypeError()
+        => Assert.Equal("caught: function missing required argument 'day' (pos 3)", Run("""
+            from datetime import datetime
+            try:
+                datetime(year=2024, month=1)
+            except TypeError as e:
+                print("caught:", e)
+            """));
+
+    [Fact]
+    public void Time_microsecond_keeps_full_sub_millisecond_precision()
+        // Regression: time.microsecond's getter used to read only the whole-millisecond component
+        // (`Milliseconds * 1000`), silently truncating e.g. 123456 down to 123000.
+        => Assert.Equal("123456", Run("""
+            from datetime import time
+            t = time(hour=1, microsecond=123456)
+            print(t.microsecond)
             """));
 }
 
@@ -2001,6 +2077,54 @@ public class CollectionsAbcMappingTests
 
             print(M({"a": 1}).get("a"))
             """));
+}
+
+/// <summary>collections.abc.Set/MutableSet (and typing.AbstractSet, its own separately-built
+/// placeholder in PySharp's typing module rather than a true alias the way real CPython's is) —
+/// real set/frozenset are recognized as virtual subclasses via duck-typing, matching real CPython's
+/// ABC registration. Found via real pydantic v1's own `ValueItems._coerce_items` (utils.py):
+/// `isinstance(items, AbstractSet)` on a real `{"field"}` literal passed to `.dict(exclude={...})`
+/// — previously fell through to pydantic's own "unexpected type" error since neither check
+/// recognized a real set at all. See FASTAPI_PLAN.md Phase 4.5.</summary>
+public class CollectionsAbcSetTests
+{
+    private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    [Fact]
+    public void Set_and_frozenset_satisfy_Set_and_typing_AbstractSet_but_only_set_satisfies_MutableSet()
+        => Assert.Equal("True\nTrue\nTrue\nTrue\nFalse\nFalse", Run("""
+            from typing import AbstractSet
+            from collections.abc import Set, MutableSet
+
+            s = {1, 2, 3}
+            fs = frozenset([1, 2, 3])
+
+            print(isinstance(s, AbstractSet))
+            print(isinstance(s, Set))
+            print(isinstance(s, MutableSet))
+            print(isinstance(fs, Set))
+            print(isinstance(fs, MutableSet))
+            print(isinstance([1, 2], Set))
+            """));
+
+    /// <summary>Real CPython dict.fromkeys(iterable, value=None) is a classmethod, called unbound
+    /// off the `dict` type itself. Found via real pydantic v1's own `ValueItems._coerce_items`:
+    /// `dict.fromkeys(items, ...)` turning a real `.dict(exclude={...})` set argument into the
+    /// internal dict shape it actually needs — previously AttributeError, `fromkeys` didn't exist
+    /// at all.</summary>
+    [Fact]
+    public void Dict_fromkeys_builds_a_real_dict_with_a_shared_default_value()
+        => Assert.Equal(
+            "{'a': None, 'b': None, 'c': None}\n{'a': 0, 'b': 0}\n['x', 'y']\nTrue",
+            Run("""
+                d = dict.fromkeys(["a", "b", "c"])
+                print(d)
+                d2 = dict.fromkeys(["a", "b"], 0)
+                print(d2)
+                d3 = dict.fromkeys({"x", "y"}, ...)
+                print(sorted(d3.keys()))
+                print(d3["x"] is ...)
+                """));
 }
 
 /// <summary>abc.ABC/ABCMeta.register: real virtual-subclass registration — isinstance/issubclass

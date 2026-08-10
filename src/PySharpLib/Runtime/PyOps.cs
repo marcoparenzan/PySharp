@@ -42,6 +42,14 @@ public static class PyOps
         PyFunction or PyBuiltinFunction => "function",
         PyCode => "code",
         PyBoundMethod => "method",
+        // Real CPython: type(classmethod(f)).__name__ == "classmethod" (and staticmethod/property
+        // likewise) — previously fell through to the raw C# class name ("PyClassMethod" etc.),
+        // breaking isinstance(x, classmethod)/x.__class__ for real pydantic v1's own @validator/
+        // @root_validator internals (`is_untouched`, `main.py`: `isinstance(v, (property, type,
+        // classmethod, staticmethod))`, used to recognize a validator method isn't a plain field).
+        PyClassMethod => "classmethod",
+        PyStaticMethod => "staticmethod",
+        PyProperty => "property",
         PyClass => "type",
         PyInstance i => i.Class.Name,
         PyModule => "module",

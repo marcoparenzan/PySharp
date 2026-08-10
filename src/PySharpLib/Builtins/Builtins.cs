@@ -930,6 +930,18 @@ public static class BuiltinsFactory
             "Callable" => HasDunder("__call__")
                 || obj is PyFunction or PyBuiltinFunction or PyBoundMethod or PyClass or PyStaticMethod or PyClassMethod,
             "Hashable" => obj is not (PyList or PyDict or PySet or PyByteArray),
+            // Real CPython: set/frozenset are registered virtual subclasses of
+            // collections.abc.Set; only the real, mutable set additionally satisfies MutableSet.
+            // Found via real pydantic v1's own `ValueItems._coerce_items` (utils.py) —
+            // `isinstance(items, AbstractSet)` (typing.AbstractSet, an alias for
+            // collections.abc.Set) on a real `{"field"}` literal passed to `.dict(exclude={...})` —
+            // previously fell through to its own "unexpected type" error instead of recognizing a
+            // real set at all.
+            // "AbstractSet" is real typing.AbstractSet's own distinct name in PySharp's typing
+            // module (a separately-built placeholder, not a true alias to collections.abc.Set the
+            // way real CPython's is) — same real-world isinstance target either way.
+            "Set" or "AbstractSet" => obj is PySet or PyFrozenSet,
+            "MutableSet" => obj is PySet,
             // Real CPython: `types.CoroutineType`/`types.GeneratorType` are registered virtual
             // subclasses of `collections.abc.Coroutine`/`Generator` — a real coroutine/generator
             // object always satisfies the isinstance check, not via duck-typed dunder presence.

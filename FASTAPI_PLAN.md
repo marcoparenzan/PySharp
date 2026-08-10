@@ -2625,6 +2625,88 @@ uvicorn-equivalent graceful shutdown for `asgi_server.py`'s `serve()`.
   round touches core event-loop internals — `Async.cs`/`AsyncioModule.cs` — so held to the project's
   higher bar for concurrency-sensitive changes).
 
+## Phase 4.5 — pydantic v1 robustness sweep: 30 real-world field/validator patterns, 7 real gaps found and closed
+
+The author's own call ("andiamo con il residuo... L'obiettivo è condividere questo progetto e quindi
+deve essere robusto" — sharing this project means it needs to be robust), picking Phase 2.3's own
+long-deferred item over starting scenario 3: probe pydantic v1 against a much wider range of real
+field types/validators/Config options than `fastapi_demo.py` alone happened to exercise, closing
+whatever real gaps that turns up.
+
+- **Round 1 — 16 common field-shape patterns, 13/16 already worked, 3 real gaps found**: `Optional[T]`
+  with a default, `List[T]`/`Dict[str, T]` fields, nested `BaseModel` fields, `List[Model]` fields,
+  `Enum` fields, `Field()` numeric/string constraints, `Union` fields, `Field(default_factory=...)`,
+  `.parse_obj()`/`.json()`/`.parse_raw()`, `Config.orm_mode`/`.from_orm()`, and
+  `Optional[List[Model]]` all worked correctly on the first try. Three did not:
+  - **`@validator`/`@root_validator` raised `AttributeError: 'PyClassMethod' object has no attribute
+    '__func__'`**: both decorators internally do `f_cls = classmethod(function)` then read
+    `f_cls.__func__` to recover the plain function, and `setattr(f_cls, '__validator_config__',
+    ...)` to attach registration metadata directly onto the raw wrapper object — real CPython's
+    `classmethod`/`staticmethod` support both. PySharp's `PyClassMethod`/`PyStaticMethod` had neither.
+    Fixed: both gained a lazily-allocated `Attributes` dict (`Interp.cs`'s `TryGetAttr`/`SetAttr` wired
+    to check `__func__` specially, then fall through to `Attributes`, then to the shared builtin
+    `__class__` fallback for anything else — the fall-through mattered: an early version that returned
+    `false` outright for unknown names broke `.__class__` too).
+  - **`type(classmethod(f)).__name__`/`isinstance(f_cls, classmethod)` were both wrong** — `PyOps
+    .TypeName` had no case for `PyClassMethod`/`PyStaticMethod`/`PyProperty`, falling back to the raw
+    C# wrapper class name ("PyClassMethod") instead of the real Python type name ("classmethod").
+    This silently broke pydantic's own `ModelMetaclass.__new__`: its `is_untouched(value)` check
+    (`main.py`) is `isinstance(v, (property, type, classmethod, staticmethod))`, used to recognize a
+    decorated validator method isn't a plain field — with the wrong type name, a validator method got
+    misclassified as a field, raising `RuntimeError: no validator found for <class 'PyClassMethod'>`.
+    Fixed by adding the three real names to `PyOps.TypeName`.
+  - **A real `datetime` field raised `ValidationError: ... datetime.__init__() missing required
+    argument`**: pydantic's own `datetime_parse.py` (`parse_date`/`parse_time`/`parse_datetime`)
+    constructs `date`/`time`/`datetime` **exclusively by keyword** (`datetime(**kw_)`) after
+    regex-parsing an ISO string — but `DateTimeModule.cs`'s three constructors only ever read
+    `year`/`month`/`day`/`hour`/... positionally (`Int(a[1])`, `Int(a[2])`, ...), so this failed for
+    every real ISO-datetime/date/time-string field, not an edge case. Fixed with a shared
+    `RequiredArg`/`OptionalArg` helper reading positionally-or-by-keyword, applied to all three
+    constructors. Verifying this by hand also caught a second, related bug: `time.microsecond`'s
+    getter read only `Milliseconds * 1000`, silently truncating e.g. `123456` down to `123000` —
+    fixed to the same real Ticks-based formula `datetime.microsecond`'s own getter already used
+    correctly.
+- **Round 2 — 14 more advanced real-world patterns, 12/14 already worked, 2 real gaps found**:
+  `Field(alias=...)` + `.dict(by_alias=True)`, model inheritance, `.copy(update=...)`,
+  `ValidationError.errors()` (real `loc`/`type` per error), `@validator(pre=True)`, a validator
+  applying to multiple fields at once, `Config.extra = "forbid"`, `conint`/`constr` constraints,
+  real `str`→`int` coercion inside `List[int]`, `repr(model)`, and `Field(None)` as an explicit
+  Optional default all worked correctly on the first try. Two did not:
+  - **`.dict(exclude={"field"})` raised `TypeError: Unexpected type of exclude value <built-in
+    function set>`**: pydantic's own `ValueItems._coerce_items` (`utils.py`) checks `isinstance(items,
+    Mapping)` then `isinstance(items, AbstractSet)` (`typing.AbstractSet`) before falling to an error
+    — `collections.abc.Set`/`MutableSet` (and `typing.AbstractSet`, its own separately-built
+    placeholder in PySharp's typing module rather than a true alias) had no case in the ABC
+    duck-typing dispatch (`Builtins.cs`'s `SatisfiesAbcByDuckType`) at all, so a real `{"field"}` set
+    literal was never recognized as a real set — every isinstance check silently failed straight to
+    the error branch. Fixed by adding `"Set"`/`"AbstractSet"`/`"MutableSet"` cases (same mechanism
+    already used for `Mapping`/`Iterable`/`Coroutine`/etc.).
+  - **After that fix, a new, more precise error**: `AttributeError: 'function' object has no attribute
+    'fromkeys'` — `_coerce_items`'s next line, `dict.fromkeys(items, ...)`, a real CPython classmethod
+    called unbound off the `dict` type itself. `dict.fromkeys` didn't exist at all. Added to
+    `DictMethods.Table`, scoped to the real (and overwhelmingly common) unbound-call shape
+    `dict.fromkeys(iterable, value)` — not the rarer `some_instance.fromkeys(...)` form, which would
+    need a different arg layout this round didn't need.
+  - **`.schema()` separately hit `ImportError: cannot import name 'getdoc' from 'inspect'`**
+    (`schema.py`: `doc = getdoc(model)`, feeding a model's docstring into its generated JSON Schema
+    "description"). Added a real (not stubbed) `inspect.getdoc`: reads `__doc__`, cleans it via the
+    already-real `cleandoc`, `None` if absent — scoped to what's actually settable, since PySharp
+    doesn't capture a real docstring literal at class-definition time at all yet (a separate,
+    pre-existing, out-of-scope limitation — confirmed by hand: `SomeClass.__doc__` is already `None`
+    for a class with a real docstring, unrelated to this fix).
+- **Every one of these 7 fixes was manually verified against hand-derived real CPython output before
+  any test was written** — the same discipline used throughout this whole plan — then re-verified by
+  re-running both full probe sweeps end to end: 16/16 and 14/14, 30/30 total.
+- 13 tests added: `M4_Functions/ClassTests.cs` (2: raw `classmethod`/`staticmethod` `__func__`/
+  arbitrary-attribute support, and `type()`/`isinstance()` against the real names),
+  `M6_Stdlib/StdlibTests.cs` (5: keyword-argument date/time/datetime construction, the missing-
+  required-argument `TypeError`, `time.microsecond` precision, `inspect.getdoc`, and a new
+  `CollectionsAbcSetTests` class covering `Set`/`MutableSet`/`AbstractSet` isinstance plus
+  `dict.fromkeys`), and a new `M16_FastApi/PydanticFieldTypeSweepTests.cs` (14: the real pydantic-
+  level scenario for every one of the 7 gaps, end to end through the actual installed package, not
+  just the interpreter-level mechanism). Full suite green: 1041/1041 (up from 1019), confirmed via 8
+  consecutive full-suite runs.
+
 ## Phase 5 — docs
 
 - [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),

@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel working, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` ✅, more validators open), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel + 30-pattern robustness sweep, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
 | 3 | **SQL access** (SQLite, then Postgres) | _to be created_ | ⚪ Planned | `sqlite3` DB-API module (C# shim on `Microsoft.Data.Sqlite`), then `Npgsql` |
 | 4 | **HTTP client** (requests-like) | _to be created_ | ⚪ Planned | full `http.client`/`urllib.request`, `re`, headers/redirects, maybe pure `requests` |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -190,7 +190,14 @@ as the test bench.
   key~~ ✅ **Fixed** (`FASTAPI_PLAN.md` 4.1.11): real `__slots__`-backed per-instance storage
   (`PyClass.HasSlot`/`PyInstance.Slots`), separate from an instance's regular attribute dict even when
   `__dict__` is itself a declared slot (pydantic's own `BaseModel.__slots__ = ('__dict__',
-  '__fields_set__')` pattern). Full phased log in `FASTAPI_PLAN.md`.
+  '__fields_set__')` pattern). **A 30-pattern real-world robustness sweep (4.5)** then probed field
+  types/validators/Config options well beyond what any one sample app needed — `Optional`/`List`/
+  `Dict`/nested/`Enum` fields, `@validator`/`@root_validator`, `conint`/`constr`, real ISO-string
+  `datetime` fields, aliases, inheritance, `.copy()`/`.dict(exclude=/include=)`/`.schema()`,
+  `Config.extra` — closing 7 real gaps it found (raw `classmethod`/`staticmethod` attribute support,
+  their real type names, keyword-argument `date`/`time`/`datetime` construction,
+  `time.microsecond` precision, `collections.abc.Set` isinstance support, `dict.fromkeys`,
+  `inspect.getdoc`). Full phased log in `FASTAPI_PLAN.md`.
 - **2e — ASGI server + FastAPI.** ✅ **Done** (a real, live end-to-end demo — some smaller-scoped
   items remain, see below). `samples/asgi_server.py` (Phase 3.2) is a real, minimal, reusable ASGI/3
   HTTP server over PySharp's own async socket I/O, verified over real HTTP (curl) against both its own
@@ -705,8 +712,25 @@ in scenario 1).
   operation later completed — both now fixed at the root, plus general hardening so an exception
   escaping any scheduled callback degrades to a stderr message instead of hanging the whole loop. Full
   blow-by-blow in `FASTAPI_PLAN.md` Phase 4.4.
-- Tests: **1019 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
-  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 15 consecutive
+- **pydantic v1 robustness sweep: 30 real-world field/validator patterns probed, 7 real gaps found
+  and closed (Phase 4.5).** The author's own call — sharing this project means it needs to be
+  robust — picked over starting scenario 3. Two rounds (16 then 14 real-world patterns: `Optional`/
+  `List`/`Dict`/nested/`Enum` fields, `Field()` constraints, `Union`, `default_factory`,
+  `parse_obj`/`.json()`, `orm_mode`, `@validator`/`@root_validator` (plain, `pre=True`, multi-field),
+  `conint`/`constr`, real ISO-string `datetime` fields, `Field(alias=...)`, model inheritance,
+  `.copy(update=...)`, `ValidationError.errors()`, `Config.extra`, `.dict(exclude=/include=)`,
+  `.schema()`) — 25/30 already worked correctly; 7 real, previously-latent gaps found and fixed: raw
+  `classmethod`/`staticmethod` objects didn't support `.__func__` or arbitrary attribute assignment
+  (breaking `@validator`/`@root_validator` internals), their real type name/`isinstance()` behavior
+  was wrong (breaking pydantic's own field-vs-validator classification), `date`/`time`/`datetime`
+  only accepted positional arguments (breaking every real ISO-string date/time/datetime field, since
+  pydantic's own parser constructs them entirely by keyword), `time.microsecond` silently truncated
+  sub-millisecond precision, `collections.abc.Set`/`MutableSet`/`typing.AbstractSet` had no
+  isinstance duck-typing support (breaking `.dict(exclude=/include=)`), `dict.fromkeys` didn't exist,
+  and `inspect.getdoc` didn't exist (breaking `.schema()`). Full blow-by-blow in `FASTAPI_PLAN.md`
+  Phase 4.5.
+- Tests: **1041 green** (up from 547 — pydantic v1 + starlette/anyio + match/case probe-driven work
+  across `FASTAPI_PLAN.md`, plus aiomqtt/other work in between), confirmed via 8 consecutive
   full-suite runs.
 
 _Update these numbers at every milestone._

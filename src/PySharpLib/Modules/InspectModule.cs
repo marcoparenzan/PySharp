@@ -36,6 +36,16 @@ public static class InspectModule
         d["cleandoc"] = new PyBuiltinFunction("cleandoc", (interp, a, _) =>
             CleanDoc(PyOps.Str(interp, a[0])));
 
+        // Real CPython: obj.__doc__ (None if absent or not a real string), cleaned the same way
+        // cleandoc() does — found via real pydantic v1's own .schema() (schema.py: `doc =
+        // getdoc(model)`, feeding a model class's own docstring into its generated JSON Schema
+        // "description"). v1 scope: doesn't walk the MRO for an inherited docstring the way real
+        // CPython's own `_finddoc` fallback does — nothing reachable has needed that yet.
+        d["getdoc"] = new PyBuiltinFunction("getdoc", (interp, a, _) =>
+            interp.TryGetAttr(a[0], "__doc__", out var doc) && doc is string s
+                ? CleanDoc(s)
+                : PyNone.Instance);
+
         d["Parameter"] = ParameterClass;
         d["Signature"] = SignatureClass;
         d["signature"] = new PyBuiltinFunction("signature", (interp, a, _) => BuildSignature(interp, a[0]));

@@ -125,12 +125,22 @@ public sealed class PyBoundMethod
 public sealed class PyStaticMethod
 {
     public object Function { get; }
+    /// <summary>Real CPython's `staticmethod` supports arbitrary attribute assignment (e.g. real
+    /// pydantic v1's `@validator` internals do `setattr(f_cls, '__validator_config__', ...)` on a
+    /// raw classmethod/staticmethod object before ever attaching it to a class). Lazily allocated —
+    /// most staticmethods never get one set.</summary>
+    public PyDict? Attributes { get; private set; }
+    public PyDict EnsureAttributes() => Attributes ??= new PyDict();
     public PyStaticMethod(object function) => Function = function;
 }
 
 public sealed class PyClassMethod
 {
     public object Function { get; }
+    /// <summary>See PyStaticMethod.Attributes — same real CPython arbitrary-attribute-assignment
+    /// support, needed for the same real pydantic v1 `@validator`/`@root_validator` idiom.</summary>
+    public PyDict? Attributes { get; private set; }
+    public PyDict EnsureAttributes() => Attributes ??= new PyDict();
     public PyClassMethod(object function) => Function = function;
 }
 

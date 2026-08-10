@@ -3003,6 +3003,32 @@ public sealed class Interp
                     return true;
                 throw PyErr.AttributeError($"type '{ct.Type.Name}' has no attribute '{name}'");
 
+            // Real CPython: a raw classmethod/staticmethod object (before it's ever looked up off
+            // a class — e.g. `classmethod(f)` called directly, not via `@classmethod`) exposes the
+            // wrapped function as `.__func__`. Found via real pydantic v1's own `@validator`/
+            // `@root_validator` decorators (`class_validators.py`): `f_cls = function if
+            // isinstance(function, classmethod) else classmethod(function)`, then `f_cls.__func__`
+            // to get the plain function back out for its own validator registry.
+            case PyClassMethod cm:
+                if (name == "__func__")
+                {
+                    value = cm.Function;
+                    return true;
+                }
+                if (cm.Attributes is not null && cm.Attributes.TryGet(name, out value!))
+                    return true;
+                // Shared builtin fallback (e.g. __class__) — same as the default: case below.
+                return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
+            case PyStaticMethod sm:
+                if (name == "__func__")
+                {
+                    value = sm.Function;
+                    return true;
+                }
+                if (sm.Attributes is not null && sm.Attributes.TryGet(name, out value!))
+                    return true;
+                return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
+
             default:
                 return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
         }
@@ -3059,6 +3085,15 @@ public sealed class Interp
                 return;
             case PyBuiltinFunction bfn:
                 bfn.Attributes[name] = value;
+                return;
+            case PyClassMethod cm:
+                // Real CPython: a raw classmethod object supports arbitrary attribute assignment —
+                // real pydantic v1's own @validator/@root_validator rely on exactly this
+                // (`setattr(f_cls, '__validator_config__', ...)`). See TryGetAttr's own doc comment.
+                cm.EnsureAttributes()[name] = value;
+                return;
+            case PyStaticMethod sm:
+                sm.EnsureAttributes()[name] = value;
                 return;
             case ClrObject clr:
                 if (!ClrBinder.TrySetMember(clr.Instance, clr.Type, name, value, isStatic: false))
