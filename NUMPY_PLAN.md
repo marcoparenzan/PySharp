@@ -118,16 +118,26 @@ performance, **not** views-everywhere semantics (documented per step).
   `N != M` shape.
 - [x] 2.8 `array.copy()` and `np.copy(a)`. Test independence from the source.
 
-## Phase 3 — Indexing & slicing (copies)
+## Phase 3 — Indexing & slicing (copies) ✅ (2026-08-11)
 
-- [ ] 3.1 `a[i]` on 1-D → scalar (Python `float`); support negative `i`; `IndexError` out of range. Test.
-- [ ] 3.2 `a[i, j, ...]` N-D integer tuple index → scalar. Test.
-- [ ] 3.3 `a[i]` on N-D (partial index) → sub-array (copy). Test.
-- [ ] 3.4 1-D slice `a[start:stop:step]` → 1-D array (copy). Test incl. negative/step.
-- [ ] 3.5 N-D slice `a[s1, s2, ...]` mixing ints and slices → array (copy). Test.
-- [ ] 3.6 Assignment `a[i] = v` and `a[i, j] = v` (scalar). Test.
-- [ ] 3.7 Slice assignment `a[1:3] = scalar` (broadcast scalar). Test.
-- [ ] 3.8 Slice assignment `a[1:3] = array` (shape must match). Test + error case.
+- [x] 3.1 `a[i]` on 1-D → scalar (Python `float`); support negative `i`; `IndexError` out of range. Test.
+- [x] 3.2 `a[i, j, ...]` N-D integer tuple index → scalar. Test.
+- [x] 3.3 `a[i]` on N-D (partial index) → sub-array (copy). Test.
+  — *Note:* implemented as one general mechanism, not a special case: any axis without an explicit
+  index in the given tuple gets an implicit full slice (real numpy's own "partial indexing" rule),
+  which is also what makes 3.5's int/slice mixing fall out for free from the same code path.
+  Verified the result is a genuinely independent copy (mutating the sub-array leaves the source
+  array untouched).
+- [x] 3.4 1-D slice `a[start:stop:step]` → 1-D array (copy). Test incl. negative/step.
+  — *Note:* reuses `PySlice.Indices(len)` (the same real start/stop/step/count normalization
+  `list`/`str` slicing already uses) rather than re-deriving slice semantics.
+- [x] 3.5 N-D slice `a[s1, s2, ...]` mixing ints and slices → array (copy). Test. — *Note:* see 3.3.
+- [x] 3.6 Assignment `a[i] = v` and `a[i, j] = v` (scalar). Test.
+- [x] 3.7 Slice assignment `a[1:3] = scalar` (broadcast scalar). Test.
+- [x] 3.8 Slice assignment `a[1:3] = array` (shape must match). Test + error case.
+  — *Note:* the shape check is an exact match only (real per-element broadcasting rules — e.g.
+  assigning a `(3,)` array into a `(2,3)` slice — are Phase 4's job); a mismatch raises the real
+  `ValueError` numpy itself raises ("could not broadcast input array from shape ... into shape ...").
 
 ## Phase 4 — Elementwise ops & broadcasting
 

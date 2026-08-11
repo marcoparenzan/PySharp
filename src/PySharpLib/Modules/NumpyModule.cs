@@ -266,6 +266,143 @@ public static class NumpyModule
     private static PyRaise RaggedArrayError() => PyErr.ValueError(
         "setting an array element with a sequence. The requested array has an inhomogeneous shape.");
 
+    // ---------------------------------------------------------------- Phase 3: indexing/slicing
+
+    /// <summary>Resolves a real numpy index (a single int/bool, a `PySlice`, or a `PyTuple` mixing
+    /// both — exactly what `Interp.EvalIndex` builds for `a[i]`/`a[1:3]`/`a[i, j]`/`a[1:3, i]`)
+    /// into, per axis, the list of source element-offsets along that axis to visit. An axis with an
+    /// explicit integer index contributes a single offset and is "reduced" (absent from
+    /// `resultShape`); a slice or an axis with no explicit index (real numpy's own implicit
+    /// "partial indexing" — `a[i]` on an N-D array only indexes axis 0, keeping the rest) keeps its
+    /// full offset list and its size in `resultShape`.</summary>
+    private static (int[][] AxisOffsets, int[] ResultShape) ResolveAxes(NdArrayData d, object index)
+    {
+        var items = index is PyTuple t ? t.Items : new[] { index };
+        if (items.Length > d.Ndim)
+            throw PyErr.IndexError(
+                $"too many indices for array: array is {d.Ndim}-dimensional, but {items.Length} were indexed");
+
+        var axisOffsets = new int[d.Ndim][];
+        var resultShape = new List<int>();
+
+        for (int axis = 0; axis < d.Ndim; axis++)
+        {
+            if (axis < items.Length && items[axis] is PySlice slice)
+            {
+                var (start, _, step, count) = slice.Indices(d.Shape[axis]);
+                var offs = new int[count];
+                for (int k = 0; k < count; k++)
+                    offs[k] = start + k * step;
+                axisOffsets[axis] = offs;
+                resultShape.Add(count);
+            }
+            else if (axis < items.Length)
+            {
+                axisOffsets[axis] = new[] { ResolveIntIndex(items[axis], d.Shape[axis], axis) };
+            }
+            else
+            {
+                int n = d.Shape[axis];
+                var offs = new int[n];
+                for (int k = 0; k < n; k++)
+                    offs[k] = k;
+                axisOffsets[axis] = offs;
+                resultShape.Add(n);
+            }
+        }
+
+        return (axisOffsets, resultShape.ToArray());
+    }
+
+    private static int ResolveIntIndex(object item, int axisLen, int axis)
+    {
+        var raw = PyOps.AsBigInt(item, "index");
+        int idx = (int)raw;
+        int resolved = idx < 0 ? idx + axisLen : idx;
+        if (resolved < 0 || resolved >= axisLen)
+            throw PyErr.IndexError($"index {idx} is out of bounds for axis {axis} with size {axisLen}");
+        return resolved;
+    }
+
+    /// <summary>`a[index]`: a fully-reduced index (an explicit int on every axis) returns a real
+    /// Python `float` scalar, matching real numpy — everything else returns a new, independent
+    /// `ndarray` **copy** (real strided views are a later, optional phase — see NUMPY_PLAN.md
+    /// Phase 12).</summary>
+    private static object GetItem(NdArrayData d, object index)
+    {
+        var (axisOffsets, resultShape) = ResolveAxes(d, index);
+        var buf = (double[])d.Buffer;
+        if (resultShape.Length == 0)
+            return buf[FlatOffset(d, axisOffsets)];
+
+        var flat = new List<double>();
+        GatherRecursive(buf, d.Strides, axisOffsets, 0, 0, flat);
+        return Wrap(new NdArrayData(d.DType, flat.ToArray(), resultShape));
+    }
+
+    /// <summary>`a[index] = value`: a fully-reduced index assigns a single scalar element; any
+    /// other index assigns either a broadcast scalar (`a[1:3] = 5.0`) or another array whose shape
+    /// must exactly match the indexed region (`a[1:3] = other` — real per-element broadcasting
+    /// beyond an exact shape match is Phase 4's job, not this one).</summary>
+    private static void SetItem(NdArrayData d, object index, object value)
+    {
+        var (axisOffsets, resultShape) = ResolveAxes(d, index);
+        var buf = (double[])d.Buffer;
+        if (resultShape.Length == 0)
+        {
+            buf[FlatOffset(d, axisOffsets)] = PyOps.AsDouble(value);
+            return;
+        }
+
+        if (value is PyInstance pi && pi.Class == NdArrayClass)
+        {
+            var src = Data(pi);
+            if (!src.Shape.SequenceEqual(resultShape))
+                throw PyErr.ValueError(
+                    $"could not broadcast input array from shape {ShapeRepr(src.Shape)} into shape {ShapeRepr(resultShape)}");
+            var srcBuf = (double[])src.Buffer;
+            int i = 0;
+            ScatterRecursive(buf, d.Strides, axisOffsets, 0, 0, () => srcBuf[i++]);
+        }
+        else
+        {
+            double scalar = PyOps.AsDouble(value);
+            ScatterRecursive(buf, d.Strides, axisOffsets, 0, 0, () => scalar);
+        }
+    }
+
+    private static int FlatOffset(NdArrayData d, int[][] axisOffsets)
+    {
+        int offset = 0;
+        for (int axis = 0; axis < d.Ndim; axis++)
+            offset += axisOffsets[axis][0] * d.Strides[axis];
+        return offset;
+    }
+
+    private static void GatherRecursive(double[] buf, int[] strides, int[][] axisOffsets, int axis, int baseOffset, List<double> flat)
+    {
+        if (axis == axisOffsets.Length)
+        {
+            flat.Add(buf[baseOffset]);
+            return;
+        }
+        foreach (int off in axisOffsets[axis])
+            GatherRecursive(buf, strides, axisOffsets, axis + 1, baseOffset + off * strides[axis], flat);
+    }
+
+    private static void ScatterRecursive(double[] buf, int[] strides, int[][] axisOffsets, int axis, int baseOffset, Func<double> nextValue)
+    {
+        if (axis == axisOffsets.Length)
+        {
+            buf[baseOffset] = nextValue();
+            return;
+        }
+        foreach (int off in axisOffsets[axis])
+            ScatterRecursive(buf, strides, axisOffsets, axis + 1, baseOffset + off * strides[axis], nextValue);
+    }
+
+    private static string ShapeRepr(int[] shape) => shape.Length == 1 ? $"({shape[0]},)" : $"({string.Join(", ", shape)})";
+
     public static PyInstance Wrap(NdArrayData data)
     {
         var inst = new PyInstance(NdArrayClass);
@@ -298,6 +435,13 @@ public static class NumpyModule
         Add("__str__", (_, a, _) => FormatArray(Data(a[0])));
 
         Add("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
+
+        Add("__getitem__", (_, a, _) => GetItem(Data(a[0]), a[1]));
+        Add("__setitem__", (_, a, _) =>
+        {
+            SetItem(Data(a[0]), a[1], a[2]);
+            return PyNone.Instance;
+        });
 
         return cls;
     }
