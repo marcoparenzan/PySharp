@@ -52,6 +52,19 @@ public class PipInstallTests : IClassFixture<PahoInstallFixture>
             """);
         Assert.Equal("Client\n", writer.ToString());
     }
+
+    // numpy is a real C-extension package on PyPI (no pure py3-none-any wheel exists), so this
+    // fails cleanly by design (see NUMPY_PLAN.md) — real network required, same as the rest of
+    // this class.
+    [Fact]
+    public async Task Install_numpy_fails_cleanly_with_a_hint_toward_the_builtin_shim()
+    {
+        string sitePackages = Path.Combine(Path.GetTempPath(), "pysharp_site_" + Guid.NewGuid().ToString("N"));
+        var installer = new PackageInstaller(sitePackages, TextWriter.Null);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallAsync("numpy"));
+        Assert.Contains("No pure-python wheel", ex.Message);
+        Assert.Contains("PySharp's built-in numpy shim", ex.Message);
+    }
 }
 
 /// <summary>Installs paho-mqtt==2.1.0 into a temp dir shared by the class's tests.</summary>

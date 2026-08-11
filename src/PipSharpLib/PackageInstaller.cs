@@ -63,9 +63,17 @@ public sealed class PackageInstaller
             }
         }
         if (wheel is null)
+        {
+            // numpy specifically: point at this project's own real, if partial, in-tree shim
+            // (see NUMPY_PLAN.md) rather than leaving the user to guess why a compiled-C-extension
+            // package can never have a pure wheel to begin with.
+            string hint = string.Equals(name, "numpy", StringComparison.OrdinalIgnoreCase)
+                ? " numpy is a C extension; use PySharp's built-in numpy shim (`import numpy`) instead."
+                : "";
             throw new InvalidOperationException(
                 $"No pure-python wheel (py3-none-any) found for {name} {resolvedVersion}. " +
-                "PySharp can only install pure-python packages.");
+                "PySharp can only install pure-python packages." + hint);
+        }
 
         string wheelUrl = wheel.Value.GetProperty("url").GetString()!;
         string wheelName = wheel.Value.GetProperty("filename").GetString()!;

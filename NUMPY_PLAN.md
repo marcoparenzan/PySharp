@@ -45,18 +45,26 @@ performance, **not** views-everywhere semantics (documented per step).
 
 ---
 
-## Phase 0 — Groundwork
+## Phase 0 — Groundwork ✅ (2026-08-11)
 
-- [ ] 0.1 Fix `pysharp install numpy`: today it can exit with an **unhandled CLR exception** (see
+- [x] 0.1 Fix `pysharp install numpy`: today it can exit with an **unhandled CLR exception** (see
   ROADMAP note). Make the mini-pip fail cleanly with the existing "no pure-python wheel" message and
   a hint: *"numpy is a C extension; use PySharp's built-in `numpy` shim (`import numpy`)."* Test.
-- [ ] 0.2 Create `src/PySharpLib/Modules/NumpyModule.cs` skeleton with `Create()` returning a
+  — *Note:* verified live; the "unhandled CLR exception" this step describes no longer reproduces
+  (`install numpy` already failed cleanly with the base "no pure-python wheel" message, likely fixed
+  by unrelated Axis D work between 2026-07-27 and now). Only the numpy-specific hint sentence was
+  actually missing — added in `PackageInstaller.cs`.
+- [x] 0.2 Create `src/PySharpLib/Modules/NumpyModule.cs` skeleton with `Create()` returning a
   `numpy` module; register it in `StdlibModules.RegisterAll`. Add `numpy.__version__ =
   "<x> (PySharp shim)"`. Test: `import numpy; print(numpy.__version__)`.
-- [ ] 0.3 Add `NUMPY.md` (user-facing): supported subset, dtypes, non-goals, "not the real numpy".
+  — *Note:* version string is `"0.0.1 (PySharp shim)"` (`NumpyModule.ShimVersion`); bump this per
+  the "once per phase" rule as later phases land.
+- [x] 0.3 Add `NUMPY.md` (user-facing): supported subset, dtypes, non-goals, "not the real numpy".
   Link it from README's "Verified scenarios and limits".
-- [ ] 0.4 Create the test project folder `M14_Numpy/` with a `NumpyTests` base (an `import numpy`
+- [x] 0.4 Create the test project folder `M14_Numpy/` with a `NumpyTests` base (an `import numpy`
   `Run` helper). One smoke test importing the module.
+  — *Note:* also added a regression test for 0.1's install-hint in `M7_Pip/PipInstallTests.cs`
+  (real network, matching that file's existing paho-mqtt tests).
 
 ## Phase 1 — The `ndarray` core
 

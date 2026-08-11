@@ -115,6 +115,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("ast", _ => AstModule.Create());
         importer.RegisterBuiltin("numbers", _ => NumbersModule.Create());
         importer.RegisterBuiltin("heapq", _ => HeapqModule.Create());
+        importer.RegisterBuiltin("numpy", _ => NumpyModule.Create());
         importer.RegisterBuiltin("importlib.metadata", _ => ImportlibMetadataModule.Create(importer));
         importer.RegisterBuiltin("zipfile", _ => ZipfileModule.Create());
         importer.RegisterBuiltin("calendar", _ => CalendarModule.Create());
