@@ -310,15 +310,48 @@ exact same underlying reduction functions.
   identity fast path; confirmed with the full suite (1166/1166) before and after, since this is a
   shared core equality helper, not numpy-scoped code.
 
-## Phase 8 — Shape manipulation
+## Phase 8 — Shape manipulation ✅ (2026-08-11)
 
-- [ ] 8.1 `reshape(shape)` / `np.reshape` (product must match; `-1` inferred dim). Test.
-- [ ] 8.2 `ravel()` / `flatten()` → 1-D. Test.
-- [ ] 8.3 `.T` and `transpose(axes)` (permute strides or materialize a copy). Test 2-D and 3-D.
-- [ ] 8.4 `concatenate([a, b], axis)`. Test.
-- [ ] 8.5 `stack`, `vstack`, `hstack`. Test.
-- [ ] 8.6 `expand_dims(a, axis)`, `squeeze(a)`. Test.
-- [ ] 8.7 `np.newaxis` support in indexing (`a[:, None]`). Test.
+- [x] 8.1 `reshape(shape)` / `np.reshape` (product must match; `-1` inferred dim). Test.
+  — *Note:* accepts both real call shapes (`a.reshape((2,3))` and `a.reshape(2,3)`), and shares the
+  source buffer — a real *view*, verified live (mutating the reshaped result mutates the original).
+  This is a deliberate, narrow exception to "copies for now": every array here is always fully
+  C-contiguous (nothing yet produces a non-contiguous one), so reinterpreting the same flat buffer
+  under a new shape is always exactly what a real numpy view would show — no risk of it being wrong
+  without the fuller strided-view machinery Phase 12 will add.
+- [x] 8.2 `ravel()` / `flatten()` → 1-D. Test.
+  — *Note:* `ravel()` is a view (same reasoning as reshape); `flatten()` is a real independent copy
+  — matching real numpy's own documented split, not a simplification. Verified live: mutating a
+  `ravel()` result mutates the source, mutating a `flatten()` result does not.
+- [x] 8.3 `.T` and `transpose(axes)` (permute strides or materialize a copy). Test 2-D and 3-D.
+  — *Note:* materializes a real copy (chose "copy", the plan's own other listed option) — a genuine
+  transpose *view* needs non-canonical strides decoupled from shape, which is real work Phase 12
+  owns; no `axes` reverses every axis (generalizing 2-D's "swap rows and columns"), explicit `axes`
+  permutes to that order. Verified against a real 3-D `transpose(1, 0, 2)`, not just 2-D.
+- [x] 8.4 `concatenate([a, b], axis)`. Test.
+- [x] 8.5 `stack`, `vstack`, `hstack`. Test.
+  — *Note:* `stack` is built as `expand_dims` + `concatenate` along the same new axis rather than a
+  separate algorithm; `vstack` promotes a real 1-D input to a row first (matching real numpy — a
+  naive "concatenate along axis 0" would be wrong for 1-D inputs); `hstack` picks axis 0 vs. axis 1
+  based on the real input's `ndim`.
+- [x] 8.6 `expand_dims(a, axis)`, `squeeze(a)`. Test.
+  — *Note:* both share the buffer (real views — inserting/removing a real size-1 axis never changes
+  the underlying flat element order, so it's always safe here). `squeeze(axis=k)` raises a real
+  `ValueError` if that axis's size isn't actually 1, matching real numpy.
+- [x] 8.7 `np.newaxis` support in indexing (`a[:, None]`). Test.
+  — *Note:* `np.newaxis` is really `None` (`np.newaxis is None` in real numpy too). This needed a
+  genuine extension of Phase 3's own indexing machinery: `ResolveAxes` now returns an explicit
+  per-result-axis "effective stride" array (a `None`/newaxis entry gets a real stride of 0 and
+  doesn't consume a source axis) instead of every result axis implicitly mapping 1:1 to
+  `d.Strides` — `GetItem`/`SetItem`/`GatherRecursive`/`ScatterRecursive`/`FlatOffset` all updated to
+  use it. Verified the full round trip live: `row[:, None] + row[None, :]` (outer-sum via
+  broadcasting through two different newaxis insertions) produces the exact right 2-D grid.
+
+**A note on the view/copy split landing in this phase**: `reshape`/`ravel`/`expand_dims`/`squeeze`
+are real views (safe here specifically because nothing yet produces a non-contiguous array);
+`flatten`/`transpose`/`.T` are real copies (matching real numpy's own actual behavior for `flatten`,
+and a deliberate "copy for now" choice for `transpose` pending Phase 12's fuller strided-view work).
+This is not a shortcut avoiding a decision — it's the same distinction real numpy itself makes.
 
 ## Phase 9 — dtypes & promotion
 

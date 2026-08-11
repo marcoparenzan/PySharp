@@ -316,6 +316,41 @@ public static class NumpyModule
         m.Dict["e"] = Math.E;
         m.Dict["inf"] = double.PositiveInfinity;
         m.Dict["nan"] = double.NaN;
+        // Real numpy: `np.newaxis is None` — genuinely the same object, not a distinct sentinel.
+        m.Dict["newaxis"] = PyNone.Instance;
+
+        // Phase 8 — shape manipulation. `reshape`/`ravel`/`expand_dims`/`squeeze` share the source
+        // buffer (a real *view*, not a copy) — a deliberate, narrow exception to the "copies for
+        // now" default (see NUMPY_PLAN.md's own architecture notes): every array here is always
+        // fully C-contiguous (nothing yet produces a non-contiguous one), so reinterpreting the
+        // same flat buffer under a different shape is always exactly what real numpy's own view
+        // would show, with no risk of it silently being wrong. `flatten()` and `transpose()`/`.T`
+        // are real, independent copies — flatten always copies in real numpy too, and a real
+        // transpose view needs actual non-canonical strides, which is Phase 12's job, not this one.
+        m.Dict["reshape"] = new PyBuiltinFunction("reshape", (_, a, _) => Wrap(Reshape(Data(a[0]), ReshapeShapeArg(a, 1))));
+        m.Dict["ravel"] = new PyBuiltinFunction("ravel", (_, a, _) => Wrap(Ravel(Data(a[0]))));
+        m.Dict["transpose"] = new PyBuiltinFunction("transpose", (_, a, _) =>
+            Wrap(Transpose(Data(a[0]), a.Length > 1 ? ReshapeShapeArg(a, 1) : null)));
+        m.Dict["concatenate"] = new PyBuiltinFunction("concatenate", (interp, a, kwargs) =>
+        {
+            var arrays = PyOps.Iterate(interp, a[0]).Select(x => Data(x)).ToList();
+            int axis = AxisArg(a, kwargs, 1) ?? 0;
+            return Wrap(Concatenate(arrays, axis));
+        });
+        m.Dict["stack"] = new PyBuiltinFunction("stack", (interp, a, kwargs) =>
+        {
+            var arrays = PyOps.Iterate(interp, a[0]).Select(x => Data(x)).ToList();
+            int axis = AxisArg(a, kwargs, 1) ?? 0;
+            return Wrap(Stack(arrays, axis));
+        });
+        m.Dict["vstack"] = new PyBuiltinFunction("vstack", (interp, a, _) =>
+            Wrap(Vstack(PyOps.Iterate(interp, a[0]).Select(x => Data(x)).ToList())));
+        m.Dict["hstack"] = new PyBuiltinFunction("hstack", (interp, a, _) =>
+            Wrap(Hstack(PyOps.Iterate(interp, a[0]).Select(x => Data(x)).ToList())));
+        m.Dict["expand_dims"] = new PyBuiltinFunction("expand_dims", (_, a, kwargs) =>
+            Wrap(ExpandDims(Data(a[0]), AxisArg(a, kwargs, 1) ?? 0)));
+        m.Dict["squeeze"] = new PyBuiltinFunction("squeeze", (_, a, kwargs) =>
+            Wrap(Squeeze(Data(a[0]), AxisArg(a, kwargs, 1))));
 
         return m;
     }
@@ -350,6 +385,163 @@ public static class NumpyModule
 
     private static NdArrayData CopyOf(NdArrayData d)
         => new(d.DType, CloneBuffer(d), (int[])d.Shape.Clone());
+
+    // ---------------------------------------------------------------- Phase 8: shape manipulation
+
+    /// <summary>Accepts real numpy's two equivalent call shapes for a shape argument starting at
+    /// `startIndex`: a single sequence (`a.reshape((2, 3))`) or separate positional ints
+    /// (`a.reshape(2, 3)`) — including the single-int case (`a.reshape(6)`). `-1` entries are left
+    /// as-is here; `Reshape` is what actually infers them (this helper is reused by `transpose`
+    /// too, which has no `-1` inference at all).</summary>
+    private static int[] ReshapeShapeArg(object[] a, int startIndex)
+    {
+        var rest = a.Skip(startIndex).ToArray();
+        if (rest.Length == 1 && rest[0] is PyTuple or PyList)
+            return ShapeArg(rest[0]);
+        return rest.Select(x => (int)PyOps.AsBigInt(x, "shape")).ToArray();
+    }
+
+    /// <summary>Real numpy `reshape`: the total element count must match, with at most one `-1`
+    /// entry inferred from the rest. Shares the source buffer (a real view — see this file's own
+    /// note on why that's safe here) rather than copying.</summary>
+    private static NdArrayData Reshape(NdArrayData d, int[] newShape)
+    {
+        int negOneCount = newShape.Count(static s => s == -1);
+        if (negOneCount > 1)
+            throw PyErr.ValueError("can only specify one unknown dimension");
+        int[] resolvedShape = newShape;
+        if (negOneCount == 1)
+        {
+            int known = newShape.Where(static s => s != -1).Aggregate(1, (acc, s) => acc * s);
+            if (known == 0 || d.Size % known != 0)
+                throw PyErr.ValueError($"cannot reshape array of size {d.Size} into shape {ShapeRepr(newShape)}");
+            int inferred = d.Size / known;
+            resolvedShape = newShape.Select(s => s == -1 ? inferred : s).ToArray();
+        }
+        if (SizeOf(resolvedShape) != d.Size)
+            throw PyErr.ValueError($"cannot reshape array of size {d.Size} into shape {ShapeRepr(resolvedShape)}");
+        return new NdArrayData(d.DType, d.Buffer, resolvedShape);
+    }
+
+    private static NdArrayData Ravel(NdArrayData d) => new(d.DType, d.Buffer, new[] { d.Size });
+
+    private static NdArrayData Flatten(NdArrayData d) => new(d.DType, CloneBuffer(d), new[] { d.Size });
+
+    /// <summary>Real numpy `.T`/`transpose(axes)`: no `axes` reverses every axis (the classic 2-D
+    /// "swap rows and columns" case generalizes to "reverse the axis order" for N-D); explicit
+    /// `axes` permutes to that exact order. Unlike `reshape`/`ravel`, this is a real **copy** — a
+    /// genuine transpose view needs non-canonical strides decoupled from shape, which is Phase 12's
+    /// job (see NUMPY_PLAN.md), not this one.</summary>
+    private static NdArrayData Transpose(NdArrayData d, int[]? axes)
+    {
+        int ndim = d.Ndim;
+        int[] perm = axes ?? Enumerable.Range(0, ndim).Reverse().ToArray();
+        if (perm.Length != ndim || perm.Distinct().Count() != ndim || perm.Any(p => p < 0 || p >= ndim))
+            throw PyErr.ValueError("axes don't match array");
+        int[] newShape = perm.Select(p => d.Shape[p]).ToArray();
+        var outBuffer = MakeBuffer(d.DType, d.Size);
+        int flat = 0;
+        ForEachBroadcastIndex(newShape, newIndex =>
+        {
+            var srcIndex = new int[ndim];
+            for (int k = 0; k < ndim; k++)
+                srcIndex[perm[k]] = newIndex[k];
+            SetBufferElement(outBuffer, d.DType, flat++, GetElement(d, DotProduct(srcIndex, d.Strides)));
+        });
+        return new NdArrayData(d.DType, outBuffer, newShape);
+    }
+
+    /// <summary>Real numpy `concatenate`: joins arrays along an *existing* axis — every array must
+    /// have the exact same shape except along that axis, whose sizes simply add up.</summary>
+    private static NdArrayData Concatenate(List<NdArrayData> arrays, int axis)
+    {
+        if (arrays.Count == 0)
+            throw PyErr.ValueError("need at least one array to concatenate");
+        int ndim = arrays[0].Ndim;
+        axis = NormalizeAxis(axis, ndim);
+        foreach (var arr in arrays)
+        {
+            if (arr.Ndim != ndim)
+                throw PyErr.ValueError("all the input array dimensions must match exactly");
+            for (int ax = 0; ax < ndim; ax++)
+                if (ax != axis && arr.Shape[ax] != arrays[0].Shape[ax])
+                    throw PyErr.ValueError(
+                        "all the input array dimensions except for the concatenation axis must match exactly");
+        }
+        int[] outShape = (int[])arrays[0].Shape.Clone();
+        outShape[axis] = arrays.Sum(arr => arr.Shape[axis]);
+        var outBuffer = MakeBuffer(arrays[0].DType, SizeOf(outShape));
+        int[] outStrides = NdArrayData.ComputeStrides(outShape);
+        int axisOffset = 0;
+        foreach (var arr in arrays)
+        {
+            ForEachBroadcastIndex(arr.Shape, index =>
+            {
+                var outIndex = (int[])index.Clone();
+                outIndex[axis] += axisOffset;
+                SetBufferElement(outBuffer, arr.DType, DotProduct(outIndex, outStrides),
+                    GetElement(arr, DotProduct(index, arr.Strides)));
+            });
+            axisOffset += arr.Shape[axis];
+        }
+        return new NdArrayData(arrays[0].DType, outBuffer, outShape);
+    }
+
+    /// <summary>Real numpy `stack`: joins same-shaped arrays along a *new* axis (unlike
+    /// `concatenate`'s existing one) — built as `expand_dims` on every array followed by a
+    /// `concatenate` along that same new axis, rather than a separate algorithm.</summary>
+    private static NdArrayData Stack(List<NdArrayData> arrays, int axis)
+    {
+        if (arrays.Count == 0)
+            throw PyErr.ValueError("need at least one array to stack");
+        foreach (var arr in arrays)
+            if (!arr.Shape.SequenceEqual(arrays[0].Shape))
+                throw PyErr.ValueError("all input arrays must have the same shape");
+        axis = NormalizeAxis(axis, arrays[0].Ndim + 1);
+        return Concatenate(arrays.Select(arr => ExpandDims(arr, axis)).ToList(), axis);
+    }
+
+    /// <summary>Real numpy `vstack`: a real 1-D array is treated as a single row (promoted to 2-D
+    /// first), then concatenated along axis 0 — matching real numpy's own actual behavior, not just
+    /// "stack along axis 0" (which would be wrong for 1-D inputs).</summary>
+    private static NdArrayData Vstack(List<NdArrayData> arrays)
+        => Concatenate(arrays.Select(arr => arr.Ndim == 1 ? ExpandDims(arr, 0) : arr).ToList(), 0);
+
+    /// <summary>Real numpy `hstack`: 1-D arrays concatenate along their only axis (axis 0); 2-D+
+    /// arrays concatenate along axis 1 (the "horizontal" one) instead.</summary>
+    private static NdArrayData Hstack(List<NdArrayData> arrays)
+        => Concatenate(arrays, arrays.Count > 0 && arrays[0].Ndim == 1 ? 0 : 1);
+
+    /// <summary>Real numpy `expand_dims`: inserts a real size-1 axis at `axis` (0..ndim, inclusive
+    /// — it can legally be the new last axis). Shares the buffer (see this file's own note on why
+    /// that's a safe real view here — inserting a size-1 axis never changes the underlying flat
+    /// element order).</summary>
+    private static NdArrayData ExpandDims(NdArrayData d, int axis)
+    {
+        int newNdim = d.Ndim + 1;
+        int resolved = axis < 0 ? axis + newNdim : axis;
+        if (resolved < 0 || resolved > d.Ndim)
+            throw PyErr.ValueError($"axis {axis} is out of bounds for array of dimension {newNdim}");
+        var newShape = new List<int>(d.Shape);
+        newShape.Insert(resolved, 1);
+        return new NdArrayData(d.DType, d.Buffer, newShape.ToArray());
+    }
+
+    /// <summary>Real numpy `squeeze`: with an explicit `axis`, removes just that one size-1 axis
+    /// (a real `ValueError` if its size isn't actually 1); with none, removes every size-1 axis at
+    /// once. Shares the buffer — the same safe-view reasoning as `expand_dims`, in reverse.</summary>
+    private static NdArrayData Squeeze(NdArrayData d, int? axis)
+    {
+        if (axis is int ax)
+        {
+            ax = NormalizeAxis(ax, d.Ndim);
+            if (d.Shape[ax] != 1)
+                throw PyErr.ValueError(
+                    $"cannot select an axis to squeeze out which has size not equal to one");
+            return new NdArrayData(d.DType, d.Buffer, d.Shape.Where((_, i) => i != ax).ToArray());
+        }
+        return new NdArrayData(d.DType, d.Buffer, d.Shape.Where(static s => s != 1).ToArray());
+    }
 
     // ---------------------------------------------------------------- dtype-generic element access
     //
@@ -482,50 +674,68 @@ public static class NumpyModule
 
     // ---------------------------------------------------------------- Phase 3: indexing/slicing
 
-    /// <summary>Resolves a real numpy index (a single int/bool, a `PySlice`, or a `PyTuple` mixing
-    /// both — exactly what `Interp.EvalIndex` builds for `a[i]`/`a[1:3]`/`a[i, j]`/`a[1:3, i]`)
-    /// into, per axis, the list of source element-offsets along that axis to visit. An axis with an
-    /// explicit integer index contributes a single offset and is "reduced" (absent from
-    /// `resultShape`); a slice or an axis with no explicit index (real numpy's own implicit
-    /// "partial indexing" — `a[i]` on an N-D array only indexes axis 0, keeping the rest) keeps its
-    /// full offset list and its size in `resultShape`.</summary>
-    private static (int[][] AxisOffsets, int[] ResultShape) ResolveAxes(NdArrayData d, object index)
+    /// <summary>Resolves a real numpy index (a single int/bool/`None`, a `PySlice`, or a `PyTuple`
+    /// mixing any of these — exactly what `Interp.EvalIndex` builds for `a[i]`/`a[1:3]`/`a[i, j]`/
+    /// `a[1:3, i]`/`a[:, None]`) into a per-*result-axis* list of source element-offsets to visit,
+    /// plus the matching "effective stride" for each — a separate array from `d.Strides` because a
+    /// `None`/`np.newaxis` entry (Phase 8.7) inserts a synthetic size-1 axis that doesn't correspond
+    /// to any real source axis at all (its "stride" is a real 0, contributing nothing to the flat
+    /// offset). An axis with an explicit integer index contributes a single offset and is "reduced"
+    /// (absent from `resultShape`); a slice or an axis with no explicit index (real numpy's own
+    /// implicit "partial indexing" — `a[i]` on an N-D array only indexes axis 0, keeping the rest)
+    /// keeps its full offset list and its size in `resultShape`.</summary>
+    private static (int[][] AxisOffsets, int[] Strides, int[] ResultShape) ResolveAxes(NdArrayData d, object index)
     {
         var items = index is PyTuple t ? t.Items : new[] { index };
-        if (items.Length > d.Ndim)
+        int explicitAxisCount = items.Count(static it => it is not PyNone);
+        if (explicitAxisCount > d.Ndim)
             throw PyErr.IndexError(
-                $"too many indices for array: array is {d.Ndim}-dimensional, but {items.Length} were indexed");
+                $"too many indices for array: array is {d.Ndim}-dimensional, but {explicitAxisCount} were indexed");
 
-        var axisOffsets = new int[d.Ndim][];
+        var axisOffsets = new List<int[]>();
+        var strides = new List<int>();
         var resultShape = new List<int>();
+        int srcAxis = 0;
 
-        for (int axis = 0; axis < d.Ndim; axis++)
+        foreach (var item in items)
         {
-            if (axis < items.Length && items[axis] is PySlice slice)
+            if (item is PyNone)
             {
-                var (start, _, step, count) = slice.Indices(d.Shape[axis]);
+                axisOffsets.Add(new[] { 0 });
+                strides.Add(0);
+                resultShape.Add(1);
+                continue;
+            }
+            if (item is PySlice slice)
+            {
+                var (start, _, step, count) = slice.Indices(d.Shape[srcAxis]);
                 var offs = new int[count];
                 for (int k = 0; k < count; k++)
                     offs[k] = start + k * step;
-                axisOffsets[axis] = offs;
+                axisOffsets.Add(offs);
+                strides.Add(d.Strides[srcAxis]);
                 resultShape.Add(count);
-            }
-            else if (axis < items.Length)
-            {
-                axisOffsets[axis] = new[] { ResolveIntIndex(items[axis], d.Shape[axis], axis) };
             }
             else
             {
-                int n = d.Shape[axis];
-                var offs = new int[n];
-                for (int k = 0; k < n; k++)
-                    offs[k] = k;
-                axisOffsets[axis] = offs;
-                resultShape.Add(n);
+                axisOffsets.Add(new[] { ResolveIntIndex(item, d.Shape[srcAxis], srcAxis) });
+                strides.Add(d.Strides[srcAxis]);
             }
+            srcAxis++;
+        }
+        while (srcAxis < d.Ndim)
+        {
+            int n = d.Shape[srcAxis];
+            var offs = new int[n];
+            for (int k = 0; k < n; k++)
+                offs[k] = k;
+            axisOffsets.Add(offs);
+            strides.Add(d.Strides[srcAxis]);
+            resultShape.Add(n);
+            srcAxis++;
         }
 
-        return (axisOffsets, resultShape.ToArray());
+        return (axisOffsets.ToArray(), strides.ToArray(), resultShape.ToArray());
     }
 
     private static int ResolveIntIndex(object item, int axisLen, int axis)
@@ -538,22 +748,23 @@ public static class NumpyModule
         return resolved;
     }
 
-    /// <summary>`a[index]`: a fully-reduced index (an explicit int on every axis) returns a real
-    /// Python scalar (`float` or `bool`, matching the array's own dtype) — everything else returns
-    /// a new, independent `ndarray` **copy** (real strided views are a later, optional phase — see
-    /// NUMPY_PLAN.md Phase 12). A real bool-array index (`a[mask]`) is boolean masking (Phase 5.5),
-    /// handled entirely separately from the int/slice/tuple axis resolution below.</summary>
+    /// <summary>`a[index]`: a fully-reduced index (an explicit int on every real axis, no
+    /// `None`/newaxis entries) returns a real Python scalar (`float` or `bool`, matching the
+    /// array's own dtype) — everything else returns a new, independent `ndarray` **copy** (real
+    /// strided views are a later, optional phase — see NUMPY_PLAN.md Phase 12). A real bool-array
+    /// index (`a[mask]`) is boolean masking (Phase 5.5), handled entirely separately from the
+    /// int/slice/tuple/None axis resolution below.</summary>
     private static object GetItem(NdArrayData d, object index)
     {
         if (BoolMaskOf(index) is { } mask)
             return Wrap(GatherMask(d, mask));
 
-        var (axisOffsets, resultShape) = ResolveAxes(d, index);
+        var (axisOffsets, strides, resultShape) = ResolveAxes(d, index);
         if (resultShape.Length == 0)
-            return GetElement(d, FlatOffset(d, axisOffsets));
+            return GetElement(d, FlatOffset(axisOffsets, strides));
 
         var flat = new List<object>();
-        GatherRecursive(d, axisOffsets, 0, 0, flat);
+        GatherRecursive(d, axisOffsets, strides, 0, 0, flat);
         var buffer = MakeBuffer(d.DType, flat.Count);
         for (int i = 0; i < flat.Count; i++)
             SetBufferElement(buffer, d.DType, i, flat[i]);
@@ -573,10 +784,10 @@ public static class NumpyModule
             return;
         }
 
-        var (axisOffsets, resultShape) = ResolveAxes(d, index);
+        var (axisOffsets, strides, resultShape) = ResolveAxes(d, index);
         if (resultShape.Length == 0)
         {
-            SetElement(d, FlatOffset(d, axisOffsets), value);
+            SetElement(d, FlatOffset(axisOffsets, strides), value);
             return;
         }
 
@@ -587,23 +798,23 @@ public static class NumpyModule
                 throw PyErr.ValueError(
                     $"could not broadcast input array from shape {ShapeRepr(src.Shape)} into shape {ShapeRepr(resultShape)}");
             int i = 0;
-            ScatterRecursive(d, axisOffsets, 0, 0, () => GetElement(src, i++));
+            ScatterRecursive(d, axisOffsets, strides, 0, 0, () => GetElement(src, i++));
         }
         else
         {
-            ScatterRecursive(d, axisOffsets, 0, 0, () => value);
+            ScatterRecursive(d, axisOffsets, strides, 0, 0, () => value);
         }
     }
 
-    private static int FlatOffset(NdArrayData d, int[][] axisOffsets)
+    private static int FlatOffset(int[][] axisOffsets, int[] strides)
     {
         int offset = 0;
-        for (int axis = 0; axis < d.Ndim; axis++)
-            offset += axisOffsets[axis][0] * d.Strides[axis];
+        for (int axis = 0; axis < axisOffsets.Length; axis++)
+            offset += axisOffsets[axis][0] * strides[axis];
         return offset;
     }
 
-    private static void GatherRecursive(NdArrayData d, int[][] axisOffsets, int axis, int baseOffset, List<object> flat)
+    private static void GatherRecursive(NdArrayData d, int[][] axisOffsets, int[] strides, int axis, int baseOffset, List<object> flat)
     {
         if (axis == axisOffsets.Length)
         {
@@ -611,10 +822,10 @@ public static class NumpyModule
             return;
         }
         foreach (int off in axisOffsets[axis])
-            GatherRecursive(d, axisOffsets, axis + 1, baseOffset + off * d.Strides[axis], flat);
+            GatherRecursive(d, axisOffsets, strides, axis + 1, baseOffset + off * strides[axis], flat);
     }
 
-    private static void ScatterRecursive(NdArrayData d, int[][] axisOffsets, int axis, int baseOffset, Func<object> nextValue)
+    private static void ScatterRecursive(NdArrayData d, int[][] axisOffsets, int[] strides, int axis, int baseOffset, Func<object> nextValue)
     {
         if (axis == axisOffsets.Length)
         {
@@ -622,7 +833,7 @@ public static class NumpyModule
             return;
         }
         foreach (int off in axisOffsets[axis])
-            ScatterRecursive(d, axisOffsets, axis + 1, baseOffset + off * d.Strides[axis], nextValue);
+            ScatterRecursive(d, axisOffsets, strides, axis + 1, baseOffset + off * strides[axis], nextValue);
     }
 
     // ---------------------------------------------------------------- Phase 5.5/5.6: boolean masking
@@ -1102,6 +1313,7 @@ public static class NumpyModule
         cls.Dict["shape"] = MakeProperty(self =>
             new PyTuple(Data(self).Shape.Select(dim => (object)(BigInteger)dim).ToArray()));
         cls.Dict["dtype"] = MakeProperty(self => DTypeInstance(Data(self).DType));
+        cls.Dict["T"] = MakeProperty(self => Wrap(Transpose(Data(self), null)));
 
         Add("__len__", (_, a, _) =>
         {
@@ -1130,6 +1342,14 @@ public static class NumpyModule
             double hi = PyOps.AsDouble(a[2]);
             return Wrap(ElementwiseUnary(Data(a[0]), x => Math.Clamp(x, lo, hi)));
         });
+
+        // Phase 8 — shape manipulation, as real ndarray methods (mirroring the module-level
+        // functions registered in `Create()`, which real numpy also exposes both ways).
+        Add("reshape", (_, a, _) => Wrap(Reshape(Data(a[0]), ReshapeShapeArg(a, 1))));
+        Add("ravel", (_, a, _) => Wrap(Ravel(Data(a[0]))));
+        Add("flatten", (_, a, _) => Wrap(Flatten(Data(a[0]))));
+        Add("transpose", (_, a, _) => Wrap(Transpose(Data(a[0]), a.Length > 1 ? ReshapeShapeArg(a, 1) : null)));
+        Add("squeeze", (_, a, kwargs) => Wrap(Squeeze(Data(a[0]), AxisArg(a, kwargs, 1))));
 
         Add("__getitem__", (_, a, _) => GetItem(Data(a[0]), a[1]));
         Add("__setitem__", (_, a, _) =>
