@@ -283,14 +283,32 @@ All 7 sub-steps were also wired as module-level `np.sum`/`np.mean`/`np.min`/`np.
 real numpy has both forms and they're heavily used in practice; trivial to add given they share the
 exact same underlying reduction functions.
 
-## Phase 7 — Universal functions (ufuncs)
+## Phase 7 — Universal functions (ufuncs) ✅ (2026-08-11)
 
-- [ ] 7.1 A ufunc factory: apply a `Func<double,double>` elementwise, returning a new array. Internal.
-- [ ] 7.2 `np.sqrt`, `np.exp`, `np.log`, `np.log10`, `np.abs`. Test.
-- [ ] 7.3 `np.sin`, `np.cos`, `np.tan`, `np.arcsin/arccos/arctan`. Test.
-- [ ] 7.4 `np.floor`, `np.ceil`, `np.round`, `np.sign`, `np.clip(a, lo, hi)`. Test.
-- [ ] 7.5 `np.minimum`, `np.maximum`, `np.power` (binary, broadcasted). Test.
-- [ ] 7.6 Constants: `np.pi`, `np.e`, `np.inf`, `np.nan`. Test.
+- [x] 7.1 A ufunc factory: apply a `Func<double,double>` elementwise, returning a new array. Internal.
+  — *Note:* `ApplyUfunc` is this factory — it's just Phase 4's own `ElementwiseUnary` plus a real
+  scalar fast path, so `np.sqrt(4.0)` returns a plain Python `float` (not a forced 0-d array),
+  matching real numpy's own scalar-ufunc behavior.
+- [x] 7.2 `np.sqrt`, `np.exp`, `np.log`, `np.log10`, `np.abs`. Test.
+- [x] 7.3 `np.sin`, `np.cos`, `np.tan`, `np.arcsin/arccos/arctan`. Test.
+- [x] 7.4 `np.floor`, `np.ceil`, `np.round`, `np.sign`, `np.clip(a, lo, hi)`. Test.
+  — *Note:* `round`/`clip` also added as real `ndarray` methods (`a.round()`/`a.clip(lo, hi)`),
+  matching real numpy's own API shape — unlike `sqrt`/`exp`/trig/etc., which real numpy only
+  exposes at module level, not as methods. `round` uses real round-half-to-even (banker's
+  rounding), matching real numpy's actual default — free, since .NET's own `Math.Round` defaults to
+  `MidpointRounding.ToEven` too.
+- [x] 7.5 `np.minimum`, `np.maximum`, `np.power` (binary, broadcasted). Test. — *Note:* reuses
+  Phase 4's `ElementwiseOp` directly (the same broadcasting machinery `+`/`-`/etc. use), just not
+  reachable through an operator since Python has no `minimum`/`maximum` dunder.
+- [x] 7.6 Constants: `np.pi`, `np.e`, `np.inf`, `np.nan`. Test.
+  — *Note:* verifying `np.nan != np.nan` surfaced a real, general-purpose interpreter bug unrelated
+  to numpy itself: `PyOps.PyEquals` short-circuited `==` on C# reference identity before checking
+  real value semantics — correct for lists/dicts/tuples/strings (identity there genuinely implies
+  equality), but wrong for `double`, since IEEE 754 requires NaN to never equal itself even when
+  it's literally the same boxed object (`x = float('nan'); x == x` is really `False` in CPython —
+  no identity shortcut exists at the language level for `==`). Fixed by excluding `double` from the
+  identity fast path; confirmed with the full suite (1166/1166) before and after, since this is a
+  shared core equality helper, not numpy-scoped code.
 
 ## Phase 8 — Shape manipulation
 

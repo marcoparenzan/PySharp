@@ -270,8 +270,61 @@ public static class NumpyModule
             return Wrap(axis is int ax ? CumulateAxis(d, ax, static (x, y) => x * y) : CumulateFlat(d, static (x, y) => x * y));
         });
 
+        // Phase 7 — universal functions (ufuncs). `ApplyUfunc` is the real "ufunc factory" 7.1 asks
+        // for — it's just `ElementwiseUnary` (already built in Phase 4) plus a scalar fast path, so
+        // `np.sqrt(4.0)` returns a plain Python float exactly like real numpy's own scalar ufunc
+        // behavior, not forcing a 0-d array wrap.
+        m.Dict["sqrt"] = new PyBuiltinFunction("sqrt", (_, a, _) => ApplyUfunc(a[0], Math.Sqrt));
+        m.Dict["exp"] = new PyBuiltinFunction("exp", (_, a, _) => ApplyUfunc(a[0], Math.Exp));
+        m.Dict["log"] = new PyBuiltinFunction("log", (_, a, _) => ApplyUfunc(a[0], Math.Log));
+        m.Dict["log10"] = new PyBuiltinFunction("log10", (_, a, _) => ApplyUfunc(a[0], Math.Log10));
+        m.Dict["abs"] = new PyBuiltinFunction("abs", (_, a, _) => ApplyUfunc(a[0], Math.Abs));
+
+        m.Dict["sin"] = new PyBuiltinFunction("sin", (_, a, _) => ApplyUfunc(a[0], Math.Sin));
+        m.Dict["cos"] = new PyBuiltinFunction("cos", (_, a, _) => ApplyUfunc(a[0], Math.Cos));
+        m.Dict["tan"] = new PyBuiltinFunction("tan", (_, a, _) => ApplyUfunc(a[0], Math.Tan));
+        m.Dict["arcsin"] = new PyBuiltinFunction("arcsin", (_, a, _) => ApplyUfunc(a[0], Math.Asin));
+        m.Dict["arccos"] = new PyBuiltinFunction("arccos", (_, a, _) => ApplyUfunc(a[0], Math.Acos));
+        m.Dict["arctan"] = new PyBuiltinFunction("arctan", (_, a, _) => ApplyUfunc(a[0], Math.Atan));
+
+        m.Dict["floor"] = new PyBuiltinFunction("floor", (_, a, _) => ApplyUfunc(a[0], Math.Floor));
+        m.Dict["ceil"] = new PyBuiltinFunction("ceil", (_, a, _) => ApplyUfunc(a[0], Math.Ceiling));
+        m.Dict["sign"] = new PyBuiltinFunction("sign", (_, a, _) => ApplyUfunc(a[0], static x => Math.Sign(x)));
+        // Real numpy rounds half-to-even (banker's rounding), same as .NET's own `Math.Round`
+        // default `MidpointRounding.ToEven` — no special-casing needed to match.
+        m.Dict["round"] = new PyBuiltinFunction("round", (_, a, kwargs) =>
+        {
+            int decimals = a.Length > 1 ? (int)PyOps.AsBigInt(a[1], "decimals")
+                : kwargs is not null && kwargs.TryGetValue("decimals", out var dec) ? (int)PyOps.AsBigInt(dec, "decimals") : 0;
+            return ApplyUfunc(a[0], x => Math.Round(x, decimals, MidpointRounding.ToEven));
+        });
+        m.Dict["clip"] = new PyBuiltinFunction("clip", (_, a, _) =>
+        {
+            double lo = PyOps.AsDouble(a[1]);
+            double hi = PyOps.AsDouble(a[2]);
+            return ApplyUfunc(a[0], x => Math.Clamp(x, lo, hi));
+        });
+
+        // Binary ufuncs — real broadcasting, same machinery as `+`/`-`/etc., just not reachable via
+        // an operator (no `minimum`/`maximum` dunder in Python).
+        m.Dict["minimum"] = new PyBuiltinFunction("minimum", (_, a, _) => ElementwiseOp(a[0], a[1], Math.Min));
+        m.Dict["maximum"] = new PyBuiltinFunction("maximum", (_, a, _) => ElementwiseOp(a[0], a[1], Math.Max));
+        m.Dict["power"] = new PyBuiltinFunction("power", (_, a, _) => ElementwiseOp(a[0], a[1], Math.Pow));
+
+        // Constants.
+        m.Dict["pi"] = Math.PI;
+        m.Dict["e"] = Math.E;
+        m.Dict["inf"] = double.PositiveInfinity;
+        m.Dict["nan"] = double.NaN;
+
         return m;
     }
+
+    /// <summary>The real Phase 7.1 "ufunc factory": elementwise on an `ndarray` (via the existing
+    /// `ElementwiseUnary`), or a real scalar fast path — `np.sqrt(4.0)` returns a plain Python
+    /// `float`, matching real numpy's own scalar ufunc behavior (no forced 0-d array wrap).</summary>
+    private static object ApplyUfunc(object arg, Func<double, double> op)
+        => arg is PyInstance pi && pi.Class == NdArrayClass ? Wrap(ElementwiseUnary(Data(pi), op)) : op(PyOps.AsDouble(arg));
 
     private static object CoerceTo(DType dtype, object value) => dtype switch
     {
@@ -1062,6 +1115,21 @@ public static class NumpyModule
         Add("__str__", (_, a, _) => FormatArray(Data(a[0])));
 
         Add("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
+
+        // Phase 7 — the two ufuncs real numpy also exposes as ndarray methods (unlike sqrt/exp/
+        // sin/etc., which are module-level only).
+        Add("round", (_, a, kwargs) =>
+        {
+            int decimals = a.Length > 1 ? (int)PyOps.AsBigInt(a[1], "decimals")
+                : kwargs is not null && kwargs.TryGetValue("decimals", out var dec) ? (int)PyOps.AsBigInt(dec, "decimals") : 0;
+            return Wrap(ElementwiseUnary(Data(a[0]), x => Math.Round(x, decimals, MidpointRounding.ToEven)));
+        });
+        Add("clip", (_, a, _) =>
+        {
+            double lo = PyOps.AsDouble(a[1]);
+            double hi = PyOps.AsDouble(a[2]);
+            return Wrap(ElementwiseUnary(Data(a[0]), x => Math.Clamp(x, lo, hi)));
+        });
 
         Add("__getitem__", (_, a, _) => GetItem(Data(a[0]), a[1]));
         Add("__setitem__", (_, a, _) =>

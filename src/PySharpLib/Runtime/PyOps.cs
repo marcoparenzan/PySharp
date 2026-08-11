@@ -138,7 +138,13 @@ public static class PyOps
     /// <summary>Python equality for builtin types (instances use identity; __eq__ is handled by Interp.RichCompare).</summary>
     public static bool PyEquals(object a, object b)
     {
-        if (ReferenceEquals(a, b))
+        // The identity fast path is correct for every builtin type EXCEPT `double`: real Python
+        // (real CPython included) never short-circuits `==` on identity at the language level —
+        // `x = float('nan'); x == x` is really `False`, IEEE 754's NaN-never-equals-itself holding
+        // even for the exact same object. Found via NUMPY_PLAN.md Phase 7 (`np.nan != np.nan`
+        // printing `False` instead of `True`, traced to this shortcut misfiring only because both
+        // sides read the same already-boxed NaN).
+        if (ReferenceEquals(a, b) && a is not double)
             return true;
         switch (a)
         {
