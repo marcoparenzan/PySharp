@@ -1380,6 +1380,17 @@ public sealed class Interp
             case CompareExpr c:
             {
                 var left = Eval(c.Left, env);
+                // Real CPython: an UNCHAINED comparison (`a < b`, exactly one operator) returns
+                // whatever `a.__lt__(b)` actually returns, untouched — no implicit bool() at all.
+                // This is what lets `numpy_array < 3` produce a real bool *array*, not a single
+                // True/False. A CHAINED comparison (`a < b < c`) still collapses each hop through
+                // truthiness the same way it always has (matching real CPython's own short-circuit
+                // approximation for chains — genuinely faithful chained comparison against a
+                // non-bool-returning dunder is a much deeper rabbit hole real code essentially never
+                // exercises). Found via NUMPY_PLAN.md Phase 5.2 (`arr1 < arr2` needing to return an
+                // ndarray of bools).
+                if (c.Ops.Count == 1)
+                    return CompareRaw(c.Ops[0], left, Eval(c.Comparators[0], env));
                 for (int i = 0; i < c.Ops.Count; i++)
                 {
                     var right = Eval(c.Comparators[i], env);
@@ -2055,6 +2066,67 @@ public sealed class Interp
         if (right is PyInstance ri && TryCallMethod(ri, CmpDunders[reflected], new[] { left }, out var rr)
             && rr is not PyNotImplemented)
             return PyOps.Truthy(this, rr);
+
+        throw PyErr.TypeError(
+            $"'{op}' not supported between instances of '{PyOps.TypeName(left)}' and '{PyOps.TypeName(right)}'");
+    }
+
+    /// <summary>The single-comparison (non-chained) counterpart to `CompareOnce`/`RichEquals`/
+    /// `OrderCompare` — same dunder dispatch (including reflection for `&lt; &lt;= &gt; &gt;=`),
+    /// but returns the dunder's actual return value instead of forcing it through `PyOps.Truthy`.
+    /// `is`/`is not`/`in`/`not in` and the plain-value fast paths (numbers, strings, ...) are
+    /// unaffected — they already only ever produce a real bool, so there's nothing to un-collapse.</summary>
+    private object CompareRaw(string op, object left, object right)
+    {
+        switch (op)
+        {
+            case "is":
+                return IsIdentical(left, right);
+            case "is not":
+                return !IsIdentical(left, right);
+            case "in":
+                return PyOps.Contains(this, right, left);
+            case "not in":
+                return !PyOps.Contains(this, right, left);
+        }
+
+        if (op is "==" or "!=")
+        {
+            if (left is PyInstance li && TryCallMethod(li, CmpDunders[op], new[] { right }, out var r1)
+                && r1 is not PyNotImplemented)
+                return r1;
+            if (right is PyInstance ri && TryCallMethod(ri, CmpDunders[op], new[] { left }, out var r2)
+                && r2 is not PyNotImplemented)
+                return r2;
+            bool eq = PyOps.PyEquals(left, right);
+            return op == "==" ? eq : !eq;
+        }
+
+        int? cmp = TryOrder(left, right);
+        if (cmp is int c)
+            return op switch
+            {
+                "<" => c < 0,
+                "<=" => c <= 0,
+                ">" => c > 0,
+                ">=" => c >= 0,
+                _ => throw PyErr.RuntimeError($"unknown comparison {op}"),
+            };
+
+        if (left is PyInstance lci && TryCallMethod(lci, CmpDunders[op], new[] { right }, out var rr1)
+            && rr1 is not PyNotImplemented)
+            return rr1;
+        string reflected = op switch
+        {
+            "<" => ">",
+            ">" => "<",
+            "<=" => ">=",
+            ">=" => "<=",
+            _ => op,
+        };
+        if (right is PyInstance rci && TryCallMethod(rci, CmpDunders[reflected], new[] { left }, out var rr2)
+            && rr2 is not PyNotImplemented)
+            return rr2;
 
         throw PyErr.TypeError(
             $"'{op}' not supported between instances of '{PyOps.TypeName(left)}' and '{PyOps.TypeName(right)}'");

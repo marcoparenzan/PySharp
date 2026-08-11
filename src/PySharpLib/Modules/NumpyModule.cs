@@ -50,6 +50,7 @@ public sealed class NdArrayData
 public enum DType
 {
     Float64,
+    Bool,
 }
 
 /// <summary>numpy: a C# `numpy`-shaped shim, NOT the real numpy — real numpy is a CPython C
@@ -69,6 +70,7 @@ public static class NumpyModule
     public static readonly PyClass NdArrayClass = BuildNdArrayClass();
     public static readonly PyClass DTypeClass = BuildDTypeClass();
     public static readonly PyInstance Float64DType = MakeDType("float64");
+    public static readonly PyInstance BoolDType = MakeDType("bool");
 
     public static PyModule Create()
     {
@@ -192,8 +194,43 @@ public static class NumpyModule
 
         m.Dict["copy"] = new PyBuiltinFunction("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
 
+        // Phase 5.7 — np.where(cond, x, y): a real 3-way broadcast (cond, x, and y all broadcast
+        // together — broadcasting is associative, so this is just two ordinary 2-way broadcasts
+        // chained), selecting x's element where cond is truthy, else y's. Result dtype matches x/y
+        // when they agree; falls back to float64 (coercing any bool operand to 1.0/0.0) when mixed,
+        // since only float64/bool exist yet — no promotion rules until Phase 9.
+        m.Dict["where"] = new PyBuiltinFunction("where", (_, a, _) =>
+        {
+            var cond = OperandData(a[0]);
+            var x = OperandData(a[1]);
+            var y = OperandData(a[2]);
+            int[] shapeCondX = BroadcastShape(cond.Shape, x.Shape);
+            int[] shape = BroadcastShape(shapeCondX, y.Shape);
+            int[] stridesCond = BroadcastStrides(cond.Shape, cond.Strides, shape);
+            int[] stridesX = BroadcastStrides(x.Shape, x.Strides, shape);
+            int[] stridesY = BroadcastStrides(y.Shape, y.Strides, shape);
+            DType outDType = x.DType == y.DType ? x.DType : DType.Float64;
+            var outBuf = MakeBuffer(outDType, SizeOf(shape));
+            int flat = 0;
+            ForEachBroadcastIndex(shape, index =>
+            {
+                bool truthy = AsComparableDouble(cond, DotProduct(index, stridesCond)) != 0.0;
+                var (chosen, chosenStrides) = truthy ? (x, stridesX) : (y, stridesY);
+                object value = GetElement(chosen, DotProduct(index, chosenStrides));
+                SetBufferElement(outBuf, outDType, flat++, CoerceTo(outDType, value));
+            });
+            return Wrap(new NdArrayData(outDType, outBuf, shape));
+        });
+
         return m;
     }
+
+    private static object CoerceTo(DType dtype, object value) => dtype switch
+    {
+        DType.Float64 => value is double d ? d : (bool)value ? 1.0 : 0.0,
+        DType.Bool => (bool)value,
+        _ => value,
+    };
 
     private static object RequireArg(object[] a, Dictionary<string, object>? kwargs, int index, string name)
         => a.Length > index ? a[index]
@@ -211,14 +248,85 @@ public static class NumpyModule
     };
 
     private static NdArrayData CopyOf(NdArrayData d)
-        => new(d.DType, (double[])((double[])d.Buffer).Clone(), (int[])d.Shape.Clone());
+        => new(d.DType, CloneBuffer(d), (int[])d.Shape.Clone());
+
+    // ---------------------------------------------------------------- dtype-generic element access
+    //
+    // Phase 1-4 hardcoded `double[]` everywhere (the only dtype that existed). Phase 5 adds a real
+    // `Bool` dtype (comparisons/masking), so every place that used to cast `d.Buffer` straight to
+    // `double[]` now goes through these three dispatch points instead — one real switch per
+    // concern, not scattered per-callsite casts.
+
+    private static object GetElement(NdArrayData d, int offset) => d.DType switch
+    {
+        DType.Float64 => ((double[])d.Buffer)[offset],
+        DType.Bool => ((bool[])d.Buffer)[offset],
+        _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
+    };
+
+    private static void SetElement(NdArrayData d, int offset, object value)
+    {
+        switch (d.DType)
+        {
+            case DType.Float64:
+                ((double[])d.Buffer)[offset] = PyOps.AsDouble(value);
+                break;
+            case DType.Bool:
+                ((bool[])d.Buffer)[offset] = value is bool b ? b
+                    : throw PyErr.TypeError($"expected bool, got {PyOps.TypeName(value)}");
+                break;
+            default:
+                throw new NotSupportedException($"unsupported dtype {d.DType}");
+        }
+    }
+
+    private static Array MakeBuffer(DType dtype, int size) => dtype switch
+    {
+        DType.Float64 => new double[size],
+        DType.Bool => new bool[size],
+        _ => throw new NotSupportedException($"unsupported dtype {dtype}"),
+    };
+
+    private static void SetBufferElement(Array buffer, DType dtype, int index, object value)
+    {
+        switch (dtype)
+        {
+            case DType.Float64:
+                ((double[])buffer)[index] = (double)value;
+                break;
+            case DType.Bool:
+                ((bool[])buffer)[index] = (bool)value;
+                break;
+            default:
+                throw new NotSupportedException($"unsupported dtype {dtype}");
+        }
+    }
+
+    private static Array CloneBuffer(NdArrayData d) => d.DType switch
+    {
+        DType.Float64 => (double[])((double[])d.Buffer).Clone(),
+        DType.Bool => (bool[])((bool[])d.Buffer).Clone(),
+        _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
+    };
+
+    /// <summary>Numeric value of an element regardless of dtype (`True`/`False` as `1.0`/`0.0`,
+    /// matching `PyOps.AsDouble`'s own bool handling) — lets comparisons work between any dtype
+    /// pair through one code path instead of one per combination.</summary>
+    private static double AsComparableDouble(NdArrayData d, int offset) => d.DType switch
+    {
+        DType.Float64 => (double)GetElement(d, offset),
+        DType.Bool => (bool)GetElement(d, offset) ? 1.0 : 0.0,
+        _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
+    };
 
     /// <summary>Real numpy shape inference off a (possibly nested) Python list/tuple: the shape is
     /// read by descending through the *first* element of each level (matching real numpy), then a
     /// single validating pass confirms every branch actually has that same shape — a mismatch
     /// anywhere (a ragged row, a scalar where a nested list was expected, or vice versa) raises the
     /// real `ValueError` numpy itself raises for an inhomogeneous shape. A bare scalar (no list at
-    /// all) produces a real 0-d array, matching `np.array(5.0)`.</summary>
+    /// all) produces a real 0-d array, matching `np.array(5.0)`. Dtype: real numpy infers `bool`
+    /// when *every* leaf is a real Python bool (`np.array([True, False]).dtype == bool`), else
+    /// `float64` (ints still promote to float — real int64 inference is Phase 9's job).</summary>
     private static NdArrayData ArrayFromPython(object value)
     {
         var shape = new List<int>();
@@ -231,9 +339,14 @@ public static class NumpyModule
                 break;
             cursor = items[0];
         }
-        var flat = new List<double>();
+        var flat = new List<object>();
         AppendFlat(value, shape.ToArray(), 0, flat);
-        return new NdArrayData(DType.Float64, flat.ToArray(), shape.ToArray());
+
+        DType dtype = flat.Count > 0 && flat.All(static v => v is bool) ? DType.Bool : DType.Float64;
+        var buffer = MakeBuffer(dtype, flat.Count);
+        for (int i = 0; i < flat.Count; i++)
+            SetBufferElement(buffer, dtype, i, dtype == DType.Bool ? flat[i] : PyOps.AsDouble(flat[i]));
+        return new NdArrayData(dtype, buffer, shape.ToArray());
     }
 
     private static IReadOnlyList<object> SequenceItems(object o) => o switch
@@ -243,7 +356,7 @@ public static class NumpyModule
         _ => throw new InvalidOperationException("not a sequence"),
     };
 
-    private static void AppendFlat(object value, int[] shape, int depth, List<double> flat)
+    private static void AppendFlat(object value, int[] shape, int depth, List<object> flat)
     {
         bool isLeaf = depth == shape.Length;
         bool isSequence = value is PyList or PyTuple;
@@ -251,7 +364,7 @@ public static class NumpyModule
         {
             if (isSequence)
                 throw RaggedArrayError();
-            flat.Add(PyOps.AsDouble(value));
+            flat.Add(value);
             return;
         }
         if (!isSequence)
@@ -325,32 +438,44 @@ public static class NumpyModule
     }
 
     /// <summary>`a[index]`: a fully-reduced index (an explicit int on every axis) returns a real
-    /// Python `float` scalar, matching real numpy — everything else returns a new, independent
-    /// `ndarray` **copy** (real strided views are a later, optional phase — see NUMPY_PLAN.md
-    /// Phase 12).</summary>
+    /// Python scalar (`float` or `bool`, matching the array's own dtype) — everything else returns
+    /// a new, independent `ndarray` **copy** (real strided views are a later, optional phase — see
+    /// NUMPY_PLAN.md Phase 12). A real bool-array index (`a[mask]`) is boolean masking (Phase 5.5),
+    /// handled entirely separately from the int/slice/tuple axis resolution below.</summary>
     private static object GetItem(NdArrayData d, object index)
     {
-        var (axisOffsets, resultShape) = ResolveAxes(d, index);
-        var buf = (double[])d.Buffer;
-        if (resultShape.Length == 0)
-            return buf[FlatOffset(d, axisOffsets)];
+        if (BoolMaskOf(index) is { } mask)
+            return Wrap(GatherMask(d, mask));
 
-        var flat = new List<double>();
-        GatherRecursive(buf, d.Strides, axisOffsets, 0, 0, flat);
-        return Wrap(new NdArrayData(d.DType, flat.ToArray(), resultShape));
+        var (axisOffsets, resultShape) = ResolveAxes(d, index);
+        if (resultShape.Length == 0)
+            return GetElement(d, FlatOffset(d, axisOffsets));
+
+        var flat = new List<object>();
+        GatherRecursive(d, axisOffsets, 0, 0, flat);
+        var buffer = MakeBuffer(d.DType, flat.Count);
+        for (int i = 0; i < flat.Count; i++)
+            SetBufferElement(buffer, d.DType, i, flat[i]);
+        return Wrap(new NdArrayData(d.DType, buffer, resultShape));
     }
 
     /// <summary>`a[index] = value`: a fully-reduced index assigns a single scalar element; any
     /// other index assigns either a broadcast scalar (`a[1:3] = 5.0`) or another array whose shape
     /// must exactly match the indexed region (`a[1:3] = other` — real per-element broadcasting
-    /// beyond an exact shape match is Phase 4's job, not this one).</summary>
+    /// beyond an exact shape match is Phase 4's job, not this one). `a[mask] = value` (Phase 5.6)
+    /// is boolean-mask assignment, handled separately from axis resolution.</summary>
     private static void SetItem(NdArrayData d, object index, object value)
     {
+        if (BoolMaskOf(index) is { } mask)
+        {
+            ScatterMask(d, mask, value);
+            return;
+        }
+
         var (axisOffsets, resultShape) = ResolveAxes(d, index);
-        var buf = (double[])d.Buffer;
         if (resultShape.Length == 0)
         {
-            buf[FlatOffset(d, axisOffsets)] = PyOps.AsDouble(value);
+            SetElement(d, FlatOffset(d, axisOffsets), value);
             return;
         }
 
@@ -360,14 +485,12 @@ public static class NumpyModule
             if (!src.Shape.SequenceEqual(resultShape))
                 throw PyErr.ValueError(
                     $"could not broadcast input array from shape {ShapeRepr(src.Shape)} into shape {ShapeRepr(resultShape)}");
-            var srcBuf = (double[])src.Buffer;
             int i = 0;
-            ScatterRecursive(buf, d.Strides, axisOffsets, 0, 0, () => srcBuf[i++]);
+            ScatterRecursive(d, axisOffsets, 0, 0, () => GetElement(src, i++));
         }
         else
         {
-            double scalar = PyOps.AsDouble(value);
-            ScatterRecursive(buf, d.Strides, axisOffsets, 0, 0, () => scalar);
+            ScatterRecursive(d, axisOffsets, 0, 0, () => value);
         }
     }
 
@@ -379,26 +502,85 @@ public static class NumpyModule
         return offset;
     }
 
-    private static void GatherRecursive(double[] buf, int[] strides, int[][] axisOffsets, int axis, int baseOffset, List<double> flat)
+    private static void GatherRecursive(NdArrayData d, int[][] axisOffsets, int axis, int baseOffset, List<object> flat)
     {
         if (axis == axisOffsets.Length)
         {
-            flat.Add(buf[baseOffset]);
+            flat.Add(GetElement(d, baseOffset));
             return;
         }
         foreach (int off in axisOffsets[axis])
-            GatherRecursive(buf, strides, axisOffsets, axis + 1, baseOffset + off * strides[axis], flat);
+            GatherRecursive(d, axisOffsets, axis + 1, baseOffset + off * d.Strides[axis], flat);
     }
 
-    private static void ScatterRecursive(double[] buf, int[] strides, int[][] axisOffsets, int axis, int baseOffset, Func<double> nextValue)
+    private static void ScatterRecursive(NdArrayData d, int[][] axisOffsets, int axis, int baseOffset, Func<object> nextValue)
     {
         if (axis == axisOffsets.Length)
         {
-            buf[baseOffset] = nextValue();
+            SetElement(d, baseOffset, nextValue());
             return;
         }
         foreach (int off in axisOffsets[axis])
-            ScatterRecursive(buf, strides, axisOffsets, axis + 1, baseOffset + off * strides[axis], nextValue);
+            ScatterRecursive(d, axisOffsets, axis + 1, baseOffset + off * d.Strides[axis], nextValue);
+    }
+
+    // ---------------------------------------------------------------- Phase 5.5/5.6: boolean masking
+
+    /// <summary>Recognizes a real bool-dtype `ndarray` used AS the whole index (`a[mask]`), as
+    /// opposed to an int/slice/tuple index — real numpy's boolean (fancy) indexing, a genuinely
+    /// different mode from axis-by-axis indexing. Returns null for every other index shape (a plain
+    /// int/slice/tuple falls through to the normal `ResolveAxes` path).</summary>
+    private static NdArrayData? BoolMaskOf(object index)
+        => index is PyInstance pi && pi.Class == NdArrayClass && Data(pi).DType == DType.Bool ? Data(pi) : null;
+
+    /// <summary>`a[mask]`: real numpy requires the mask's shape to exactly match `a`'s (v1 scope —
+    /// no partial/broadcast mask), and returns a real 1-D array of every element whose mask
+    /// position is `True`, visited in C-order.</summary>
+    private static NdArrayData GatherMask(NdArrayData d, NdArrayData mask)
+    {
+        RequireMatchingMaskShape(d, mask);
+        var maskBuf = (bool[])mask.Buffer;
+        var selected = new List<object>();
+        for (int i = 0; i < d.Size; i++)
+            if (maskBuf[i])
+                selected.Add(GetElement(d, i));
+        var buffer = MakeBuffer(d.DType, selected.Count);
+        for (int i = 0; i < selected.Count; i++)
+            SetBufferElement(buffer, d.DType, i, selected[i]);
+        return new NdArrayData(d.DType, buffer, new[] { selected.Count });
+    }
+
+    /// <summary>`a[mask] = value`: assigns a broadcast scalar, or one value per `True` position
+    /// (in C-order) from another 1-D array whose length must equal the number of `True`s.</summary>
+    private static void ScatterMask(NdArrayData d, NdArrayData mask, object value)
+    {
+        RequireMatchingMaskShape(d, mask);
+        var maskBuf = (bool[])mask.Buffer;
+        if (value is PyInstance pi && pi.Class == NdArrayClass)
+        {
+            var src = Data(pi);
+            int trueCount = maskBuf.Count(static x => x);
+            if (src.Size != trueCount)
+                throw PyErr.ValueError(
+                    $"NumPy boolean array indexing assignment cannot assign {src.Size} input values to the {trueCount} output values where the mask is true");
+            int i = 0;
+            for (int offset = 0; offset < d.Size; offset++)
+                if (maskBuf[offset])
+                    SetElement(d, offset, GetElement(src, i++));
+        }
+        else
+        {
+            for (int offset = 0; offset < d.Size; offset++)
+                if (maskBuf[offset])
+                    SetElement(d, offset, value);
+        }
+    }
+
+    private static void RequireMatchingMaskShape(NdArrayData d, NdArrayData mask)
+    {
+        if (!mask.Shape.SequenceEqual(d.Shape))
+            throw PyErr.IndexError(
+                $"boolean index did not match indexed array; dimension mismatch: {ShapeRepr(d.Shape)} vs {ShapeRepr(mask.Shape)}");
     }
 
     private static string ShapeRepr(int[] shape) => shape.Length == 1 ? $"({shape[0]},)" : $"({string.Join(", ", shape)})";
@@ -455,25 +637,25 @@ public static class NumpyModule
         return result;
     }
 
-    private static NdArrayData ElementwiseBinary(NdArrayData a, NdArrayData b, Func<double, double, double> op)
+    /// <summary>Computes the broadcast shape once and hands back both operands' own strides
+    /// reinterpreted against it — the shared setup every broadcasted elementwise operation
+    /// (arithmetic, comparison, logical) needs, factored out so each of them is just "iterate the
+    /// broadcast shape, read two elements, write one".</summary>
+    private static (int[] Shape, int[] StridesA, int[] StridesB) PrepareBroadcast(NdArrayData a, NdArrayData b)
     {
         int[] shape = BroadcastShape(a.Shape, b.Shape);
-        int[] stridesA = BroadcastStrides(a.Shape, a.Strides, shape);
-        int[] stridesB = BroadcastStrides(b.Shape, b.Strides, shape);
-        var bufA = (double[])a.Buffer;
-        var bufB = (double[])b.Buffer;
+        return (shape, BroadcastStrides(a.Shape, a.Strides, shape), BroadcastStrides(b.Shape, b.Strides, shape));
+    }
+
+    /// <summary>Visits every multi-index of `shape` in real C-order (last axis fastest), the same
+    /// odometer-style increment used throughout this module.</summary>
+    private static void ForEachBroadcastIndex(int[] shape, Action<int[]> visit)
+    {
         int size = shape.Aggregate(1, (acc, dim) => acc * dim);
-        var outBuf = new double[size];
         var index = new int[shape.Length];
         for (int flat = 0; flat < size; flat++)
         {
-            int offA = 0, offB = 0;
-            for (int d = 0; d < shape.Length; d++)
-            {
-                offA += index[d] * stridesA[d];
-                offB += index[d] * stridesB[d];
-            }
-            outBuf[flat] = op(bufA[offA], bufB[offB]);
+            visit(index);
             for (int d = shape.Length - 1; d >= 0; d--)
             {
                 if (++index[d] < shape[d])
@@ -481,7 +663,66 @@ public static class NumpyModule
                 index[d] = 0;
             }
         }
+    }
+
+    private static int DotProduct(int[] index, int[] strides)
+    {
+        int offset = 0;
+        for (int d = 0; d < index.Length; d++)
+            offset += index[d] * strides[d];
+        return offset;
+    }
+
+    private static NdArrayData ElementwiseBinary(NdArrayData a, NdArrayData b, Func<double, double, double> op)
+    {
+        var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
+        var bufA = (double[])a.Buffer;
+        var bufB = (double[])b.Buffer;
+        var outBuf = new double[SizeOf(shape)];
+        int flat = 0;
+        ForEachBroadcastIndex(shape, index =>
+            outBuf[flat++] = op(bufA[DotProduct(index, stridesA)], bufB[DotProduct(index, stridesB)]));
         return new NdArrayData(DType.Float64, outBuf, shape);
+    }
+
+    /// <summary>Same broadcasted iteration as `ElementwiseBinary`, but comparing (via
+    /// `AsComparableDouble`, so either operand can be `Float64` or `Bool`) into a real `Bool`-dtype
+    /// result — the shared machinery behind `==`/`!=`/`&lt;`/`&lt;=`/`&gt;`/`&gt;=` (Phase 5.2).</summary>
+    private static NdArrayData ElementwiseCompare(NdArrayData a, NdArrayData b, Func<double, double, bool> cmp)
+    {
+        var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
+        var outBuf = new bool[SizeOf(shape)];
+        int flat = 0;
+        ForEachBroadcastIndex(shape, index =>
+            outBuf[flat++] = cmp(
+                AsComparableDouble(a, DotProduct(index, stridesA)),
+                AsComparableDouble(b, DotProduct(index, stridesB))));
+        return new NdArrayData(DType.Bool, outBuf, shape);
+    }
+
+    /// <summary>The `Bool`-only counterpart for `&amp;`/`|`/`^` (Phase 5.3) — both operands must
+    /// already be real bool arrays (no truthiness coercion from float arrays; matches real numpy,
+    /// where `&amp;`/`|` on a float array does real bitwise integer operations instead, out of v1
+    /// scope here).</summary>
+    private static NdArrayData LogicalBinary(NdArrayData a, NdArrayData b, Func<bool, bool, bool> op)
+    {
+        RequireBoolDType(a);
+        RequireBoolDType(b);
+        var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
+        var bufA = (bool[])a.Buffer;
+        var bufB = (bool[])b.Buffer;
+        var outBuf = new bool[SizeOf(shape)];
+        int flat = 0;
+        ForEachBroadcastIndex(shape, index =>
+            outBuf[flat++] = op(bufA[DotProduct(index, stridesA)], bufB[DotProduct(index, stridesB)]));
+        return new NdArrayData(DType.Bool, outBuf, shape);
+    }
+
+    private static void RequireBoolDType(NdArrayData d)
+    {
+        if (d.DType != DType.Bool)
+            throw PyErr.TypeError(
+                "ufunc supports only bool arrays for this v1 shim's logical operators (see NUMPY_PLAN.md Phase 5.3)");
     }
 
     private static NdArrayData ElementwiseUnary(NdArrayData d, Func<double, double> op)
@@ -495,6 +736,23 @@ public static class NumpyModule
 
     private static object ElementwiseOp(object aObj, object bObj, Func<double, double, double> op)
         => Wrap(ElementwiseBinary(OperandData(aObj), OperandData(bObj), op));
+
+    private static object CompareOp(object aObj, object bObj, Func<double, double, bool> cmp)
+        => Wrap(ElementwiseCompare(OperandData(aObj), OperandData(bObj), cmp));
+
+    private static object LogicalOp(object aObj, object bObj, Func<bool, bool, bool> op)
+        => Wrap(LogicalBinary(LogicalOperandData(aObj), LogicalOperandData(bObj), op));
+
+    /// <summary>Scalar coercion specific to logical ops: a real Python `bool` becomes a real 0-d
+    /// `Bool` array (so `mask &amp; True` works), distinct from `OperandData`'s own coercion (which
+    /// treats a scalar `bool` as `1.0`/`0.0` for arithmetic/comparison — `True` means different
+    /// things in the two contexts, matching real numpy's own type-dependent behavior).</summary>
+    private static NdArrayData LogicalOperandData(object o) => o switch
+    {
+        PyInstance pi when pi.Class == NdArrayClass => Data(pi),
+        bool b => new NdArrayData(DType.Bool, new[] { b }, Array.Empty<int>()),
+        _ => throw PyErr.TypeError($"expected a bool array or bool, got {PyOps.TypeName(o)}"),
+    };
 
     /// <summary>Lets `ElementwiseBinary`/broadcasting treat a plain Python scalar (int/float/bool)
     /// exactly like a real 0-d array — `2 + arr` and `np.array(2.0) + arr` take the same code path,
@@ -569,6 +827,51 @@ public static class NumpyModule
         Add("__pos__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), static x => x)));
         Add("__abs__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), Math.Abs)));
 
+        // Phase 5 — comparisons/bool arrays/masking. Reachable through the plain `== != < <= > >=`
+        // operators only because `Interp.CompareExpr` now returns a *single* comparison's raw
+        // dunder result instead of always collapsing to bool (see the `Interp.cs` change this
+        // phase needed — real numpy's `arr1 < arr2` genuinely returns an array, not a bool).
+        Add("__eq__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x == y));
+        Add("__ne__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x != y));
+        Add("__lt__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x < y));
+        Add("__le__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x <= y));
+        Add("__gt__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x > y));
+        Add("__ge__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x >= y));
+
+        Add("__and__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x && y));
+        Add("__rand__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x && y));
+        Add("__or__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x || y));
+        Add("__ror__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x || y));
+        Add("__xor__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x ^ y));
+        Add("__rxor__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x ^ y));
+        Add("__invert__", (_, a, _) =>
+        {
+            var d = Data(a[0]);
+            RequireBoolDType(d);
+            var buf = (bool[])d.Buffer;
+            var outBuf = new bool[buf.Length];
+            for (int i = 0; i < buf.Length; i++)
+                outBuf[i] = !buf[i];
+            return Wrap(new NdArrayData(DType.Bool, outBuf, (int[])d.Shape.Clone()));
+        });
+
+        Add("any", (_, a, _) =>
+        {
+            var d = Data(a[0]);
+            for (int i = 0; i < d.Size; i++)
+                if (AsComparableDouble(d, i) != 0.0)
+                    return true;
+            return false;
+        });
+        Add("all", (_, a, _) =>
+        {
+            var d = Data(a[0]);
+            for (int i = 0; i < d.Size; i++)
+                if (AsComparableDouble(d, i) == 0.0)
+                    return false;
+            return true;
+        });
+
         return cls;
     }
 
@@ -596,6 +899,7 @@ public static class NumpyModule
     private static PyInstance DTypeInstance(DType dtype) => dtype switch
     {
         DType.Float64 => Float64DType,
+        DType.Bool => BoolDType,
         _ => throw new NotSupportedException($"no dtype instance for {dtype}"),
     };
 
@@ -607,30 +911,40 @@ public static class NumpyModule
     private static string FormatArray(NdArrayData d)
     {
         if (d.Ndim == 0)
-            return FormatElement(((double[])d.Buffer)[0]);
-        return FormatDim((double[])d.Buffer, d.Shape, d.Strides, 0, 0);
+            return FormatElement(d, GetElement(d, 0));
+        return FormatDim(d, 0, 0);
     }
 
-    private static string FormatDim(double[] buf, int[] shape, int[] strides, int dim, int baseOffset)
+    private static string FormatDim(NdArrayData d, int dim, int baseOffset)
     {
-        int n = shape[dim];
-        if (dim == shape.Length - 1)
+        int n = d.Shape[dim];
+        if (dim == d.Shape.Length - 1)
         {
             var parts = new string[n];
             for (int i = 0; i < n; i++)
-                parts[i] = FormatElement(buf[baseOffset + i * strides[dim]]);
+                parts[i] = FormatElement(d, GetElement(d, baseOffset + i * d.Strides[dim]));
             return "[" + string.Join(" ", parts) + "]";
         }
         var rows = new string[n];
         for (int i = 0; i < n; i++)
-            rows[i] = FormatDim(buf, shape, strides, dim + 1, baseOffset + i * strides[dim]);
+            rows[i] = FormatDim(d, dim + 1, baseOffset + i * d.Strides[dim]);
         string pad = new string(' ', dim + 1);
         return "[" + string.Join("\n" + pad, rows) + "]";
     }
 
     /// <summary>Real numpy shows a whole-number float with a trailing "." and no "0" (`1.` not
-    /// `1.0`) in array printing; every other value formats the same as Python's own float repr.</summary>
-    private static string FormatElement(double v)
+    /// `1.0`) in array printing; a bool prints as real Python's own `True`/`False` — real numpy
+    /// additionally pads bool elements to a common column width (`" True"`/`"False"`), which this
+    /// v1 skips (the same documented "no column-width alignment yet" simplification already noted
+    /// for float arrays in Phase 1.6).</summary>
+    private static string FormatElement(NdArrayData d, object value) => d.DType switch
+    {
+        DType.Float64 => FormatFloatElement((double)value),
+        DType.Bool => (bool)value ? "True" : "False",
+        _ => value.ToString() ?? "",
+    };
+
+    private static string FormatFloatElement(double v)
     {
         string s = PyOps.ReprDouble(v);
         return s.EndsWith(".0", StringComparison.Ordinal) ? s[..^1] : s;

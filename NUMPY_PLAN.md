@@ -166,15 +166,49 @@ performance, **not** views-everywhere semantics (documented per step).
   numpy's actual buffer mutation. Documented as a deliberate v1 simplification (verified live and
   tested); revisit only if a real script's correctness depends on the aliasing.
 
-## Phase 5 — Comparisons, bool arrays, masking
+## Phase 5 — Comparisons, bool arrays, masking ✅ (2026-08-11)
 
-- [ ] 5.1 Add the `Bool` dtype (a `bool[]` buffer path in `NdArrayData` get/set + repr). Test repr.
-- [ ] 5.2 Comparisons `== != < <= > >=` (array vs array, array vs scalar) → **bool** ndarray. Test.
-- [ ] 5.3 Logical `&` `|` `~` on bool arrays (`__and__`/`__or__`/`__invert__`). Test.
-- [ ] 5.4 `a.any()`, `a.all()`. Test.
-- [ ] 5.5 Boolean-mask read: `a[mask]` → 1-D array of selected elements. Test.
-- [ ] 5.6 Boolean-mask assign: `a[mask] = value`. Test.
-- [ ] 5.7 `np.where(cond, x, y)` (broadcasted). Test.
+- [x] 5.1 Add the `Bool` dtype (a `bool[]` buffer path in `NdArrayData` get/set + repr). Test repr.
+  — *Note:* this meant genericizing every place that used to hardcode `double[]` (indexing,
+  `.copy()`, repr/str formatting) behind a small dtype-dispatched `GetElement`/`SetElement`/
+  `MakeBuffer`/`CloneBuffer` set, rather than duplicating the whole indexing/formatting machinery a
+  second time for bool. Also fixed a real Phase 2 gap found along the way: `np.array([True, False])`
+  was unconditionally building a `float64` array (Phase 2 only ever had one dtype to build) instead
+  of real numpy's own bool-dtype inference — `ArrayFromPython` now infers `Bool` when every leaf is
+  a real Python `bool`, else `float64` (ints still promote to float — real int64 inference stays
+  Phase 9's job).
+- [x] 5.2 Comparisons `== != < <= > >=` (array vs array, array vs scalar) → **bool** ndarray. Test.
+  — *Note:* **needed a real `Interp.cs` core change**, not just a new module: `CompareExpr` always
+  forced its dunder's return value through `PyOps.Truthy`, so even a correct `ndarray.__lt__`
+  returning a real bool array got collapsed to a single Python bool before `a < b` could ever see
+  it. Fixed by having `Interp.Eval(CompareExpr)` return the dunder's *raw* result for an unchained
+  (single-operator) comparison — matching real CPython, which never implicitly bools a plain `a < b`
+  — while a genuinely chained comparison (`a < b < c`) keeps the exact same truthiness-collapsing
+  short-circuit behavior as before (verified both directions live and with dedicated tests; full
+  suite re-run clean before proceeding, given the blast radius of a change to core comparison
+  evaluation).
+- [x] 5.3 Logical `&` `|` `~` on bool arrays (`__and__`/`__or__`/`__invert__`). Test.
+  — *Note:* also added `^`/`__xor__` (not explicitly listed, but trivial given the same shared
+  broadcasting machinery, and real numpy has it). Rejects a non-bool-dtype operand with a real
+  `TypeError` (real numpy's `&`/`|` on float arrays does real bitwise-integer operations instead —
+  out of v1 scope, see the module's own dtype rollout notes). A raw Python `bool` scalar operand
+  (`mask & True`) is coerced to a real 0-d `Bool` array via a dedicated `LogicalOperandData` —
+  deliberately *not* shared with arithmetic's own `OperandData` (a scalar `bool` means `1.0`/`0.0`
+  there, `True`/`False` here — same Python value, different real numpy semantics depending on
+  context).
+- [x] 5.4 `a.any()`, `a.all()`. Test.
+- [x] 5.5 Boolean-mask read: `a[mask]` → 1-D array of selected elements. Test.
+  — *Note:* a real bool-dtype `ndarray` used as the *entire* index is recognized as a genuinely
+  different indexing mode (real numpy's boolean/fancy indexing) up front in `GetItem`/`SetItem`,
+  before falling through to the axis-by-axis int/slice/tuple resolution everything else uses. v1
+  scope: the mask's shape must exactly match the array's own shape (no partial/broadcast masks).
+- [x] 5.6 Boolean-mask assign: `a[mask] = value`. Test. — *Note:* supports both a broadcast scalar
+  and an array whose length matches the real count of `True` positions (mismatched count raises a
+  real `ValueError`, matching real numpy's own message shape).
+- [x] 5.7 `np.where(cond, x, y)` (broadcasted). Test. — *Note:* a real 3-way broadcast (cond, x, and
+  y all broadcast together, done as two chained 2-way broadcasts — broadcasting is associative).
+  Result dtype matches x/y when they agree, else falls back to `float64` (no promotion rules exist
+  yet — Phase 9's job).
 
 ## Phase 6 — Reductions
 
