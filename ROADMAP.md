@@ -502,6 +502,15 @@ strategies, all *per-package*:
 
 There is no *generic* path without embedding CPython — which the project chose not to do.
 
+**numpy** — the hardest single case, and the first one given a dedicated phased plan: see
+[NUMPY_PLAN.md](NUMPY_PLAN.md) (⚪ not started — Phase 0 groundwork not yet begun), a 12-phase,
+checkbox-level execution plan for a C# `numpy`-shaped shim (`ndarray` as a `PyClass` + C# wrap,
+exactly like the `socket` module, so arithmetic/indexing/iteration reuse the interpreter's
+existing dunder dispatch with no core changes). Phases run construction → indexing/slicing →
+elementwise ops/broadcasting → comparisons/masking → reductions → ufuncs → shape manipulation →
+dtypes/promotion → basic linear algebra → interop, with real strided views deferred to an optional
+final polish phase (copies first, for correctness).
+
 ### Axis D — Packaging / pip
 
 The mini-pip installs **only pure wheels** (`py3-none-any`) and **does not resolve dependencies**
