@@ -210,15 +210,42 @@ performance, **not** views-everywhere semantics (documented per step).
   Result dtype matches x/y when they agree, else falls back to `float64` (no promotion rules exist
   yet — Phase 9's job).
 
-## Phase 6 — Reductions
+## Phase 6 — Reductions ✅ (2026-08-11)
 
-- [ ] 6.1 `a.sum()` / `np.sum(a)` over all elements. Test.
-- [ ] 6.2 `sum(axis=k)` for N-D (single axis) → reduced array. Test 2-D both axes.
-- [ ] 6.3 `mean` (all + axis). Test.
-- [ ] 6.4 `min`/`max` (all + axis) and `np.min`/`np.max`. Test.
-- [ ] 6.5 `prod`, `std`, `var` (all + axis). Test.
-- [ ] 6.6 `argmin`/`argmax` (all + axis). Test.
-- [ ] 6.7 `cumsum`/`cumprod` (1-D first, then axis). Test.
+- [x] 6.1 `a.sum()` / `np.sum(a)` over all elements. Test.
+  — *Note:* the whole-array fold is seeded by the *first visited element* (real C-order), which
+  works uniformly for sum/prod/min/max with no per-op identity needed — except an empty array has
+  no first element, so sum/prod fall back to their real identity (`0.0`/`1.0`) while min/max (which
+  have none in real numpy either) raise a real `ValueError`.
+- [x] 6.2 `sum(axis=k)` for N-D (single axis) → reduced array. Test 2-D both axes.
+  — *Note:* a shared `LineKey`/`ReduceAxisToArray` pair (keyed by "every axis except the reduced
+  one", via a `ComputeStrides` over the *already-reduced* shape) backs every axis-aware reduction
+  in this phase, not just sum — one real mechanism, not one per op. `NdArrayData.ComputeStrides`
+  went from `private` to `internal` so this module-level machinery could reuse it instead of
+  duplicating the stride formula.
+- [x] 6.3 `mean` (all + axis). Test.
+- [x] 6.4 `min`/`max` (all + axis) and `np.min`/`np.max`. Test.
+- [x] 6.5 `prod`, `std`, `var` (all + axis). Test. — *Note:* `var`/`std` use real population variance
+  (`ddof=0`, matching real numpy's own default), computed as a genuine two-pass mean-then-
+  sum-of-squared-deviations (including per-axis, via the per-line mean feeding a second pass).
+- [x] 6.6 `argmin`/`argmax` (all + axis). Test.
+  — *Note:* ties keep the *first* occurrence (a strict `&lt;`/`&gt;` "does this beat the current
+  best" comparison, matching real numpy). `axis=None` returns a real Python `int` (the flat C-order
+  index); `axis=k` returns the per-line index stored in a `float64` array (no `int64` dtype exists
+  yet — Phase 9's job — so the index values are real whole numbers held in the only numeric dtype
+  available, a documented v1 simplification).
+- [x] 6.7 `cumsum`/`cumprod` (1-D first, then axis). Test.
+  — *Note:* `axis=None` flattens (real C-order) then cumulates — a 1-D array flattened is itself, so
+  this covers the "1-D first" case for free. `axis=k` cumulates per line using the same `LineKey`
+  mechanism; real C-order traversal visits every smaller index along *any* axis before a larger one
+  (holding the other axes fixed), which is what makes a simple running-total-per-line correct
+  regardless of which axis was chosen, not just the last one — verified live for both axes of a 2-D
+  array before trusting the general claim.
+
+All 7 sub-steps were also wired as module-level `np.sum`/`np.mean`/`np.min`/`np.max`/`np.prod`/
+`np.std`/`np.var`/`np.argmin`/`np.argmax`/`np.cumsum`/`np.cumprod` (not just instance methods) —
+real numpy has both forms and they're heavily used in practice; trivial to add given they share the
+exact same underlying reduction functions.
 
 ## Phase 7 — Universal functions (ufuncs)
 

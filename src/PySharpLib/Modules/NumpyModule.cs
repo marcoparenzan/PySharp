@@ -33,8 +33,10 @@ public sealed class NdArrayData
     }
 
     /// <summary>Real C-order (row-major) strides: the last axis is contiguous (stride 1), each
-    /// earlier axis's stride is the product of every axis size to its right.</summary>
-    private static int[] ComputeStrides(int[] shape)
+    /// earlier axis's stride is the product of every axis size to its right. Internal (not just
+    /// private) so `NumpyModule`'s own reduction machinery (Phase 6) can compute a *reduced*
+    /// shape's strides without duplicating this formula.</summary>
+    internal static int[] ComputeStrides(int[] shape)
     {
         var strides = new int[shape.Length];
         int acc = 1;
@@ -220,6 +222,52 @@ public static class NumpyModule
                 SetBufferElement(outBuf, outDType, flat++, CoerceTo(outDType, value));
             });
             return Wrap(new NdArrayData(outDType, outBuf, shape));
+        });
+
+        // Phase 6 — module-level reduction functions (`np.sum(a)`, not just `a.sum()`) — real
+        // numpy has both forms; these just delegate to the exact same reduction machinery the
+        // instance methods above use.
+        m.Dict["sum"] = new PyBuiltinFunction("sum", (_, a, kwargs) =>
+            ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), static (x, y) => x + y, 0.0));
+        m.Dict["prod"] = new PyBuiltinFunction("prod", (_, a, kwargs) =>
+            ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), static (x, y) => x * y, 1.0));
+        m.Dict["min"] = new PyBuiltinFunction("min", (_, a, kwargs) =>
+            ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), Math.Min, null));
+        m.Dict["max"] = new PyBuiltinFunction("max", (_, a, kwargs) =>
+            ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), Math.Max, null));
+        m.Dict["mean"] = new PyBuiltinFunction("mean", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(MeanAxis(d, ax)) : MeanAll(d);
+        });
+        m.Dict["std"] = new PyBuiltinFunction("std", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(ElementwiseUnary(VarAxis(d, ax), Math.Sqrt)) : Math.Sqrt(VarAll(d));
+        });
+        m.Dict["var"] = new PyBuiltinFunction("var", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(VarAxis(d, ax)) : VarAll(d);
+        });
+        m.Dict["argmin"] = new PyBuiltinFunction("argmin", (_, a, kwargs) =>
+            ArgReduce(Data(a[0]), AxisArg(a, kwargs, 1), static (cand, best) => cand < best));
+        m.Dict["argmax"] = new PyBuiltinFunction("argmax", (_, a, kwargs) =>
+            ArgReduce(Data(a[0]), AxisArg(a, kwargs, 1), static (cand, best) => cand > best));
+        m.Dict["cumsum"] = new PyBuiltinFunction("cumsum", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return Wrap(axis is int ax ? CumulateAxis(d, ax, static (x, y) => x + y) : CumulateFlat(d, static (x, y) => x + y));
+        });
+        m.Dict["cumprod"] = new PyBuiltinFunction("cumprod", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return Wrap(axis is int ax ? CumulateAxis(d, ax, static (x, y) => x * y) : CumulateFlat(d, static (x, y) => x * y));
         });
 
         return m;
@@ -673,6 +721,225 @@ public static class NumpyModule
         return offset;
     }
 
+    // ---------------------------------------------------------------- Phase 6: reductions
+
+    private static int NormalizeAxis(int axis, int ndim)
+    {
+        int resolved = axis < 0 ? axis + ndim : axis;
+        if (resolved < 0 || resolved >= ndim)
+            throw PyErr.ValueError($"axis {axis} is out of bounds for array of dimension {ndim}");
+        return resolved;
+    }
+
+    /// <summary>The flat key identifying "everything except `axis`" for a given multi-index — the
+    /// position an axis-reduction/cumulative-op's *result* (whose shape already has `axis` removed)
+    /// should read from or write to. `excludedStrides` is `ComputeStrides` over the shape with
+    /// `axis` already removed (computed once per call, not once per element).</summary>
+    private static int LineKey(int[] index, int axis, int[] excludedStrides)
+    {
+        int key = 0, ri = 0;
+        for (int ax = 0; ax < index.Length; ax++)
+        {
+            if (ax == axis)
+                continue;
+            key += index[ax] * excludedStrides[ri];
+            ri++;
+        }
+        return key;
+    }
+
+    /// <summary>`axis=None` reduction: folds every element of `d` (visited in real C-order) into a
+    /// single scalar with `combine`, seeded by the very first element visited — which works
+    /// uniformly for sum/prod/min/max without needing a per-op identity value, *except* an empty
+    /// array has no "first element": `emptyIdentity` supplies sum's real `0.0`/prod's real `1.0`
+    /// for that case, or (left `null`) a real `ValueError` for min/max, matching real numpy (which
+    /// has no identity for those).</summary>
+    private static double ReduceAllToScalar(NdArrayData d, Func<double, double, double> combine, double? emptyIdentity)
+    {
+        if (d.Size == 0)
+            return emptyIdentity ?? throw PyErr.ValueError("zero-size array to reduction operation which has no identity");
+        double acc = 0;
+        bool first = true;
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            acc = first ? v : combine(acc, v);
+            first = false;
+        });
+        return acc;
+    }
+
+    /// <summary>`axis=k` reduction: folds along one axis only, producing a real array shaped like
+    /// `d` with that axis removed (real numpy's own `axis=` reduction shape rule).</summary>
+    private static NdArrayData ReduceAxisToArray(NdArrayData d, int axis, Func<double, double, double> combine, double? emptyIdentity)
+    {
+        axis = NormalizeAxis(axis, d.Ndim);
+        int[] resultShape = d.Shape.Where((_, i) => i != axis).ToArray();
+        int[] resultStrides = NdArrayData.ComputeStrides(resultShape);
+        var accBuf = new double[SizeOf(resultShape)];
+        var hasValue = new bool[accBuf.Length];
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            int key = LineKey(index, axis, resultStrides);
+            accBuf[key] = hasValue[key] ? combine(accBuf[key], v) : v;
+            hasValue[key] = true;
+        });
+        if (emptyIdentity is double id)
+        {
+            for (int i = 0; i < accBuf.Length; i++)
+                if (!hasValue[i])
+                    accBuf[i] = id;
+        }
+        else if (hasValue.Any(static has => !has))
+        {
+            throw PyErr.ValueError("zero-size array to reduction operation which has no identity");
+        }
+        return new NdArrayData(DType.Float64, accBuf, resultShape);
+    }
+
+    private static object ReduceDispatch(NdArrayData d, int? axis, Func<double, double, double> combine, double? emptyIdentity)
+        => axis is int ax ? Wrap(ReduceAxisToArray(d, ax, combine, emptyIdentity)) : ReduceAllToScalar(d, combine, emptyIdentity);
+
+    private static double MeanAll(NdArrayData d)
+    {
+        if (d.Size == 0)
+            throw PyErr.ValueError("Mean of empty slice.");
+        return ReduceAllToScalar(d, static (x, y) => x + y, 0.0) / d.Size;
+    }
+
+    private static NdArrayData MeanAxis(NdArrayData d, int axis)
+    {
+        axis = NormalizeAxis(axis, d.Ndim);
+        var sums = ReduceAxisToArray(d, axis, static (x, y) => x + y, 0.0);
+        double count = d.Shape[axis];
+        return ElementwiseUnary(sums, x => x / count);
+    }
+
+    private static double VarAll(NdArrayData d)
+    {
+        double mean = MeanAll(d);
+        double sumSq = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            sumSq += (v - mean) * (v - mean);
+        });
+        return sumSq / d.Size;
+    }
+
+    private static NdArrayData VarAxis(NdArrayData d, int axis)
+    {
+        axis = NormalizeAxis(axis, d.Ndim);
+        var means = MeanAxis(d, axis);
+        int[] resultStrides = NdArrayData.ComputeStrides(means.Shape);
+        var sumSq = new double[means.Size];
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            int key = LineKey(index, axis, resultStrides);
+            double m = (double)GetElement(means, key);
+            sumSq[key] += (v - m) * (v - m);
+        });
+        double count = d.Shape[axis];
+        for (int i = 0; i < sumSq.Length; i++)
+            sumSq[i] /= count;
+        return new NdArrayData(DType.Float64, sumSq, means.Shape);
+    }
+
+    /// <summary>`argmin`/`argmax`: `better(candidate, currentBest)` returns whether `candidate`
+    /// should replace `currentBest` (`&lt;` for argmin, `&gt;` for argmax). `axis=None` returns a
+    /// real Python `int` (the flat C-order index); `axis=k` returns an array of per-line indices —
+    /// stored as `float64` (no `int64` dtype exists yet, Phase 9's job; the values themselves are
+    /// always real whole-number indices, a documented v1 simplification).</summary>
+    private static object ArgReduce(NdArrayData d, int? axis, Func<double, double, bool> better)
+    {
+        if (axis is int ax)
+        {
+            ax = NormalizeAxis(ax, d.Ndim);
+            int[] resultShape = d.Shape.Where((_, i) => i != ax).ToArray();
+            int[] resultStrides = NdArrayData.ComputeStrides(resultShape);
+            var bestVal = new double[SizeOf(resultShape)];
+            var bestIdx = new double[bestVal.Length];
+            var has = new bool[bestVal.Length];
+            ForEachBroadcastIndex(d.Shape, index =>
+            {
+                double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+                int key = LineKey(index, ax, resultStrides);
+                if (!has[key] || better(v, bestVal[key]))
+                {
+                    bestVal[key] = v;
+                    bestIdx[key] = index[ax];
+                    has[key] = true;
+                }
+            });
+            return Wrap(new NdArrayData(DType.Float64, bestIdx, resultShape));
+        }
+
+        double best = 0;
+        int bestFlat = -1, flat = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            if (bestFlat < 0 || better(v, best))
+            {
+                best = v;
+                bestFlat = flat;
+            }
+            flat++;
+        });
+        if (bestFlat < 0)
+            throw PyErr.ValueError("attempt to get argmin/argmax of an empty sequence");
+        return (BigInteger)bestFlat;
+    }
+
+    /// <summary>`axis=None`: flattens in real C-order, then cumulates — the general form 1-D
+    /// cumsum/cumprod is just a special case of (a 1-D array flattened is itself).</summary>
+    private static NdArrayData CumulateFlat(NdArrayData d, Func<double, double, double> combine)
+    {
+        var outBuf = new double[d.Size];
+        double acc = 0;
+        bool first = true;
+        int flat = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
+            acc = first ? v : combine(acc, v);
+            first = false;
+            outBuf[flat++] = acc;
+        });
+        return new NdArrayData(DType.Float64, outBuf, new[] { d.Size });
+    }
+
+    /// <summary>`axis=k`: cumulates along one axis, keeping the original shape. Real C-order
+    /// traversal visits every smaller index along *any* axis before a larger one (holding all other
+    /// axes fixed) — so a simple per-line running total keyed by `LineKey` is correct regardless of
+    /// which axis is chosen, not just the last one.</summary>
+    private static NdArrayData CumulateAxis(NdArrayData d, int axis, Func<double, double, double> combine)
+    {
+        axis = NormalizeAxis(axis, d.Ndim);
+        int[] excludedStrides = NdArrayData.ComputeStrides(d.Shape.Where((_, i) => i != axis).ToArray());
+        var outBuf = new double[d.Size];
+        var lineAcc = new Dictionary<int, double>();
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            int srcOffset = DotProduct(index, d.Strides);
+            double v = AsComparableDouble(d, srcOffset);
+            int key = LineKey(index, axis, excludedStrides);
+            double acc = lineAcc.TryGetValue(key, out var prev) ? combine(prev, v) : v;
+            lineAcc[key] = acc;
+            outBuf[srcOffset] = acc;
+        });
+        return new NdArrayData(DType.Float64, outBuf, (int[])d.Shape.Clone());
+    }
+
+    private static int? AxisArg(object[] a, Dictionary<string, object>? kwargs, int positionalIndex)
+    {
+        object? raw = a.Length > positionalIndex ? a[positionalIndex]
+            : kwargs is not null && kwargs.TryGetValue("axis", out var v) ? v : null;
+        return raw is null or PyNone ? null : (int)PyOps.AsBigInt(raw, "axis");
+    }
+
     private static NdArrayData ElementwiseBinary(NdArrayData a, NdArrayData b, Func<double, double, double> op)
     {
         var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
@@ -870,6 +1137,48 @@ public static class NumpyModule
                 if (AsComparableDouble(d, i) == 0.0)
                     return false;
             return true;
+        });
+
+        // Phase 6 — reductions. Every one of these takes an optional `axis=` (positional or
+        // keyword, matching real numpy's own signatures): omitted, it folds the whole array to a
+        // scalar; given, it folds along just that axis, producing a real array with that axis
+        // removed. `sum`/`prod` have a real empty-array identity (0.0/1.0, matching real numpy);
+        // `min`/`max` don't (real numpy has none either) and raise a real `ValueError`.
+        Add("sum", (_, a, kwargs) => ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), static (x, y) => x + y, 0.0));
+        Add("prod", (_, a, kwargs) => ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), static (x, y) => x * y, 1.0));
+        Add("min", (_, a, kwargs) => ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), Math.Min, null));
+        Add("max", (_, a, kwargs) => ReduceDispatch(Data(a[0]), AxisArg(a, kwargs, 1), Math.Max, null));
+        Add("mean", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(MeanAxis(d, ax)) : MeanAll(d);
+        });
+        Add("std", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(ElementwiseUnary(VarAxis(d, ax), Math.Sqrt)) : Math.Sqrt(VarAll(d));
+        });
+        Add("var", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return axis is int ax ? Wrap(VarAxis(d, ax)) : VarAll(d);
+        });
+        Add("argmin", (_, a, kwargs) => ArgReduce(Data(a[0]), AxisArg(a, kwargs, 1), static (cand, best) => cand < best));
+        Add("argmax", (_, a, kwargs) => ArgReduce(Data(a[0]), AxisArg(a, kwargs, 1), static (cand, best) => cand > best));
+        Add("cumsum", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return Wrap(axis is int ax ? CumulateAxis(d, ax, static (x, y) => x + y) : CumulateFlat(d, static (x, y) => x + y));
+        });
+        Add("cumprod", (_, a, kwargs) =>
+        {
+            var d = Data(a[0]);
+            int? axis = AxisArg(a, kwargs, 1);
+            return Wrap(axis is int ax ? CumulateAxis(d, ax, static (x, y) => x * y) : CumulateFlat(d, static (x, y) => x * y));
         });
 
         return cls;
