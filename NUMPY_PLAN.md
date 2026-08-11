@@ -66,19 +66,30 @@ performance, **not** views-everywhere semantics (documented per step).
   — *Note:* also added a regression test for 0.1's install-hint in `M7_Pip/PipInstallTests.cs`
   (real network, matching that file's existing paho-mqtt tests).
 
-## Phase 1 — The `ndarray` core
+## Phase 1 — The `ndarray` core ✅ (2026-08-11)
 
-- [ ] 1.1 `NdArrayData` C# class: `DType` enum (`Float64` only for now), flat `System.Array Buffer`,
+- [x] 1.1 `NdArrayData` C# class: `DType` enum (`Float64` only for now), flat `System.Array Buffer`,
   `int[] Shape`, `int[] Strides`, computed `Size`/`Ndim`; C-order stride computation. Unit-test the
   stride math directly (C# test, no Python).
-- [ ] 1.2 Build the `ndarray` `PyClass` in `NumpyModule` (empty methods for now) and a factory
+- [x] 1.2 Build the `ndarray` `PyClass` in `NumpyModule` (empty methods for now) and a factory
   `Wrap(NdArrayData)` → `PyInstance` storing the wrap under `__ndarray__`. Not user-constructible yet.
-- [ ] 1.3 Data attributes via the class: `.ndim`, `.size`. Test through a temporary `np._fromflat`
+  — *Note:* `numpy.ndarray` itself is deliberately not exposed as a module attribute yet (calling it
+  with no real `__init__` would just crash confusingly) — deferred until Phase 2 makes it
+  meaningfully constructible.
+- [x] 1.3 Data attributes via the class: `.ndim`, `.size`. Test through a temporary `np._fromflat`
   helper (internal) that makes an array so tests can assert.
-- [ ] 1.4 `.shape` → tuple, `.dtype` → a dtype object with `.name` (`'float64'`). Test.
-- [ ] 1.5 `__len__` (size of axis 0). Test.
-- [ ] 1.6 `__repr__`/`__str__`: numpy-ish formatting for 1-D and 2-D (`[1. 2. 3.]`, nested for 2-D).
+- [x] 1.4 `.shape` → tuple, `.dtype` → a dtype object with `.name` (`'float64'`). Test.
+  — *Note:* dtype instances are cached singletons per `DType` (`Float64DType`), matching real
+  numpy's own per-dtype identity.
+- [x] 1.5 `__len__` (size of axis 0). Test. — *Note:* a 0-d (scalar) array raises a real
+  `TypeError("len() of unsized object")`, matching real numpy.
+- [x] 1.6 `__repr__`/`__str__`: numpy-ish formatting for 1-D and 2-D (`[1. 2. 3.]`, nested for 2-D).
   Keep it simple; refine later. Test `print(...)` output.
+  — *Note:* verified live: space-separated elements (not comma-separated), a trailing `.` (no `0`)
+  on whole-number floats, 2-D rows indented to align under the opening bracket. `__repr__` wraps
+  `__str__` in `array(...)` without real numpy's own re-indentation for that longer prefix
+  (documented simplification — "keep it simple" per this step). No column-width padding/alignment
+  yet either (real numpy pads elements to a common width; deferred).
 
 ## Phase 2 — Construction
 
