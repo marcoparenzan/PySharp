@@ -14,18 +14,21 @@ public class NumpyConstructionTests
     private static string Run(string body) => Py.Run(body).TrimEnd('\n');
 
     [Fact]
-    public void Array_from_a_flat_1D_list_infers_shape_and_promotes_ints_to_float64()
-        => Assert.Equal("(3,)\nfloat64\n[1. 2. 3.]", Run("""
+    public void Array_from_a_flat_1D_list_of_ints_infers_int64_and_a_list_of_floats_infers_float64()
+        => Assert.Equal("(3,)\nint64\n[1 2 3]\nfloat64\n[1. 2. 3.]", Run("""
             import numpy as np
             a = np.array([1, 2, 3])
             print(a.shape)
             print(a.dtype.name)
             print(str(a))
+            f = np.array([1.0, 2.0, 3.0])
+            print(f.dtype.name)
+            print(str(f))
             """));
 
     [Fact]
     public void Array_from_a_nested_2D_list_infers_shape_recursively()
-        => Assert.Equal("(2, 2)\n[[1. 2.]\n [3. 4.]]", Run("""
+        => Assert.Equal("(2, 2)\n[[1 2]\n [3 4]]", Run("""
             import numpy as np
             b = np.array([[1, 2], [3, 4]])
             print(b.shape)

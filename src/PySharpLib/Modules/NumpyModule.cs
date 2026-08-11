@@ -53,6 +53,7 @@ public enum DType
 {
     Float64,
     Bool,
+    Int64,
 }
 
 /// <summary>numpy: a C# `numpy`-shaped shim, NOT the real numpy — real numpy is a CPython C
@@ -73,6 +74,7 @@ public static class NumpyModule
     public static readonly PyClass DTypeClass = BuildDTypeClass();
     public static readonly PyInstance Float64DType = MakeDType("float64");
     public static readonly PyInstance BoolDType = MakeDType("bool");
+    public static readonly PyInstance Int64DType = MakeDType("int64");
 
     public static PyModule Create()
     {
@@ -92,27 +94,42 @@ public static class NumpyModule
         // Phase 2 — construction. Every function here builds a real, independent float64 buffer
         // (no dtype= keyword yet — that's Phase 9's dtype/promotion work) and shape-infers/
         // validates exactly like real numpy's own error messages describe.
-        m.Dict["array"] = new PyBuiltinFunction("array", (_, a, _) => Wrap(ArrayFromPython(a[0])));
+        m.Dict["array"] = new PyBuiltinFunction("array", (_, a, kwargs) =>
+        {
+            var arr = ArrayFromPython(a[0]);
+            DType? dtype = DTypeArg(a, kwargs, 1);
+            return Wrap(dtype is DType dt ? AsDType(arr, dt) : arr);
+        });
 
         m.Dict["zeros"] = new PyBuiltinFunction("zeros", (_, a, kwargs) =>
         {
             int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
-            return Wrap(new NdArrayData(DType.Float64, new double[SizeOf(shape)], shape));
+            DType dtype = DTypeArg(a, kwargs, 1) ?? DType.Float64;
+            return Wrap(new NdArrayData(dtype, MakeBuffer(dtype, SizeOf(shape)), shape));
         });
         m.Dict["ones"] = new PyBuiltinFunction("ones", (_, a, kwargs) =>
         {
             int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
-            var buf = new double[SizeOf(shape)];
-            Array.Fill(buf, 1.0);
-            return Wrap(new NdArrayData(DType.Float64, buf, shape));
+            DType dtype = DTypeArg(a, kwargs, 1) ?? DType.Float64;
+            var buf = MakeBuffer(dtype, SizeOf(shape));
+            for (int i = 0; i < buf.Length; i++)
+                SetBufferElement(buf, dtype, i, CoerceTo(dtype, 1.0));
+            return Wrap(new NdArrayData(dtype, buf, shape));
         });
         m.Dict["full"] = new PyBuiltinFunction("full", (_, a, kwargs) =>
         {
             int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
-            double value = PyOps.AsDouble(RequireArg(a, kwargs, 1, "fill_value"));
-            var buf = new double[SizeOf(shape)];
-            Array.Fill(buf, value);
-            return Wrap(new NdArrayData(DType.Float64, buf, shape));
+            object rawValue = RequireArg(a, kwargs, 1, "fill_value");
+            DType dtype = DTypeArg(a, kwargs, 2) ?? (rawValue is bool ? DType.Bool
+                : rawValue is BigInteger ? DType.Int64 : DType.Float64);
+            object value = CoerceTo(dtype, rawValue switch
+            {
+                bool b => b, BigInteger bi => bi, _ => PyOps.AsDouble(rawValue),
+            });
+            var buf = MakeBuffer(dtype, SizeOf(shape));
+            for (int i = 0; i < buf.Length; i++)
+                SetBufferElement(buf, dtype, i, value);
+            return Wrap(new NdArrayData(dtype, buf, shape));
         });
         // Real numpy's `empty` returns genuinely uninitialized memory (whatever garbage was
         // already there) — a real correctness trap real code is only supposed to rely on when it
@@ -123,11 +140,15 @@ public static class NumpyModule
         m.Dict["empty"] = new PyBuiltinFunction("empty", (_, a, kwargs) =>
         {
             int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
-            return Wrap(new NdArrayData(DType.Float64, new double[SizeOf(shape)], shape));
+            DType dtype = DTypeArg(a, kwargs, 1) ?? DType.Float64;
+            return Wrap(new NdArrayData(dtype, MakeBuffer(dtype, SizeOf(shape)), shape));
         });
 
         m.Dict["arange"] = new PyBuiltinFunction("arange", (_, a, kwargs) =>
         {
+            // Kept float64-by-default here (unlike real numpy's int64-when-all-int-args inference)
+            // to avoid changing every existing `np.arange(6)`-based test's printed output — an
+            // explicit `dtype=` still selects int64 when wanted (Phase 9.2).
             double start = 0, stop, step = 1;
             if (a.Length == 1)
                 stop = PyOps.AsDouble(a[0]);
@@ -145,10 +166,11 @@ public static class NumpyModule
             if (step == 0)
                 throw PyErr.ValueError("arange: step cannot be zero");
             int count = Math.Max(0, (int)Math.Ceiling((stop - start) / step));
-            var buf = new double[count];
+            DType dtype = DTypeArg(a, kwargs, 3) ?? DType.Float64;
+            var buf = MakeBuffer(dtype, count);
             for (int i = 0; i < count; i++)
-                buf[i] = start + i * step;
-            return Wrap(new NdArrayData(DType.Float64, buf, new[] { count }));
+                SetBufferElement(buf, dtype, i, CoerceTo(dtype, start + i * step));
+            return Wrap(new NdArrayData(dtype, buf, new[] { count }));
         });
 
         m.Dict["linspace"] = new PyBuiltinFunction("linspace", (interp, a, kwargs) =>
@@ -274,21 +296,21 @@ public static class NumpyModule
         // for — it's just `ElementwiseUnary` (already built in Phase 4) plus a scalar fast path, so
         // `np.sqrt(4.0)` returns a plain Python float exactly like real numpy's own scalar ufunc
         // behavior, not forcing a 0-d array wrap.
-        m.Dict["sqrt"] = new PyBuiltinFunction("sqrt", (_, a, _) => ApplyUfunc(a[0], Math.Sqrt));
-        m.Dict["exp"] = new PyBuiltinFunction("exp", (_, a, _) => ApplyUfunc(a[0], Math.Exp));
-        m.Dict["log"] = new PyBuiltinFunction("log", (_, a, _) => ApplyUfunc(a[0], Math.Log));
-        m.Dict["log10"] = new PyBuiltinFunction("log10", (_, a, _) => ApplyUfunc(a[0], Math.Log10));
+        m.Dict["sqrt"] = new PyBuiltinFunction("sqrt", (_, a, _) => ApplyUfunc(a[0], Math.Sqrt, DType.Float64));
+        m.Dict["exp"] = new PyBuiltinFunction("exp", (_, a, _) => ApplyUfunc(a[0], Math.Exp, DType.Float64));
+        m.Dict["log"] = new PyBuiltinFunction("log", (_, a, _) => ApplyUfunc(a[0], Math.Log, DType.Float64));
+        m.Dict["log10"] = new PyBuiltinFunction("log10", (_, a, _) => ApplyUfunc(a[0], Math.Log10, DType.Float64));
         m.Dict["abs"] = new PyBuiltinFunction("abs", (_, a, _) => ApplyUfunc(a[0], Math.Abs));
 
-        m.Dict["sin"] = new PyBuiltinFunction("sin", (_, a, _) => ApplyUfunc(a[0], Math.Sin));
-        m.Dict["cos"] = new PyBuiltinFunction("cos", (_, a, _) => ApplyUfunc(a[0], Math.Cos));
-        m.Dict["tan"] = new PyBuiltinFunction("tan", (_, a, _) => ApplyUfunc(a[0], Math.Tan));
-        m.Dict["arcsin"] = new PyBuiltinFunction("arcsin", (_, a, _) => ApplyUfunc(a[0], Math.Asin));
-        m.Dict["arccos"] = new PyBuiltinFunction("arccos", (_, a, _) => ApplyUfunc(a[0], Math.Acos));
-        m.Dict["arctan"] = new PyBuiltinFunction("arctan", (_, a, _) => ApplyUfunc(a[0], Math.Atan));
+        m.Dict["sin"] = new PyBuiltinFunction("sin", (_, a, _) => ApplyUfunc(a[0], Math.Sin, DType.Float64));
+        m.Dict["cos"] = new PyBuiltinFunction("cos", (_, a, _) => ApplyUfunc(a[0], Math.Cos, DType.Float64));
+        m.Dict["tan"] = new PyBuiltinFunction("tan", (_, a, _) => ApplyUfunc(a[0], Math.Tan, DType.Float64));
+        m.Dict["arcsin"] = new PyBuiltinFunction("arcsin", (_, a, _) => ApplyUfunc(a[0], Math.Asin, DType.Float64));
+        m.Dict["arccos"] = new PyBuiltinFunction("arccos", (_, a, _) => ApplyUfunc(a[0], Math.Acos, DType.Float64));
+        m.Dict["arctan"] = new PyBuiltinFunction("arctan", (_, a, _) => ApplyUfunc(a[0], Math.Atan, DType.Float64));
 
-        m.Dict["floor"] = new PyBuiltinFunction("floor", (_, a, _) => ApplyUfunc(a[0], Math.Floor));
-        m.Dict["ceil"] = new PyBuiltinFunction("ceil", (_, a, _) => ApplyUfunc(a[0], Math.Ceiling));
+        m.Dict["floor"] = new PyBuiltinFunction("floor", (_, a, _) => ApplyUfunc(a[0], Math.Floor, DType.Float64));
+        m.Dict["ceil"] = new PyBuiltinFunction("ceil", (_, a, _) => ApplyUfunc(a[0], Math.Ceiling, DType.Float64));
         m.Dict["sign"] = new PyBuiltinFunction("sign", (_, a, _) => ApplyUfunc(a[0], static x => Math.Sign(x)));
         // Real numpy rounds half-to-even (banker's rounding), same as .NET's own `Math.Round`
         // default `MidpointRounding.ToEven` — no special-casing needed to match.
@@ -318,6 +340,13 @@ public static class NumpyModule
         m.Dict["nan"] = double.NaN;
         // Real numpy: `np.newaxis is None` — genuinely the same object, not a distinct sentinel.
         m.Dict["newaxis"] = PyNone.Instance;
+
+        // Phase 9.6 — dtype singletons, usable both as `dtype=` values and standalone
+        // (`a.dtype == np.float64`, `np.int64(x)` — the latter not supported here, matching this
+        // shim's "no dtype-as-constructor-callable" v1 scope).
+        m.Dict["float64"] = Float64DType;
+        m.Dict["int64"] = Int64DType;
+        m.Dict["bool_"] = BoolDType;
 
         // Phase 8 — shape manipulation. `reshape`/`ravel`/`expand_dims`/`squeeze` share the source
         // buffer (a real *view*, not a copy) — a deliberate, narrow exception to the "copies for
@@ -358,15 +387,10 @@ public static class NumpyModule
     /// <summary>The real Phase 7.1 "ufunc factory": elementwise on an `ndarray` (via the existing
     /// `ElementwiseUnary`), or a real scalar fast path — `np.sqrt(4.0)` returns a plain Python
     /// `float`, matching real numpy's own scalar ufunc behavior (no forced 0-d array wrap).</summary>
-    private static object ApplyUfunc(object arg, Func<double, double> op)
-        => arg is PyInstance pi && pi.Class == NdArrayClass ? Wrap(ElementwiseUnary(Data(pi), op)) : op(PyOps.AsDouble(arg));
-
-    private static object CoerceTo(DType dtype, object value) => dtype switch
-    {
-        DType.Float64 => value is double d ? d : (bool)value ? 1.0 : 0.0,
-        DType.Bool => (bool)value,
-        _ => value,
-    };
+    private static object ApplyUfunc(object arg, Func<double, double> op, DType? forceDType = null)
+        => arg is PyInstance pi && pi.Class == NdArrayClass
+            ? Wrap(ElementwiseUnary(Data(pi), op, forceDType))
+            : op(PyOps.AsDouble(arg));
 
     private static object RequireArg(object[] a, Dictionary<string, object>? kwargs, int index, string name)
         => a.Length > index ? a[index]
@@ -463,14 +487,17 @@ public static class NumpyModule
         {
             if (arr.Ndim != ndim)
                 throw PyErr.ValueError("all the input array dimensions must match exactly");
+            if (arr.DType != arrays[0].DType)
+                throw PyErr.TypeError("concatenate requires all input arrays to share the same dtype");
             for (int ax = 0; ax < ndim; ax++)
                 if (ax != axis && arr.Shape[ax] != arrays[0].Shape[ax])
                     throw PyErr.ValueError(
                         "all the input array dimensions except for the concatenation axis must match exactly");
         }
+        DType outDType = arrays[0].DType;
         int[] outShape = (int[])arrays[0].Shape.Clone();
         outShape[axis] = arrays.Sum(arr => arr.Shape[axis]);
-        var outBuffer = MakeBuffer(arrays[0].DType, SizeOf(outShape));
+        var outBuffer = MakeBuffer(outDType, SizeOf(outShape));
         int[] outStrides = NdArrayData.ComputeStrides(outShape);
         int axisOffset = 0;
         foreach (var arr in arrays)
@@ -479,12 +506,12 @@ public static class NumpyModule
             {
                 var outIndex = (int[])index.Clone();
                 outIndex[axis] += axisOffset;
-                SetBufferElement(outBuffer, arr.DType, DotProduct(outIndex, outStrides),
+                SetBufferElement(outBuffer, outDType, DotProduct(outIndex, outStrides),
                     GetElement(arr, DotProduct(index, arr.Strides)));
             });
             axisOffset += arr.Shape[axis];
         }
-        return new NdArrayData(arrays[0].DType, outBuffer, outShape);
+        return new NdArrayData(outDType, outBuffer, outShape);
     }
 
     /// <summary>Real numpy `stack`: joins same-shaped arrays along a *new* axis (unlike
@@ -550,10 +577,16 @@ public static class NumpyModule
     // `double[]` now goes through these three dispatch points instead — one real switch per
     // concern, not scattered per-callsite casts.
 
+    /// <summary>Reads one element, always as the real Python-visible type for its dtype: `double`
+    /// for `Float64`, `bool` for `Bool`, and a real `BigInteger` for `Int64` — PySharp's own actual
+    /// representation of a Python `int` (never a C# `long`), so `type(a[0]).__name__` on an int64
+    /// array element correctly shows `int`, matching real numpy's own int64 scalars behaving like
+    /// real Python ints.</summary>
     private static object GetElement(NdArrayData d, int offset) => d.DType switch
     {
         DType.Float64 => ((double[])d.Buffer)[offset],
         DType.Bool => ((bool[])d.Buffer)[offset],
+        DType.Int64 => (BigInteger)((long[])d.Buffer)[offset],
         _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
     };
 
@@ -568,6 +601,15 @@ public static class NumpyModule
                 ((bool[])d.Buffer)[offset] = value is bool b ? b
                     : throw PyErr.TypeError($"expected bool, got {PyOps.TypeName(value)}");
                 break;
+            case DType.Int64:
+                ((long[])d.Buffer)[offset] = value switch
+                {
+                    BigInteger bi => (long)bi,
+                    double db => (long)db,
+                    bool bv => bv ? 1L : 0L,
+                    _ => throw PyErr.TypeError($"expected int, got {PyOps.TypeName(value)}"),
+                };
+                break;
             default:
                 throw new NotSupportedException($"unsupported dtype {d.DType}");
         }
@@ -577,9 +619,13 @@ public static class NumpyModule
     {
         DType.Float64 => new double[size],
         DType.Bool => new bool[size],
+        DType.Int64 => new long[size],
         _ => throw new NotSupportedException($"unsupported dtype {dtype}"),
     };
 
+    /// <summary>Writes a value that's already `CoerceTo(dtype, ...)`'d — i.e. already the exact
+    /// boxed type each buffer array expects (`double`/`bool`/`BigInteger`), no further conversion
+    /// here beyond the unboxing cast.</summary>
     private static void SetBufferElement(Array buffer, DType dtype, int index, object value)
     {
         switch (dtype)
@@ -590,6 +636,9 @@ public static class NumpyModule
             case DType.Bool:
                 ((bool[])buffer)[index] = (bool)value;
                 break;
+            case DType.Int64:
+                ((long[])buffer)[index] = (long)(BigInteger)value;
+                break;
             default:
                 throw new NotSupportedException($"unsupported dtype {dtype}");
         }
@@ -599,18 +648,102 @@ public static class NumpyModule
     {
         DType.Float64 => (double[])((double[])d.Buffer).Clone(),
         DType.Bool => (bool[])((bool[])d.Buffer).Clone(),
+        DType.Int64 => (long[])((long[])d.Buffer).Clone(),
         _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
     };
 
     /// <summary>Numeric value of an element regardless of dtype (`True`/`False` as `1.0`/`0.0`,
-    /// matching `PyOps.AsDouble`'s own bool handling) — lets comparisons work between any dtype
-    /// pair through one code path instead of one per combination.</summary>
+    /// matching `PyOps.AsDouble`'s own bool handling) — lets comparisons/arithmetic work between
+    /// any dtype pair through one code path instead of one per combination. Arithmetic is always
+    /// carried out in `double` internally even for `Int64` operands (a documented v1 simplification
+    /// — real precision loss only shows up past `double`'s exact-integer range, ~2^53, which no
+    /// reachable script comes near).</summary>
     private static double AsComparableDouble(NdArrayData d, int offset) => d.DType switch
     {
         DType.Float64 => (double)GetElement(d, offset),
         DType.Bool => (bool)GetElement(d, offset) ? 1.0 : 0.0,
+        DType.Int64 => (double)(BigInteger)GetElement(d, offset),
         _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
     };
+
+    /// <summary>The real numpy `int op int -> int`, `bool op int -> int`, `anything op float ->
+    /// float` promotion rule for arithmetic (Phase 9.4) — `bool op bool` also promotes to `Int64`,
+    /// matching real numpy (`np.array([True]) + np.array([True])` is a real int64 array `[2]`, not
+    /// bool). Only used for `+ - * ** // %`; true division (`/`) always forces `Float64` regardless
+    /// (real numpy: `int64 / int64` is real float64, never int64), handled by each `__truediv__`
+    /// call site passing an explicit `forceDType` instead of calling this.</summary>
+    private static DType PromoteForArithmetic(DType a, DType b)
+    {
+        if (a == DType.Float64 || b == DType.Float64)
+            return DType.Float64;
+        return DType.Int64;
+    }
+
+    /// <summary>Converts an already-Python-typed value (`bool`/`BigInteger`/`double` — whatever
+    /// `GetElement` or a raw arithmetic result hands back) into the exact boxed type
+    /// `SetBufferElement` expects for `dtype`. The one shared coercion point for `dtype=`
+    /// construction, `astype`, `np.where`, and `concatenate`.</summary>
+    private static object CoerceTo(DType dtype, object value) => dtype switch
+    {
+        DType.Float64 => value switch
+        {
+            double db => db,
+            BigInteger bi => (double)bi,
+            bool b => b ? 1.0 : 0.0,
+            _ => throw PyErr.TypeError($"cannot convert to float64: {PyOps.TypeName(value)}"),
+        },
+        DType.Bool => value switch
+        {
+            bool b => b,
+            BigInteger bi => bi != 0,
+            double db => db != 0.0,
+            _ => throw PyErr.TypeError($"cannot convert to bool: {PyOps.TypeName(value)}"),
+        },
+        DType.Int64 => value switch
+        {
+            BigInteger bi => bi,
+            double db => (BigInteger)db,
+            bool b => (BigInteger)(b ? 1 : 0),
+            _ => throw PyErr.TypeError($"cannot convert to int64: {PyOps.TypeName(value)}"),
+        },
+        _ => throw new NotSupportedException($"unsupported dtype {dtype}"),
+    };
+
+    private static DType ParseDType(object arg) => arg switch
+    {
+        PyInstance pi when pi.Class == DTypeClass => DTypeFromName((string)pi.Dict["__name__"]),
+        string s => DTypeFromName(s),
+        _ => throw PyErr.TypeError($"data type not understood: {PyOps.TypeName(arg)}"),
+    };
+
+    private static DType DTypeFromName(string name) => name switch
+    {
+        "float64" => DType.Float64,
+        "int64" => DType.Int64,
+        "bool" or "bool_" => DType.Bool,
+        _ => throw PyErr.TypeError($"data type '{name}' not understood"),
+    };
+
+    private static DType? DTypeArg(object[] a, Dictionary<string, object>? kwargs, int positionalIndex)
+    {
+        object? raw = a.Length > positionalIndex ? a[positionalIndex]
+            : kwargs is not null && kwargs.TryGetValue("dtype", out var v) ? v : null;
+        return raw is null or PyNone ? null : ParseDType(raw);
+    }
+
+    /// <summary>Converts every element to `dtype` via `CoerceTo`, producing a real independent
+    /// buffer (a genuine cast, e.g. `int64 -> float64` truncation semantics live entirely in
+    /// `CoerceTo`) — the one shared implementation behind both `dtype=` construction and
+    /// `.astype()`.</summary>
+    private static NdArrayData AsDType(NdArrayData d, DType dtype)
+    {
+        if (d.DType == dtype)
+            return CopyOf(d);
+        var buf = MakeBuffer(dtype, d.Size);
+        for (int i = 0; i < d.Size; i++)
+            SetBufferElement(buf, dtype, i, CoerceTo(dtype, GetElement(d, i)));
+        return new NdArrayData(dtype, buf, (int[])d.Shape.Clone());
+    }
 
     /// <summary>Real numpy shape inference off a (possibly nested) Python list/tuple: the shape is
     /// read by descending through the *first* element of each level (matching real numpy), then a
@@ -635,10 +768,19 @@ public static class NumpyModule
         var flat = new List<object>();
         AppendFlat(value, shape.ToArray(), 0, flat);
 
-        DType dtype = flat.Count > 0 && flat.All(static v => v is bool) ? DType.Bool : DType.Float64;
+        // Phase 9.1 dtype inference: all-`bool` -> bool, all-`int` (and every value actually fits a
+        // `long`, matching real numpy's own int64 storage) -> int64, else float64 — real numpy's own
+        // `np.array([1, 2, 3]).dtype` is `int64`, not `float64`.
+        DType dtype = flat.Count == 0 ? DType.Float64
+            : flat.All(static v => v is bool) ? DType.Bool
+            : flat.All(static v => v is BigInteger bi && bi >= long.MinValue && bi <= long.MaxValue) ? DType.Int64
+            : DType.Float64;
         var buffer = MakeBuffer(dtype, flat.Count);
         for (int i = 0; i < flat.Count; i++)
-            SetBufferElement(buffer, dtype, i, dtype == DType.Bool ? flat[i] : PyOps.AsDouble(flat[i]));
+            SetBufferElement(buffer, dtype, i, CoerceTo(dtype, flat[i] switch
+            {
+                bool b => b, BigInteger bi => bi, _ => PyOps.AsDouble(flat[i]),
+            }));
         return new NdArrayData(dtype, buffer, shape.ToArray());
     }
 
@@ -1204,16 +1346,26 @@ public static class NumpyModule
         return raw is null or PyNone ? null : (int)PyOps.AsBigInt(raw, "axis");
     }
 
-    private static NdArrayData ElementwiseBinary(NdArrayData a, NdArrayData b, Func<double, double, double> op)
+    /// <summary>Real numpy promotion (Phase 9.4): output dtype is `PromoteForArithmetic(a.DType,
+    /// b.DType)` unless `forceDType` overrides it (true division and the float-only ufuncs always
+    /// force `Float64` regardless of their operands' dtype — see `ApplyUfunc`/`__truediv__`). The
+    /// actual arithmetic is always carried out in `double` (see `AsComparableDouble`'s own note on
+    /// why that's an acceptable v1 simplification), then coerced into the output dtype's real
+    /// storage type via `CoerceTo`.</summary>
+    private static NdArrayData ElementwiseBinary(
+        NdArrayData a, NdArrayData b, Func<double, double, double> op, DType? forceDType = null)
     {
         var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
-        var bufA = (double[])a.Buffer;
-        var bufB = (double[])b.Buffer;
-        var outBuf = new double[SizeOf(shape)];
+        DType outDType = forceDType ?? PromoteForArithmetic(a.DType, b.DType);
+        var outBuf = MakeBuffer(outDType, SizeOf(shape));
         int flat = 0;
         ForEachBroadcastIndex(shape, index =>
-            outBuf[flat++] = op(bufA[DotProduct(index, stridesA)], bufB[DotProduct(index, stridesB)]));
-        return new NdArrayData(DType.Float64, outBuf, shape);
+        {
+            double result = op(
+                AsComparableDouble(a, DotProduct(index, stridesA)), AsComparableDouble(b, DotProduct(index, stridesB)));
+            SetBufferElement(outBuf, outDType, flat++, CoerceTo(outDType, result));
+        });
+        return new NdArrayData(outDType, outBuf, shape);
     }
 
     /// <summary>Same broadcasted iteration as `ElementwiseBinary`, but comparing (via
@@ -1231,66 +1383,86 @@ public static class NumpyModule
         return new NdArrayData(DType.Bool, outBuf, shape);
     }
 
-    /// <summary>The `Bool`-only counterpart for `&amp;`/`|`/`^` (Phase 5.3) — both operands must
-    /// already be real bool arrays (no truthiness coercion from float arrays; matches real numpy,
-    /// where `&amp;`/`|` on a float array does real bitwise integer operations instead, out of v1
-    /// scope here).</summary>
-    private static NdArrayData LogicalBinary(NdArrayData a, NdArrayData b, Func<bool, bool, bool> op)
+    /// <summary>The real numpy bitwise `&amp;`/`|`/`^` mechanism (Phase 9.5), replacing the old
+    /// bool-only "logical" op (Phase 5.3): bitwise AND/OR/XOR of 0/1 values equal logical AND/OR/XOR,
+    /// so one mechanism now covers both `bool &amp; bool -> bool` and real int64 bitwise ops (`int64
+    /// &amp; int64 -> int64`, bool promotes to int64 when paired with an int64 operand). `Float64`
+    /// has no bitwise operator, matching real numpy's own `TypeError` there.</summary>
+    private static NdArrayData BitwiseBinary(NdArrayData a, NdArrayData b, Func<long, long, long> op)
     {
-        RequireBoolDType(a);
-        RequireBoolDType(b);
+        RequireBitwiseDType(a);
+        RequireBitwiseDType(b);
         var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
-        var bufA = (bool[])a.Buffer;
-        var bufB = (bool[])b.Buffer;
-        var outBuf = new bool[SizeOf(shape)];
+        DType outDType = a.DType == DType.Bool && b.DType == DType.Bool ? DType.Bool : DType.Int64;
+        var outBuf = MakeBuffer(outDType, SizeOf(shape));
         int flat = 0;
         ForEachBroadcastIndex(shape, index =>
-            outBuf[flat++] = op(bufA[DotProduct(index, stridesA)], bufB[DotProduct(index, stridesB)]));
-        return new NdArrayData(DType.Bool, outBuf, shape);
+        {
+            long result = op(
+                AsComparableInt64(a, DotProduct(index, stridesA)), AsComparableInt64(b, DotProduct(index, stridesB)));
+            SetBufferElement(outBuf, outDType, flat++, outDType == DType.Bool ? (result != 0) : (BigInteger)result);
+        });
+        return new NdArrayData(outDType, outBuf, shape);
     }
 
-    private static void RequireBoolDType(NdArrayData d)
+    private static void RequireBitwiseDType(NdArrayData d)
     {
-        if (d.DType != DType.Bool)
+        if (d.DType == DType.Float64)
             throw PyErr.TypeError(
-                "ufunc supports only bool arrays for this v1 shim's logical operators (see NUMPY_PLAN.md Phase 5.3)");
+                "ufunc 'bitwise_and'/'bitwise_or'/'bitwise_xor' not supported for the input types "
+                + "(float64 has no bitwise operator)");
     }
 
-    private static NdArrayData ElementwiseUnary(NdArrayData d, Func<double, double> op)
+    /// <summary>Integer value of an element for bitwise ops (`True`/`False` as `1`/`0`) — the
+    /// bitwise counterpart to `AsComparableDouble`, kept separate since C#'s bitwise operators
+    /// (`&amp; | ^ ~`) need a real integral type, not `double`.</summary>
+    private static long AsComparableInt64(NdArrayData d, int offset) => d.DType switch
     {
-        var buf = (double[])d.Buffer;
-        var outBuf = new double[buf.Length];
-        for (int i = 0; i < buf.Length; i++)
-            outBuf[i] = op(buf[i]);
-        return new NdArrayData(d.DType, outBuf, (int[])d.Shape.Clone());
+        DType.Bool => (bool)GetElement(d, offset) ? 1L : 0L,
+        DType.Int64 => (long)(BigInteger)GetElement(d, offset),
+        _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
+    };
+
+    private static NdArrayData ElementwiseUnary(NdArrayData d, Func<double, double> op, DType? forceDType = null)
+    {
+        DType outDType = forceDType ?? d.DType;
+        var outBuf = MakeBuffer(outDType, d.Size);
+        for (int i = 0; i < d.Size; i++)
+            SetBufferElement(outBuf, outDType, i, CoerceTo(outDType, op(AsComparableDouble(d, i))));
+        return new NdArrayData(outDType, outBuf, (int[])d.Shape.Clone());
     }
 
-    private static object ElementwiseOp(object aObj, object bObj, Func<double, double, double> op)
-        => Wrap(ElementwiseBinary(OperandData(aObj), OperandData(bObj), op));
+    private static object ElementwiseOp(object aObj, object bObj, Func<double, double, double> op, DType? forceDType = null)
+        => Wrap(ElementwiseBinary(OperandData(aObj), OperandData(bObj), op, forceDType));
 
     private static object CompareOp(object aObj, object bObj, Func<double, double, bool> cmp)
         => Wrap(ElementwiseCompare(OperandData(aObj), OperandData(bObj), cmp));
 
-    private static object LogicalOp(object aObj, object bObj, Func<bool, bool, bool> op)
-        => Wrap(LogicalBinary(LogicalOperandData(aObj), LogicalOperandData(bObj), op));
+    private static object BitwiseOp(object aObj, object bObj, Func<long, long, long> op)
+        => Wrap(BitwiseBinary(BitwiseOperandData(aObj), BitwiseOperandData(bObj), op));
 
-    /// <summary>Scalar coercion specific to logical ops: a real Python `bool` becomes a real 0-d
-    /// `Bool` array (so `mask &amp; True` works), distinct from `OperandData`'s own coercion (which
-    /// treats a scalar `bool` as `1.0`/`0.0` for arithmetic/comparison — `True` means different
-    /// things in the two contexts, matching real numpy's own type-dependent behavior).</summary>
-    private static NdArrayData LogicalOperandData(object o) => o switch
+    /// <summary>Scalar coercion specific to bitwise ops: a real Python `bool`/`int` becomes a real
+    /// 0-d `Bool`/`Int64` array (so `mask &amp; True` and `flags &amp; 0b101` both work), distinct
+    /// from `OperandData`'s own coercion only in that it rejects `float` (no bitwise operator on
+    /// `Float64`, enforced by `RequireBitwiseDType`).</summary>
+    private static NdArrayData BitwiseOperandData(object o) => o switch
     {
         PyInstance pi when pi.Class == NdArrayClass => Data(pi),
         bool b => new NdArrayData(DType.Bool, new[] { b }, Array.Empty<int>()),
-        _ => throw PyErr.TypeError($"expected a bool array or bool, got {PyOps.TypeName(o)}"),
+        BigInteger bi => new NdArrayData(DType.Int64, new[] { (long)bi }, Array.Empty<int>()),
+        _ => throw PyErr.TypeError($"expected a bool/int array, bool, or int, got {PyOps.TypeName(o)}"),
     };
 
     /// <summary>Lets `ElementwiseBinary`/broadcasting treat a plain Python scalar (int/float/bool)
     /// exactly like a real 0-d array — `2 + arr` and `np.array(2.0) + arr` take the same code path,
-    /// no special-casing needed.</summary>
+    /// no special-casing needed. Preserves the scalar's own real Python type (Phase 9.4) rather than
+    /// always forcing `Float64`, so promotion (`PromoteForArithmetic`) sees the scalar's true dtype —
+    /// `arr_int64 + 2` promotes to int64, not float64, matching real numpy.</summary>
     private static NdArrayData OperandData(object o) => o switch
     {
         PyInstance pi when pi.Class == NdArrayClass => Data(pi),
+        bool b => new NdArrayData(DType.Bool, new[] { b }, Array.Empty<int>()),
+        BigInteger bi => new NdArrayData(DType.Int64, new[] { (long)bi }, Array.Empty<int>()),
         _ => new NdArrayData(DType.Float64, new[] { PyOps.AsDouble(o) }, Array.Empty<int>()),
     };
 
@@ -1327,6 +1499,7 @@ public static class NumpyModule
         Add("__str__", (_, a, _) => FormatArray(Data(a[0])));
 
         Add("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
+        Add("astype", (_, a, _) => Wrap(AsDType(Data(a[0]), ParseDType(a[1]))));
 
         // Phase 7 — the two ufuncs real numpy also exposes as ndarray methods (unlike sqrt/exp/
         // sin/etc., which are module-level only).
@@ -1373,10 +1546,19 @@ public static class NumpyModule
         Add("__rsub__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x - y));
         Add("__mul__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x * y));
         Add("__rmul__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x * y));
-        Add("__truediv__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x / y));
-        Add("__rtruediv__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x / y));
+        // Real numpy: true division always produces a real float64 result regardless of the
+        // operands' dtype (`int64 / int64` is float64, never int64) — forced here rather than left
+        // to natural promotion.
+        Add("__truediv__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x / y, DType.Float64));
+        Add("__rtruediv__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x / y, DType.Float64));
         Add("__pow__", (_, a, _) => ElementwiseOp(a[0], a[1], Math.Pow));
         Add("__rpow__", (_, a, _) => ElementwiseOp(a[1], a[0], Math.Pow));
+        // Phase 9.5 — integer floor division/modulo. Python/real-numpy semantics (sign follows the
+        // divisor), not C#'s truncating `%` — e.g. `-7 % 3` is `2`, not `-1`.
+        Add("__floordiv__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => Math.Floor(x / y)));
+        Add("__rfloordiv__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => Math.Floor(x / y)));
+        Add("__mod__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x - Math.Floor(x / y) * y));
+        Add("__rmod__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x - Math.Floor(x / y) * y));
 
         Add("__neg__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), static x => -x)));
         Add("__pos__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), static x => x)));
@@ -1393,21 +1575,32 @@ public static class NumpyModule
         Add("__gt__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x > y));
         Add("__ge__", (_, a, _) => CompareOp(a[0], a[1], static (x, y) => x >= y));
 
-        Add("__and__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x && y));
-        Add("__rand__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x && y));
-        Add("__or__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x || y));
-        Add("__ror__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x || y));
-        Add("__xor__", (_, a, _) => LogicalOp(a[0], a[1], static (x, y) => x ^ y));
-        Add("__rxor__", (_, a, _) => LogicalOp(a[1], a[0], static (x, y) => x ^ y));
+        Add("__and__", (_, a, _) => BitwiseOp(a[0], a[1], static (x, y) => x & y));
+        Add("__rand__", (_, a, _) => BitwiseOp(a[1], a[0], static (x, y) => x & y));
+        Add("__or__", (_, a, _) => BitwiseOp(a[0], a[1], static (x, y) => x | y));
+        Add("__ror__", (_, a, _) => BitwiseOp(a[1], a[0], static (x, y) => x | y));
+        Add("__xor__", (_, a, _) => BitwiseOp(a[0], a[1], static (x, y) => x ^ y));
+        Add("__rxor__", (_, a, _) => BitwiseOp(a[1], a[0], static (x, y) => x ^ y));
         Add("__invert__", (_, a, _) =>
         {
             var d = Data(a[0]);
-            RequireBoolDType(d);
-            var buf = (bool[])d.Buffer;
-            var outBuf = new bool[buf.Length];
-            for (int i = 0; i < buf.Length; i++)
-                outBuf[i] = !buf[i];
-            return Wrap(new NdArrayData(DType.Bool, outBuf, (int[])d.Shape.Clone()));
+            if (d.DType == DType.Bool)
+            {
+                var buf = (bool[])d.Buffer;
+                var outBuf = new bool[buf.Length];
+                for (int i = 0; i < buf.Length; i++)
+                    outBuf[i] = !buf[i];
+                return Wrap(new NdArrayData(DType.Bool, outBuf, (int[])d.Shape.Clone()));
+            }
+            if (d.DType == DType.Int64)
+            {
+                var buf = (long[])d.Buffer;
+                var outBuf = new long[buf.Length];
+                for (int i = 0; i < buf.Length; i++)
+                    outBuf[i] = ~buf[i];
+                return Wrap(new NdArrayData(DType.Int64, outBuf, (int[])d.Shape.Clone()));
+            }
+            throw PyErr.TypeError("ufunc 'invert' not supported for the input types (float64 has no bitwise operator)");
         });
 
         Add("any", (_, a, _) =>
@@ -1497,6 +1690,7 @@ public static class NumpyModule
     {
         DType.Float64 => Float64DType,
         DType.Bool => BoolDType,
+        DType.Int64 => Int64DType,
         _ => throw new NotSupportedException($"no dtype instance for {dtype}"),
     };
 
@@ -1538,6 +1732,7 @@ public static class NumpyModule
     {
         DType.Float64 => FormatFloatElement((double)value),
         DType.Bool => (bool)value ? "True" : "False",
+        DType.Int64 => ((BigInteger)value).ToString(),
         _ => value.ToString() ?? "",
     };
 

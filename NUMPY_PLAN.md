@@ -353,14 +353,65 @@ are real views (safe here specifically because nothing yet produces a non-contig
 and a deliberate "copy for now" choice for `transpose` pending Phase 12's fuller strided-view work).
 This is not a shortcut avoiding a decision — it's the same distinction real numpy itself makes.
 
-## Phase 9 — dtypes & promotion
+## Phase 9 — dtypes & promotion ✅ (2026-08-11)
 
-- [ ] 9.1 Add the `Int64` dtype (a `long[]` buffer path). `np.array([1,2,3])` of Python ints → int64. Test.
-- [ ] 9.2 `dtype=` keyword on `array`/`zeros`/`ones`/`arange` (accept `np.int64`/`np.float64`/`'int64'`/…). Test.
-- [ ] 9.3 `a.astype(dtype)`. Test.
-- [ ] 9.4 **Promotion rules** in binary ops: `int op float → float`, `bool op int → int`, etc. Test.
-- [ ] 9.5 Integer-specific ops: floor division `//`, modulo `%`, bit ops on int arrays. Test.
-- [ ] 9.6 dtype objects: `np.int64`, `np.float64`, `np.bool_`; `a.dtype == np.float64`. Test.
+- [x] 9.1 Add the `Int64` dtype (a `long[]` buffer path). `np.array([1,2,3])` of Python ints → int64. Test.
+      — *Note:* buffer storage is `long[]`; the Python-visible boundary (`GetElement`) always hands
+      back a real `BigInteger` (PySharp's own actual `int` representation), never a C# `long`, so
+      `type(a[0])` on an int64 element is a real Python `int`. `ArrayFromPython`'s dtype inference:
+      all-`bool` → bool, all-`int`-and-fits-`long` → int64, anything else (any float leaf present) →
+      float64 — this **changes** `np.array([1, 2, 3])`'s dtype from the old Phase 2 float64-only
+      simplification to a real int64, matching actual numpy; the two Phase 2 tests that asserted the
+      old "promotes ints to float64" behavior were updated to assert the correct int64 behavior
+      instead (`NumpyConstructionTests.cs`).
+- [x] 9.2 `dtype=` keyword on `array`/`zeros`/`ones`/`arange` (accept `np.int64`/`np.float64`/`'int64'`/…). Test.
+      — *Note:* also wired into `full`/`empty` (not just the four named). `arange` deliberately keeps
+      its *default* dtype at float64 (unlike real numpy's int64-when-all-int-args inference) rather
+      than changing every existing `np.arange(6)`-based test's printed output — an explicit `dtype=`
+      still selects int64. `ParseDType`/`DTypeFromName` accept either a dtype singleton or a string
+      name ('float64'/'int64'/'bool'/'bool_').
+- [x] 9.3 `a.astype(dtype)`. Test.
+      — *Note:* shares `CoerceTo`/`AsDType` with `dtype=` construction; always returns a real
+      independent copy (even same-dtype → same-dtype), matching real numpy's own `copy=True` default.
+- [x] 9.4 **Promotion rules** in binary ops: `int op float → float`, `bool op int → int`, etc. Test.
+      — *Note:* `PromoteForArithmetic`: float64 wins if either operand is float64; else int64 wins
+      (including bool+bool → int64, matching real numpy: `np.array([True])+np.array([True])` is a
+      real int64 `[2]`, not bool). `OperandData` now preserves a Python scalar's real type
+      (bool/BigInteger/double) instead of always coercing to float64, so `int64_arr + 2` promotes to
+      int64 not float64. Arithmetic itself is still carried out in `double` internally regardless of
+      dtype (a documented v1 simplification — precision loss only shows up past `double`'s exact
+      2^53 integer range). True division (`/`) always forces float64 output regardless of promotion
+      via a new optional `forceDType` parameter on `ElementwiseBinary`/`ElementwiseUnary`/
+      `ElementwiseOp`/`ApplyUfunc`; the same parameter forces float64 on the genuinely-float-only
+      Phase 7 ufuncs (`sqrt`/`exp`/`log`/`log10`/`sin`/`cos`/`tan`/`arcsin`/`arccos`/`arctan`/
+      `floor`/`ceil`, matching real numpy), while `abs`/`sign`/`round`/`clip`/`__neg__`/`__pos__`
+      preserve the source dtype (unchanged from Phase 7 — `ElementwiseUnary` already preserved
+      `d.DType` before this phase).
+- [x] 9.5 Integer-specific ops: floor division `//`, modulo `%`, bit ops on int arrays. Test.
+      — *Note:* `//`/`%` reuse `ElementwiseOp` with natural promotion (no `forceDType`) via
+      `Math.Floor(x/y)` and Python's sign-of-divisor modulo (`x - Math.Floor(x/y)*y`, not C#'s
+      truncating `%`) — `Interp.BinDunders` already mapped these operators from earlier phases, so no
+      interpreter change was needed. The old bool-only Phase 5.3 "logical" `&`/`|`/`^` mechanism
+      (`LogicalBinary`/`LogicalOp`/`RequireBoolDType`) was **replaced** (not kept alongside) by a
+      unified `BitwiseBinary`/`BitwiseOp`/`AsComparableInt64` mechanism, since bitwise AND/OR/XOR on
+      0/1 values produce identical results to logical AND/OR/XOR: bool-bool stays bool, anything
+      involving int64 promotes to int64, and float64 correctly still raises `TypeError` (now "no
+      bitwise operator" instead of "not bool" — the existing Phase 5 regression test only checks that
+      a `TypeError` is raised, not its exact message, so it still passes unmodified). `__invert__`
+      now branches on dtype: logical NOT for bool, real two's-complement `~` (C#'s own `~long`
+      operator) for int64, `TypeError` for float64.
+- [x] 9.6 dtype objects: `np.int64`, `np.float64`, `np.bool_`; `a.dtype == np.float64`. Test.
+      — *Note:* `np.float64`/`np.int64`/`np.bool_` newly exposed as module-level dtype singletons
+      (previously not exposed at module level at all, only reachable via `a.dtype`). `a.dtype ==
+      np.float64` works "for free" through the existing `PyOps.PyEquals` reference-equality fast
+      path, since each dtype is a cached singleton (`Float64DType`/`BoolDType`/`Int64DType`) — no
+      dedicated `__eq__` needed on the dtype class.
+
+Also fixed a latent dtype-mismatch bug found while touching `Concatenate` (Phase 8): it wrote through
+`SetBufferElement` using the *current loop array's own* dtype instead of the actual output buffer's
+dtype — harmless while every array was float64, but would corrupt/crash on mixed-dtype input now that
+more than one dtype exists. Fixed by requiring all input arrays share one dtype (`concatenate` now
+raises a real `TypeError` otherwise) and using that one dtype consistently for every write.
 
 ## Phase 10 — Linear algebra (basic)
 
