@@ -413,15 +413,46 @@ dtype — harmless while every array was float64, but would corrupt/crash on mix
 more than one dtype exists. Fixed by requiring all input arrays share one dtype (`concatenate` now
 raises a real `TypeError` otherwise) and using that one dtype consistently for every write.
 
-## Phase 10 — Linear algebra (basic)
+## Phase 10 — Linear algebra (basic) ✅ (2026-08-11)
 
-- [ ] 10.1 `dot(a, b)` / `a @ b` (`__matmul__`) for 1-D·1-D (inner product). Test.
-- [ ] 10.2 matmul for 2-D·2-D (matrix product). Test.
-- [ ] 10.3 matmul for 1-D·2-D and 2-D·1-D. Test.
-- [ ] 10.4 `np.matmul` stacked (batched) — optional; document if deferred.
-- [ ] 10.5 `np.linalg.norm`, `np.trace`, `np.diagonal`. Test.
-- [ ] 10.6 (Optional) back `np.linalg.inv`/`solve`/`det` with a small C# implementation or a .NET
+- [x] 10.1 `dot(a, b)` / `a @ b` (`__matmul__`) for 1-D·1-D (inner product). Test.
+      — *Note:* `dot`/`matmul`/`@` all share one `MatMul` core (real numpy's `dot` and `@` genuinely
+      agree for 1-D/2-D operands, only diverging for N-D stacked batches — see 10.4). A 1-D·1-D
+      result is a real scalar, not a 0-D array (`v1 @ v2` is `32.0`, not `array(32.0)`), matching
+      real numpy — unwrapped via a new `MatMulResult` helper, the same pattern `ApplyUfunc`'s own
+      scalar fast path already used. `@`/`__matmul__` was already wired into `Interp.BinDunders`
+      since Phase 4 but deliberately left unimplemented until now.
+- [x] 10.2 matmul for 2-D·2-D (matrix product). Test.
+- [x] 10.3 matmul for 1-D·2-D and 2-D·1-D. Test.
+      — *Note:* a 1-D operand is treated as a `(1,n)` row or `(n,1)` column (whichever side it's on),
+      matmul'd, then that synthesized axis is dropped again from the result shape — real numpy's own
+      rule, reused as-is for both `dot` and `@`. `MatMulOperand` also accepts a raw nested Python list
+      (not just an `ndarray`), matching real numpy's own liberal `np.dot([1,2],[3,4])`.
+- [x] 10.4 `np.matmul` stacked (batched) — optional; document if deferred.
+      — *Decision: deferred.* `MatMul` raises a real `ValueError` for any operand with more than 2
+      dimensions. No scenario in this repo currently needs N-D batched matmul; real numpy's own
+      batching rule (broadcast every leading axis, matmul the trailing two) is a genuine additional
+      algorithm, not a small extension of the 1-D/2-D core here — left for a future phase if a real
+      use case shows up.
+- [x] 10.5 `np.linalg.norm`, `np.trace`, `np.diagonal`. Test.
+      — *Note:* `np.linalg` is a real nested submodule (the same `os.path` pattern: an attribute on
+      `numpy`'s own module dict, also separately registered in `StdlibModules.cs` so `import
+      numpy.linalg`/`from numpy.linalg import norm` both work). `norm` (no `ord`/`axis` — out of v1
+      scope) is `sqrt(sum(x_i^2))` over every element, which is simultaneously the correct formula for
+      a 1-D vector's 2-norm *and* a 2-D matrix's Frobenius norm — one implementation, no `ndim`
+      branch needed. `trace`/`diagonal` require a real 2-D array (documented v1 simplification) and
+      share one `Diagonal` helper; `diagonal` returns a real copy (not a view — same "views are
+      Phase 12's job" reasoning as `flatten`/`transpose` elsewhere in this shim). Module-level only
+      (no `a.trace()`/`a.diagonal()` instance methods) — not asked for by this checklist item, kept
+      out of scope.
+- [x] 10.6 (Optional) back `np.linalg.inv`/`solve`/`det` with a small C# implementation or a .NET
   numerics library injected via interop. Decide and document at this step.
+      — *Decision: deferred, not implemented.* A real, general `N×N` inverse/solve/determinant needs
+      actual numerical linear algebra (LU decomposition with partial pivoting, condition-aware
+      solving) — a meaningfully sized standalone piece of work, not a small addition to this phase's
+      1-D/2-D matmul core, and nothing in this repo's own scenarios currently calls for it. Revisit as
+      its own phase/PR if a real use case appears; `np.linalg.norm`/`np.trace`/`np.diagonal` above
+      cover what Phase 10 actually needed.
 
 ## Phase 11 — Interop & conveniences
 

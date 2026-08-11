@@ -19,7 +19,7 @@ commits listed.
 
 ## 2026-08-11
 
-**15 commits · +6234/-244 across 72 file-touches (summed across commits) · ~4h03m active**
+**16 commits · +6713/-354 across 77 file-touches (summed across commits) · ~4h28m active**
 
 ### Block 1 — 00:02–01:46 (1h44m)
 
@@ -33,15 +33,17 @@ scenario backlog (4-9) completed.
 - `b5b26e9` scenario 6 (MQTT broker)
 - `dee14a7` scenario 7 (AMQP broker) + backlog-complete note
 
-### Block 2 — 08:50–11:09 (2h19m)
+### Block 2 — 08:50–11:34 (2h44m)
 
-`NUMPY_PLAN.md` Phases 0 through 8 — a C# `numpy`-shaped shim: skeleton/import, `ndarray` core
+`NUMPY_PLAN.md` Phases 0 through 9 — a C# `numpy`-shaped shim: skeleton/import, `ndarray` core
 (strides/attributes/repr), real construction (`array`/`zeros`/`arange`/`linspace`/...), indexing/
 slicing (copies), elementwise ops + real broadcasting, `bool` dtype + comparisons + masking (needed
 a real `Interp.cs` core fix so `a < b` returns the dunder's raw result instead of collapsing to
 bool), reductions (`sum`/`mean`/`std`/`argmin`/`cumsum`/...), ufuncs (`sqrt`/`exp`/trig/`round`/...),
-shape manipulation (`reshape`/`ravel`/`transpose`/`concatenate`/`stack`/`np.newaxis`/...). Also fixed
-a real `PyOps.PyEquals` bug (NaN incorrectly equaling itself via a reference-identity shortcut).
+shape manipulation (`reshape`/`ravel`/`transpose`/`concatenate`/`stack`/`np.newaxis`/...), a real
+`int64` dtype with arithmetic promotion (`float64`>`int64`>`bool`), `dtype=`/`astype`, Python-sign
+`//`/`%`, and a unified bitwise `& | ^ ~` mechanism. Also fixed a real `PyOps.PyEquals` bug (NaN
+incorrectly equaling itself via a reference-identity shortcut) and a latent `Concatenate` dtype bug.
 
 - `0326164` roadmap cross-reference to NUMPY_PLAN.md
 - `6046030` Phase 0 (skeleton)
@@ -55,3 +57,4 @@ a real `PyOps.PyEquals` bug (NaN incorrectly equaling itself via a reference-ide
 - `184b379` Phase 7 (ufuncs + PyOps.PyEquals fix)
 - `a5c44d6` project update
 - `bb42adf` Phase 8 (shape manipulation)
+- `36fe6bd` Phase 9 (dtypes & promotion)

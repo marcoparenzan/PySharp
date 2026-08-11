@@ -381,7 +381,33 @@ public static class NumpyModule
         m.Dict["squeeze"] = new PyBuiltinFunction("squeeze", (_, a, kwargs) =>
             Wrap(Squeeze(Data(a[0]), AxisArg(a, kwargs, 1))));
 
+        // Phase 10 — basic linear algebra. `dot`/`matmul`/`@` all share the same `MatMul` core for
+        // 1-D/2-D operands (real numpy's `dot` and `@` genuinely agree there; they only diverge for
+        // N-D "stacked" batches and bare-scalar operands, which this v1 shim doesn't support — see
+        // NUMPY_PLAN.md's own Phase 10.4 note). `MatMulOperand` accepts a raw nested Python list too
+        // (not just an `ndarray`), matching real numpy's own liberal `np.dot([1, 2], [3, 4])`.
+        m.Dict["dot"] = new PyBuiltinFunction("dot", (_, a, _) => MatMulResult(MatMul(MatMulOperand(a[0]), MatMulOperand(a[1]))));
+        m.Dict["matmul"] = new PyBuiltinFunction("matmul", (_, a, _) => MatMulResult(MatMul(MatMulOperand(a[0]), MatMulOperand(a[1]))));
+        m.Dict["trace"] = new PyBuiltinFunction("trace", (_, a, kwargs) =>
+            ReduceAllToScalar(Diagonal(Data(a[0]), OffsetArg(a, kwargs, 1)), static (x, y) => x + y, 0.0));
+        m.Dict["diagonal"] = new PyBuiltinFunction("diagonal", (_, a, kwargs) =>
+            Wrap(Diagonal(Data(a[0]), OffsetArg(a, kwargs, 1))));
+
+        // `numpy.linalg` — a real nested submodule (same pattern as `os.path`: an attribute reached
+        // via `numpy.linalg` after `import numpy`, also separately registered for `import
+        // numpy.linalg`/`from numpy.linalg import norm` in StdlibModules.cs).
+        var linalg = new PyModule("numpy.linalg");
+        linalg.Dict["norm"] = new PyBuiltinFunction("norm", (_, a, _) => Norm(Data(a[0])));
+        m.Dict["linalg"] = linalg;
+
         return m;
+    }
+
+    private static int OffsetArg(object[] a, Dictionary<string, object>? kwargs, int positionalIndex)
+    {
+        object? raw = a.Length > positionalIndex ? a[positionalIndex]
+            : kwargs is not null && kwargs.TryGetValue("offset", out var v) ? v : null;
+        return raw is null or PyNone ? 0 : (int)PyOps.AsBigInt(raw, "offset");
     }
 
     /// <summary>The real Phase 7.1 "ufunc factory": elementwise on an `ndarray` (via the existing
@@ -568,6 +594,98 @@ public static class NumpyModule
             return new NdArrayData(d.DType, d.Buffer, d.Shape.Where((_, i) => i != ax).ToArray());
         }
         return new NdArrayData(d.DType, d.Buffer, d.Shape.Where(static s => s != 1).ToArray());
+    }
+
+    // ---------------------------------------------------------------- Phase 10: basic linear algebra
+
+    /// <summary>Real numpy's own promotion rule for combining a 1-D operand into a matrix product:
+    /// a 1-D `a` is treated as a `(1, n)` row, a 1-D `b` as an `(n, 1)` column, and whichever
+    /// dimension got synthesized this way is dropped again from the result shape afterwards — so
+    /// 1-D·1-D gives a real scalar (0-D), 1-D·2-D and 2-D·1-D each give a real 1-D result, and
+    /// 2-D·2-D gives a real 2-D result. N-D "stacked/batched" matmul (real numpy's `matmul`/`@` for
+    /// operands with more than 2 dimensions) is out of this v1 shim's scope (NUMPY_PLAN.md Phase
+    /// 10.4, deliberately deferred — no reachable scenario in this repo needs it yet).</summary>
+    private static NdArrayData MatMul(NdArrayData a, NdArrayData b)
+    {
+        if (a.Ndim is < 1 or > 2 || b.Ndim is < 1 or > 2)
+            throw PyErr.ValueError(
+                "matmul: only 1-D and 2-D operands are supported by this v1 shim (see NUMPY_PLAN.md Phase 10.4)");
+        bool aWas1D = a.Ndim == 1;
+        bool bWas1D = b.Ndim == 1;
+        int m = aWas1D ? 1 : a.Shape[0];
+        int k = aWas1D ? a.Shape[0] : a.Shape[1];
+        int n = bWas1D ? 1 : b.Shape[1];
+        if (k != b.Shape[0])
+            throw PyErr.ValueError(
+                $"matmul: input operand shapes {ShapeRepr(a.Shape)} and {ShapeRepr(b.Shape)} are not aligned");
+
+        int aRowStride = aWas1D ? 0 : a.Strides[0];
+        int aColStride = aWas1D ? a.Strides[0] : a.Strides[1];
+        int bRowStride = bWas1D ? b.Strides[0] : b.Strides[0];
+        int bColStride = bWas1D ? 0 : b.Strides[1];
+
+        DType outDType = PromoteForArithmetic(a.DType, b.DType);
+        var outBuf = MakeBuffer(outDType, m * n);
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+            {
+                double sum = 0;
+                for (int kk = 0; kk < k; kk++)
+                    sum += AsComparableDouble(a, i * aRowStride + kk * aColStride)
+                        * AsComparableDouble(b, kk * bRowStride + j * bColStride);
+                SetBufferElement(outBuf, outDType, i * n + j, CoerceTo(outDType, sum));
+            }
+        int[] outShape = (aWas1D, bWas1D) switch
+        {
+            (true, true) => Array.Empty<int>(),
+            (true, false) => new[] { n },
+            (false, true) => new[] { m },
+            (false, false) => new[] { m, n },
+        };
+        return new NdArrayData(outDType, outBuf, outShape);
+    }
+
+    private static NdArrayData MatMulOperand(object o)
+        => o is PyInstance pi && pi.Class == NdArrayClass ? Data(pi) : ArrayFromPython(o);
+
+    /// <summary>Real numpy: `a @ b`/`np.dot(a, b)` for two 1-D operands returns a real scalar, not a
+    /// 0-D array (`np.array([1, 2]) @ np.array([3, 4])` is `11`, not `array(11)`) — unwrap a 0-D
+    /// `MatMul` result the same way `ApplyUfunc`'s own scalar fast path does.</summary>
+    private static object MatMulResult(NdArrayData result) => result.Ndim == 0 ? GetElement(result, 0) : Wrap(result);
+
+    /// <summary>Real numpy `diagonal`/`trace`: `offset` selects a diagonal above (positive) or below
+    /// (negative) the main one; length is however many elements fit before running off either edge.
+    /// A real copy (like `flatten`/`transpose` elsewhere in this shim), not a view — same "views are
+    /// Phase 12's job" reasoning.</summary>
+    private static NdArrayData Diagonal(NdArrayData d, int offset)
+    {
+        if (d.Ndim != 2)
+            throw PyErr.ValueError("diagonal/trace require a 2-D array (a documented v1 simplification)");
+        int rows = d.Shape[0], cols = d.Shape[1];
+        int startRow = offset >= 0 ? 0 : -offset;
+        int startCol = offset >= 0 ? offset : 0;
+        int len = Math.Max(0, Math.Min(rows - startRow, cols - startCol));
+        var outBuf = MakeBuffer(d.DType, len);
+        for (int i = 0; i < len; i++)
+            SetBufferElement(outBuf, d.DType, i,
+                GetElement(d, (startRow + i) * d.Strides[0] + (startCol + i) * d.Strides[1]));
+        return new NdArrayData(d.DType, outBuf, new[] { len });
+    }
+
+    /// <summary>Real numpy's default `np.linalg.norm` (no `ord`/`axis`): the 2-norm for a 1-D vector
+    /// and the Frobenius norm for a 2-D matrix are the exact same formula — `sqrt(sum(x_i^2))` over
+    /// every element — so one flat implementation correctly covers both without special-casing
+    /// `ndim`. `ord=`/`axis=` (other norm kinds, per-axis/per-row norms) are out of this v1 shim's
+    /// scope.</summary>
+    private static double Norm(NdArrayData d)
+    {
+        double sumSq = 0;
+        for (int i = 0; i < d.Size; i++)
+        {
+            double v = AsComparableDouble(d, i);
+            sumSq += v * v;
+        }
+        return Math.Sqrt(sumSq);
     }
 
     // ---------------------------------------------------------------- dtype-generic element access
@@ -1531,10 +1649,13 @@ public static class NumpyModule
             return PyNone.Instance;
         });
 
-        // Phase 4 — elementwise ops & real broadcasting. `@`/`__matmul__` is already wired into
-        // the interpreter's own operator table (`Interp.BinDunders`) and deliberately left
-        // unimplemented here — real matrix multiplication is Phase 10 (linear algebra), not this
-        // one. `+= -= *= /=` need no dedicated `__iadd__`/etc. here at all: `Interp.ExecAugAssign`
+        // Phase 10 — `@`/`__matmul__` was already wired into the interpreter's own operator table
+        // (`Interp.BinDunders`) since Phase 4 but deliberately left unimplemented until now.
+        Add("__matmul__", (_, a, _) => MatMulResult(MatMul(Data(a[0]), MatMulOperand(a[1]))));
+        Add("__rmatmul__", (_, a, _) => MatMulResult(MatMul(MatMulOperand(a[1]), Data(a[0]))));
+
+        // Phase 4 — elementwise ops & real broadcasting. `+= -= *= /=` need no dedicated
+        // `__iadd__`/etc. here at all: `Interp.ExecAugAssign`
         // already falls back to the plain binary dunder + rebinding the name when no `__i*__` is
         // defined (see NUMPY_PLAN.md Phase 4.8's own note) — a real, deliberate simplification,
         // *not* true in-place mutation (an aliased second reference to the same array does NOT see
