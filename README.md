@@ -472,8 +472,12 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   real `__slots__`-backed separate storage isn't implemented).
 - **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt,
   pydantic v1).
-- **numpy**: a C# shim (not the real numpy, which is a compiled C extension — see
-  [NUMPY.md](NUMPY.md)), currently at Phase 0 (`import numpy` works, no `ndarray` yet).
+- **numpy**: a real C# shim (not the real numpy, which is a compiled C extension a from-scratch
+  interpreter cannot load — see [NUMPY.md](NUMPY.md)) — construction, `float64`/`int64`/`bool`
+  dtypes with real arithmetic promotion, indexing/slicing as real strided views, broadcasting,
+  reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`),
+  `np.random`, and a two-way .NET array interop bridge. See [NUMPY_PLAN.md](NUMPY_PLAN.md)'s full
+  12-phase plan (all phases done) and ROADMAP.md scenario 12.
 
 ### Does not work (yet)
 

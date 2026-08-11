@@ -161,6 +161,42 @@ The heaviest prerequisite of the FastAPI scenario — native asynchrony — is i
 
 ---
 
+## v1.1.0 — 2026-08-11
+
+A real, from-scratch **`numpy`-shaped shim** — scenario 12 of the roadmap. Real numpy is a compiled
+CPython C extension a from-scratch interpreter cannot load, so this is a reimplementation of numpy's
+*observable behavior* (construction, dtypes, indexing, broadcasting, reductions, ufuncs, shape
+manipulation, linear algebra, interop), verified throughout against real numpy's own documented
+semantics — not a wrapper around the real library.
+
+### Main achievement
+
+- `import numpy as np` works, with `float64`/`int64`/`bool` dtypes and real arithmetic promotion
+  (`float64` > `int64` > `bool`, true division always `float64`).
+- Real construction (`array`/`zeros`/`ones`/`full`/`empty`/`arange`/`linspace`/`eye`/`identity`,
+  `dtype=`, `astype`), indexing/slicing, broadcasting, reductions (`sum`/`mean`/`std`/`argmin`/
+  `cumsum`/…), ufuncs (`sqrt`/`exp`/`log`/trig/`round`/`clip`/…), shape manipulation (`reshape`/
+  `ravel`/`transpose`/`concatenate`/`stack`/`np.newaxis`/…), basic linear algebra (`dot`/`matmul`/
+  `@`, `np.linalg.norm`, `trace`/`diagonal`), a seedable `np.random`, and a two-way `.NET` array
+  interop bridge (`to_clr()`/`np.array(clr_array)`).
+- **Real strided views**: basic indexing (`a[1:3]`), `.T`/`transpose()`, `reshape`/`ravel` (when the
+  source is contiguous), `expand_dims`, and `squeeze` share the source array's buffer instead of
+  copying — mutating a slice or a transpose mutates the original, matching real numpy's own actual
+  behavior. Boolean masking (`a[mask]`) and `flatten()` still always copy, also matching real numpy.
+- Two genuine core-interpreter fixes found along the way: `Interp.CompareExpr` now returns a single
+  comparison's raw dunder result instead of always collapsing to `bool` (`arr1 < arr2` returns a real
+  array); `PyOps.PyEquals` no longer treats `NaN == NaN` as `True` via a reference-identity fast path
+  that was wrong specifically for `double` (IEEE 754 says `NaN != NaN` even for the same object).
+- `samples/numpy_demo.py`: a realistic end-to-end session (construct, index, view, broadcast, reduce,
+  mask, matmul, random), run and verified via the console host.
+
+### Tests
+
+120+ new tests in [src/PySharp.Tests/M14_Numpy](src/PySharp.Tests/M14_Numpy/), covering every phase
+of NUMPY_PLAN.md's 12-phase plan against real, known numpy semantics.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

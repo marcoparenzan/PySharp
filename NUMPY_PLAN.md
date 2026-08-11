@@ -9,7 +9,10 @@ the answer.
 **What we build.** An `ndarray` object plus the most-used construction, indexing, elementwise math,
 broadcasting, reductions, ufuncs, shape ops, basic linear algebra, and a few dtypes — enough to run
 real-world array code that stays within the implemented subset. **Not** full API parity, **not** C
-performance, **not** views-everywhere semantics (documented per step).
+performance (though Phase 12.2 added a measured fast path for the hottest contiguous-`float64` case).
+**All 12 phases are now done** (2026-08-11) — basic indexing/`.T`/`reshape`/`ravel`/`expand_dims`/
+`squeeze` are real strided views (Phase 12.1); `flatten()` and boolean masking still always copy,
+matching real numpy's own actual behavior for those two.
 
 ---
 
@@ -349,9 +352,11 @@ exact same underlying reduction functions.
 
 **A note on the view/copy split landing in this phase**: `reshape`/`ravel`/`expand_dims`/`squeeze`
 are real views (safe here specifically because nothing yet produces a non-contiguous array);
-`flatten`/`transpose`/`.T` are real copies (matching real numpy's own actual behavior for `flatten`,
-and a deliberate "copy for now" choice for `transpose` pending Phase 12's fuller strided-view work).
-This is not a shortcut avoiding a decision — it's the same distinction real numpy itself makes.
+`flatten`/`transpose`/`.T` are real copies for now, a deliberate "copy for now" choice pending
+Phase 12's fuller strided-view work (`flatten` *stays* a copy even after Phase 12.1 — matching real
+numpy's own actual behavior there; `transpose`/`.T` became real views once Phase 12.1 landed — see
+its own notes below). This was never a shortcut avoiding a decision — it's the same distinction real
+numpy itself makes.
 
 ## Phase 9 — dtypes & promotion ✅ (2026-08-11)
 
@@ -496,17 +501,74 @@ raises a real `TypeError` otherwise) and using that one dtype consistently for e
       (`PyEngine.SetVariable`/reading `PyModule.Dict` back), not just `.py` source string assertions,
       since this feature's entire point is the two-way boundary with real .NET types.
 
-## Phase 12 — Views, performance, polish (optional / later)
+## Phase 12 — Views, performance, polish ✅ (2026-08-11)
 
-- [ ] 12.1 Real strided **views** for slices and `.T` (share the buffer; add a `Base`), with a
+- [x] 12.1 Real strided **views** for slices and `.T` (share the buffer; add a `Base`), with a
   copy-on-demand fallback. Update the affected tests. Document the semantics change.
-- [ ] 12.2 Fast paths for contiguous float64 (avoid per-element boxing; tight loops). Benchmark.
-- [ ] 12.3 `samples/numpy_demo.py` — a realistic script (construct, broadcast, reduce, matmul,
+      — *Note:* `NdArrayData` gained `Offset`/`Base` fields and a second (explicit-view) constructor
+      alongside the original "fresh, owns-its-buffer" one; `GetElement`/`SetElement` add `Offset`
+      internally so every existing call site kept working unchanged. Basic indexing (`a[1:3]`,
+      `a[i, 1:3]`, `a[::-1]`, `a[:, None]` — int/slice/`None` only; per-axis fancy/list indexing was
+      never implemented by this shim, so every index `ResolveIndexView` sees really is basic
+      indexing) now resolves directly to a view instead of building a copy through the old
+      `ResolveAxes`+`GatherRecursive` machinery, which was deleted outright (not kept alongside).
+      `.T`/`transpose()` became real views too (reordering `Shape`/`Strides` *is* the whole
+      operation — no data ever moves); `expand_dims`/`squeeze` insert/drop stride-0/matching entries;
+      `reshape`/`ravel` share the buffer when the source is contiguous and fall back to a fresh copy
+      otherwise (matching real numpy's own actual "view unless a copy is necessary" rule).
+      `flatten()` and boolean masking (`a[mask]`) still always copy, matching real numpy exactly.
+      Found and fixed **five real latent correctness bugs** this refactor's own audit surfaced (all
+      pre-existing, just unreachable while every array was guaranteed contiguous with offset 0):
+      `CopyOf`/`Flatten` blind-cloning the raw buffer array instead of walking the source's own
+      strides; `ElementwiseUnary`/`Norm`/`ToClrDoubleArray`/`AsDType`/`any`/`all`/`__invert__`
+      assuming buffer position *i* equals the *i*-th element in C-order visitation; `GatherMask`/
+      `ScatterMask` reading a mask's buffer directly instead of through its own strides;
+      `np.random.choice` treating a logical pool index as a raw buffer offset; and — the subtlest —
+      `CumulateAxis` writing its output through the *source* array's own offset instead of a
+      separate output-visitation counter. All fixed via the same `GetElement`/`SetElement`/
+      `ForEachBroadcastIndex`+`DotProduct` pattern already used correctly everywhere else in this
+      file. `ndarray.base` exposed (`None` for an owning array, the real `Base` for a view) — with
+      one documented limitation: since `Wrap()` never caches a `PyInstance` per `NdArrayData`,
+      `a[1:3].base is a` is `False` even though the two wrap the *same* underlying data (`.base is
+      None` correctly distinguishes ownership either way; only `is`-identity to one *specific* prior
+      Python variable doesn't hold — a pervasive, pre-existing property of this shim's `Wrap()`, not
+      something new here). One existing Phase 3 test's assertion flipped from "copy" to "view" to
+      match (`NumpyIndexingTests.cs`); 10 new dedicated tests in `NumpyViewTests.cs`, verified against
+      26 real-numpy-semantics scenarios via a probe script before writing any test.
+- [x] 12.2 Fast paths for contiguous float64 (avoid per-element boxing; tight loops). Benchmark.
+      — *Note:* `ElementwiseBinary` (same-shape, both operands contiguous `float64`, no forced/
+      promoted dtype) and `ElementwiseUnary` (contiguous `float64` in, `float64` out) each got an
+      early-exit fast path operating on the raw `double[]` buffers directly — skipping
+      `ForEachBroadcastIndex`'s per-element closure invocation, `DotProduct`, and
+      `AsComparableDouble`/`CoerceTo`'s per-element dtype `switch`. Informally timed (`time.time()`
+      around 10 iterations, not a formal BenchmarkDotNet suite — none existed in this repo and adding
+      one was out of scope for this item): a 2,000,000-element same-shape `float64` addition took
+      ~21ms/op through the new fast path vs. ~159ms/op through the general path for the *same*
+      element count and shape forced non-contiguous (a controlled comparison isolating just the
+      fast-path eligibility) — roughly **7.4× faster**, a real, measured win.
+- [x] 12.3 `samples/numpy_demo.py` — a realistic script (construct, broadcast, reduce, matmul,
   masking) run end-to-end by PySharp; verify with the console host.
-- [ ] 12.4 ROADMAP: add scenario "N — array computing (numpy shim)"; RELEASE_NOTES entry; README
+      — *Note:* also demonstrates real views (Phase 12.1), reductions, boolean masking, `np.linalg`,
+      and seeded `np.random`. Run via `pysharp run samples/numpy_demo.py` (the console host) — output
+      verified line-by-line.
+- [x] 12.4 ROADMAP: add scenario "N — array computing (numpy shim)"; RELEASE_NOTES entry; README
   "Verified scenarios" update; bump packages and re-pack; reinstall the tool.
-- [ ] 12.5 Sweep the numpy corpus-style snippets (a handful adapted from numpy's quickstart) as an
+      — *Note:* added as **scenario 12** (ROADMAP.md table + its own detail section). Added a
+      `## v1.1.0` entry to RELEASE_NOTES.md. Rewrote README.md's numpy bullet (was still describing
+      "Phase 0, no `ndarray` yet") and **NUMPY.md** in full (was entirely stale — same "Phase 0" claim
+      throughout; now describes every implemented phase and explicit non-goals). Bumped
+      `<Version>` in both `PySharp.csproj` and `PySharpLib.csproj` from `1.5.0` to `1.6.0`,
+      `dotnet pack -c Release`, `dotnet tool update --global` — verified the reinstalled global
+      `pysharp` command runs `numpy_demo.py` correctly.
+- [x] 12.5 Sweep the numpy corpus-style snippets (a handful adapted from numpy's quickstart) as an
   end-to-end conformance test group.
+      — *Note:* `NumpyConformanceTests.cs` — 8 snippets adapted from numpy's own real quickstart
+      tutorial (basic attributes, elementwise vs. matrix product, ufuncs, shape manipulation,
+      stacking, iteration, boolean-mask idiom), each verified via a probe script first. One
+      deliberate, documented deviation: `np.arange` without `dtype=` stays `float64` in this shim
+      (Phase 9.2's own choice) where real numpy infers `int64` — the affected snippets pass
+      `dtype=np.int64` explicitly to match the tutorial's own shown values instead of silently
+      asserting a different dtype than the tutorial shows.
 
 ---
 

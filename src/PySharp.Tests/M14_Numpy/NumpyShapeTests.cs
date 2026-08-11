@@ -6,9 +6,10 @@
 namespace PySharp.Tests.M14_Numpy;
 
 /// <summary>numpy shim (see NUMPY_PLAN.md) — Phase 8: shape manipulation. `reshape`/`ravel`/
-/// `expand_dims`/`squeeze` are real *views* sharing the source buffer (verified live: mutating the
-/// result mutates the original); `flatten`/`transpose`/`.T` are real independent copies, matching
-/// real numpy's own view-vs-copy split for these specific operations.</summary>
+/// `expand_dims`/`squeeze`/`transpose`/`.T` are all real *views* sharing the source buffer
+/// (verified live: mutating the result mutates the original — `transpose`/`.T` became real views in
+/// Phase 12.1, see NumpyViewTests.cs for dedicated coverage there); `flatten` is the one deliberate
+/// exception, always a real independent copy, matching real numpy's own actual behavior.</summary>
 public class NumpyShapeTests
 {
     private static string Run(string body) => Py.Run(body).TrimEnd('\n');

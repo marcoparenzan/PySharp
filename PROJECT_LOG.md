@@ -19,7 +19,7 @@ commits listed.
 
 ## 2026-08-11
 
-**17 commits · +6978/-371 across 82 file-touches (summed across commits) · ~4h28m active**
+**18 commits · +7390/-379 across 86 file-touches (summed across commits) · ~4h50m active**
 
 ### Block 1 — 00:02–01:46 (1h44m)
 
@@ -59,10 +59,12 @@ incorrectly equaling itself via a reference-identity shortcut) and a latent `Con
 - `bb42adf` Phase 8 (shape manipulation)
 - `36fe6bd` Phase 9 (dtypes & promotion)
 
-### Block 3 — 12:43:59 (single commit)
+### Block 3 — 12:43–13:06 (22m)
 
-`NUMPY_PLAN.md` Phase 10 — basic linear algebra: `dot`/`matmul`/`@` for 1-D/2-D operands sharing one
-`MatMul` core, `numpy.linalg` submodule (`norm`), `trace`/`diagonal`. N-D batched matmul and
-`inv`/`solve`/`det` deliberately deferred and documented.
+`NUMPY_PLAN.md` Phases 10-11 — basic linear algebra: `dot`/`matmul`/`@` for 1-D/2-D operands sharing
+one `MatMul` core, `numpy.linalg` submodule (`norm`), `trace`/`diagonal` (N-D batched matmul and
+`inv`/`solve`/`det` deliberately deferred and documented); interop & conveniences: `tolist()`,
+`float`/`int`/`bool` coercion for size-1 arrays, seedable `np.random`, a two-way `.NET` array bridge.
 
 - `46de024` Phase 10 (linear algebra)
+- `18c2c51` Phase 11 (interop & conveniences)

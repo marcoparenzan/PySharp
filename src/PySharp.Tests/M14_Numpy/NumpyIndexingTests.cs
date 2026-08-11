@@ -5,10 +5,11 @@
 
 namespace PySharp.Tests.M14_Numpy;
 
-/// <summary>numpy shim (see NUMPY_PLAN.md) — Phase 3: indexing/slicing, copies only (real strided
-/// views are a later, optional phase). Covers integer indexing (incl. negative, incl. N-D tuples),
-/// partial N-D indexing, slicing (incl. negative step), mixed int/slice N-D indexing, and scalar/
-/// array assignment through the same `__setitem__` path.</summary>
+/// <summary>numpy shim (see NUMPY_PLAN.md) — Phase 3 indexing/slicing, upgraded to real strided
+/// views by Phase 12.1 (basic indexing shares the source buffer instead of copying — see
+/// NumpyViewTests.cs for dedicated view-semantics coverage). Covers integer indexing (incl.
+/// negative, incl. N-D tuples), partial N-D indexing, slicing (incl. negative step), mixed
+/// int/slice N-D indexing, and scalar/array assignment through the same `__setitem__` path.</summary>
 public class NumpyIndexingTests
 {
     private static string Run(string body) => Py.Run(body).TrimEnd('\n');
@@ -45,8 +46,8 @@ public class NumpyIndexingTests
             """));
 
     [Fact]
-    public void A_partial_index_on_an_ND_array_returns_a_real_independent_subarray_copy()
-        => Assert.Equal("(3,)\n[1. 2. 3.]\n[[1. 2.]\n [3. 4.]]", Run("""
+    public void A_partial_index_on_an_ND_array_returns_a_real_view_sharing_the_source_buffer()
+        => Assert.Equal("(3,)\n[1. 2. 3.]\n[[999. 2.]\n [3. 4.]]", Run("""
             import numpy as np
             b = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
             row = b[0]

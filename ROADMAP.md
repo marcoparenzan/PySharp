@@ -48,6 +48,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
 | 10 | **Django** | _to be created_ | ⚪ Planned | a real, unmodified Django app (Django itself is pure Python — no C extensions in its core, unlike pydantic-core/numpy). Much heavier than scenario 2's FastAPI: WSGI (Django's default; ASGI is opt-in), the ORM (real SQL generation + migrations, heavy metaclass use on `Model`), the template engine, `django.contrib.admin`, class-based views, forms/sessions, `django-admin` management commands, the `settings.py` module-level config pattern |
 | 11 | **ASP.NET Core hosting PySharp** | _to be created_ | ⚪ Planned | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into Python scripts/plugins from C# request handlers — Python as a scripting/plugin layer inside a real production .NET service. Ties directly into the standing TODO ("Extract PySharpLib as a standalone NuGet library") |
+| 12 | **Array computing** (numpy shim) | [samples/numpy_demo.py](samples/numpy_demo.py) | ✅ **Done** | a real C# **`numpy`**-shaped shim (not real numpy — a compiled CPython C extension a from-scratch interpreter can't load): `float64`/`int64`/`bool` dtypes with real arithmetic promotion, construction, indexing/slicing as real strided views (Phase 12.1), broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`, `trace`/`diagonal`), `np.random`, a two-way .NET array interop bridge — see NUMPY_PLAN.md's full 12-phase plan |
 | T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` exists; for rich APIs a dedicated **C# wrapper/shim** is created |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
@@ -412,6 +413,24 @@ YAML and JSON verifying the round-trip. `json` was already present; a **C# `yaml
 a **practical PyYAML subset**: block mapping/sequence with indentation, flow style (`[..]`/`{..}`),
 typed scalars, quoting, comments, the `---` marker. Out of scope for v1: block scalars `|`/`>`,
 anchors/aliases, explicit tags, multiple documents. Covered by [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs).
+
+### Scenario 12 — Array computing (numpy shim) ✅
+
+The script [samples/numpy_demo.py](samples/numpy_demo.py) runs a realistic numpy session end-to-end:
+construction/dtypes, real strided views (a slice or `.T` mutating the source array), broadcasting,
+reductions, boolean masking, basic linear algebra, and a seeded `np.random`. `numpy` here is a real
+C# **`numpy`-shaped shim** over this repo's own `ndarray` type — real numpy is a compiled CPython C
+extension a from-scratch interpreter cannot load, so this is a from-scratch reimplementation of
+numpy's *observable behavior* (verified against real numpy's own documented semantics throughout),
+not a wrapper around the real library. `ndarray` is a `PyClass` + C# wrap (`NdArrayData`), the same
+pattern the `socket` module already used, so arithmetic/indexing/iteration reuse the interpreter's
+existing dunder dispatch with only two small core changes: `Interp.CompareExpr` now returns a
+comparison's raw dunder result instead of always collapsing to `bool` (so `arr1 < arr2` returns a
+real array, not a `bool`), and a `PyOps.PyEquals` bug where `NaN` incorrectly equaled itself via a
+reference-identity fast path. See **NUMPY_PLAN.md** for the full 12-phase plan (dtypes/promotion,
+indexing, broadcasting, reductions, ufuncs, shape manipulation, linear algebra, interop, real
+strided views) and every phase's own verification notes. Covered by
+[src/PySharp.Tests/M14_Numpy](src/PySharp.Tests/M14_Numpy/) (120+ tests).
 
 ### Cross-cutting — Native libraries 🟡
 

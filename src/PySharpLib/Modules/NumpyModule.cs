@@ -10,25 +10,47 @@ namespace PySharpLib.Modules;
 
 /// <summary>The real, if v1-scoped, payload behind a shim `ndarray` — a flat C-order buffer plus
 /// shape/strides, mirroring real numpy's own memory model closely enough that later phases (views,
-/// `.tobytes()`) aren't fighting the representation. Float64-only for Phase 1 (see
-/// NUMPY_PLAN.md's dtype rollout: `bool` lands with comparisons, `int64` later, with promotion).
-/// Strides are element counts, not bytes (byte-level strides are a `.tobytes()`-era concern, not
-/// needed yet).</summary>
+/// `.tobytes()`) aren't fighting the representation. Strides are element counts, not bytes
+/// (byte-level strides are a `.tobytes()`-era concern, not needed yet).
+///
+/// `Offset`/`Base` (Phase 12.1): a view shares another array's `Buffer` instead of owning a fresh
+/// one — `Offset` is the absolute element position in that shared `Buffer` where *this* array's own
+/// logical index 0 lives, and `Base` is the array that actually owns the buffer (real numpy's own
+/// `.base`), so a chain of views (e.g. a slice of a transpose) always traces back to one real owner.
+/// Every dtype-generic buffer access in this file goes through `GetElement`/`SetElement`, which add
+/// `Offset` internally — so a fresh, buffer-owning array (`Offset` 0, `Base` null, the 3-arg
+/// constructor below) and a real view are indistinguishable to every other function in this file.</summary>
 public sealed class NdArrayData
 {
     public DType DType { get; }
     public Array Buffer { get; }
     public int[] Shape { get; }
     public int[] Strides { get; }
+    public int Offset { get; }
+    public NdArrayData? Base { get; }
     public int Ndim => Shape.Length;
     public int Size { get; }
 
+    /// <summary>Builds a fresh array that owns its own buffer: real C-contiguous strides, offset 0,
+    /// no base. Used everywhere a function allocates a brand-new result (construction, arithmetic,
+    /// reductions, `.copy()`, ...) — i.e., almost everywhere in this file.</summary>
     public NdArrayData(DType dtype, Array buffer, int[] shape)
+        : this(dtype, buffer, shape, ComputeStrides(shape), 0, null)
+    {
+    }
+
+    /// <summary>Builds a real view: an explicit `strides`/`offset` into someone else's `buffer`,
+    /// with `base_` keeping a reference to the true owner alive and reachable. Used by the shape/
+    /// indexing operations Phase 12.1 turned into genuine views (`reshape`/`ravel`/`transpose`/`.T`/
+    /// `expand_dims`/`squeeze`/basic `__getitem__` indexing).</summary>
+    public NdArrayData(DType dtype, Array buffer, int[] shape, int[] strides, int offset, NdArrayData? base_)
     {
         DType = dtype;
         Buffer = buffer;
         Shape = shape;
-        Strides = ComputeStrides(shape);
+        Strides = strides;
+        Offset = offset;
+        Base = base_;
         Size = shape.Aggregate(1, (acc, dim) => acc * dim);
     }
 
@@ -353,14 +375,12 @@ public static class NumpyModule
         m.Dict["int64"] = Int64DType;
         m.Dict["bool_"] = BoolDType;
 
-        // Phase 8 — shape manipulation. `reshape`/`ravel`/`expand_dims`/`squeeze` share the source
-        // buffer (a real *view*, not a copy) — a deliberate, narrow exception to the "copies for
-        // now" default (see NUMPY_PLAN.md's own architecture notes): every array here is always
-        // fully C-contiguous (nothing yet produces a non-contiguous one), so reinterpreting the
-        // same flat buffer under a different shape is always exactly what real numpy's own view
-        // would show, with no risk of it silently being wrong. `flatten()` and `transpose()`/`.T`
-        // are real, independent copies — flatten always copies in real numpy too, and a real
-        // transpose view needs actual non-canonical strides, which is Phase 12's job, not this one.
+        // Phase 8 — shape manipulation. `reshape`/`ravel`/`expand_dims`/`squeeze`/`transpose`/`.T`
+        // all share the source buffer as real views (Phase 12.1 gave `transpose`/`.T` real
+        // non-canonical strides too, and `reshape`/`ravel` a real fallback to a fresh copy when the
+        // source isn't contiguous — see each function's own docstring). `flatten()` is the one
+        // deliberate exception: always a real, independent copy, matching real numpy's own actual
+        // behavior there.
         m.Dict["reshape"] = new PyBuiltinFunction("reshape", (_, a, _) => Wrap(Reshape(Data(a[0]), ReshapeShapeArg(a, 1))));
         m.Dict["ravel"] = new PyBuiltinFunction("ravel", (_, a, _) => Wrap(Ravel(Data(a[0]))));
         m.Dict["transpose"] = new PyBuiltinFunction("transpose", (_, a, _) =>
@@ -456,8 +476,12 @@ public static class NumpyModule
         _ => throw PyErr.TypeError($"expected int or sequence of int for shape, got {PyOps.TypeName(arg)}"),
     };
 
+    /// <summary>Real numpy `.copy()`: always a fresh, independent, C-contiguous array with no `Base`
+    /// — regardless of whether `d` itself is a view (Phase 12.1). `MaterializeContiguousBuffer`
+    /// walks `d` correctly for that case; the 3-arg `NdArrayData` constructor makes the result own
+    /// its own buffer outright.</summary>
     private static NdArrayData CopyOf(NdArrayData d)
-        => new(d.DType, CloneBuffer(d), (int[])d.Shape.Clone());
+        => new(d.DType, MaterializeContiguousBuffer(d), (int[])d.Shape.Clone());
 
     // ---------------------------------------------------------------- Phase 8: shape manipulation
 
@@ -475,8 +499,10 @@ public static class NumpyModule
     }
 
     /// <summary>Real numpy `reshape`: the total element count must match, with at most one `-1`
-    /// entry inferred from the rest. Shares the source buffer (a real view — see this file's own
-    /// note on why that's safe here) rather than copying.</summary>
+    /// entry inferred from the rest. A real view (Phase 12.1) sharing `d`'s own buffer/offset when
+    /// `d` is already contiguous — real numpy's own actual rule ("returns a view... unless a copy is
+    /// necessary", e.g. reshaping a transposed array); falls back to materializing a fresh
+    /// contiguous copy first otherwise, matching real numpy's own documented fallback.</summary>
     private static NdArrayData Reshape(NdArrayData d, int[] newShape)
     {
         int negOneCount = newShape.Count(static s => s == -1);
@@ -493,18 +519,27 @@ public static class NumpyModule
         }
         if (SizeOf(resolvedShape) != d.Size)
             throw PyErr.ValueError($"cannot reshape array of size {d.Size} into shape {ShapeRepr(resolvedShape)}");
-        return new NdArrayData(d.DType, d.Buffer, resolvedShape);
+        if (IsContiguous(d))
+            return new NdArrayData(d.DType, d.Buffer, resolvedShape, NdArrayData.ComputeStrides(resolvedShape), d.Offset, d.Base ?? d);
+        return new NdArrayData(d.DType, MaterializeContiguousBuffer(d), resolvedShape);
     }
 
-    private static NdArrayData Ravel(NdArrayData d) => new(d.DType, d.Buffer, new[] { d.Size });
+    /// <summary>Real numpy `ravel`: same view-if-contiguous, else-copy rule as `reshape` (it's
+    /// really just `reshape(-1)`).</summary>
+    private static NdArrayData Ravel(NdArrayData d) => IsContiguous(d)
+        ? new NdArrayData(d.DType, d.Buffer, new[] { d.Size }, new[] { 1 }, d.Offset, d.Base ?? d)
+        : new NdArrayData(d.DType, MaterializeContiguousBuffer(d), new[] { d.Size });
 
-    private static NdArrayData Flatten(NdArrayData d) => new(d.DType, CloneBuffer(d), new[] { d.Size });
+    /// <summary>Real numpy `flatten`: always a real, independent copy — unlike `ravel`, real numpy
+    /// itself never returns a view here (the whole point of `flatten` vs `ravel` is that guarantee).</summary>
+    private static NdArrayData Flatten(NdArrayData d) => new(d.DType, MaterializeContiguousBuffer(d), new[] { d.Size });
 
     /// <summary>Real numpy `.T`/`transpose(axes)`: no `axes` reverses every axis (the classic 2-D
     /// "swap rows and columns" case generalizes to "reverse the axis order" for N-D); explicit
-    /// `axes` permutes to that exact order. Unlike `reshape`/`ravel`, this is a real **copy** — a
-    /// genuine transpose view needs non-canonical strides decoupled from shape, which is Phase 12's
-    /// job (see NUMPY_PLAN.md), not this one.</summary>
+    /// `axes` permutes to that exact order. A real view (Phase 12.1): reordering the `Shape`/
+    /// `Strides` arrays IS the entire transpose — no data ever moves, matching real numpy's own
+    /// actual `.T` (a transposed array is famously non-contiguous in real numpy for exactly this
+    /// reason).</summary>
     private static NdArrayData Transpose(NdArrayData d, int[]? axes)
     {
         int ndim = d.Ndim;
@@ -512,16 +547,8 @@ public static class NumpyModule
         if (perm.Length != ndim || perm.Distinct().Count() != ndim || perm.Any(p => p < 0 || p >= ndim))
             throw PyErr.ValueError("axes don't match array");
         int[] newShape = perm.Select(p => d.Shape[p]).ToArray();
-        var outBuffer = MakeBuffer(d.DType, d.Size);
-        int flat = 0;
-        ForEachBroadcastIndex(newShape, newIndex =>
-        {
-            var srcIndex = new int[ndim];
-            for (int k = 0; k < ndim; k++)
-                srcIndex[perm[k]] = newIndex[k];
-            SetBufferElement(outBuffer, d.DType, flat++, GetElement(d, DotProduct(srcIndex, d.Strides)));
-        });
-        return new NdArrayData(d.DType, outBuffer, newShape);
+        int[] newStrides = perm.Select(p => d.Strides[p]).ToArray();
+        return new NdArrayData(d.DType, d.Buffer, newShape, newStrides, d.Offset, d.Base ?? d);
     }
 
     /// <summary>Real numpy `concatenate`: joins arrays along an *existing* axis — every array must
@@ -589,9 +616,9 @@ public static class NumpyModule
         => Concatenate(arrays, arrays.Count > 0 && arrays[0].Ndim == 1 ? 0 : 1);
 
     /// <summary>Real numpy `expand_dims`: inserts a real size-1 axis at `axis` (0..ndim, inclusive
-    /// — it can legally be the new last axis). Shares the buffer (see this file's own note on why
-    /// that's a safe real view here — inserting a size-1 axis never changes the underlying flat
-    /// element order).</summary>
+    /// — it can legally be the new last axis). A real view (Phase 12.1): the synthetic axis gets
+    /// stride 0 (its index is always 0, so the stride value never actually gets multiplied by
+    /// anything else) — the same convention `None`/`np.newaxis` indexing already uses.</summary>
     private static NdArrayData ExpandDims(NdArrayData d, int axis)
     {
         int newNdim = d.Ndim + 1;
@@ -600,12 +627,15 @@ public static class NumpyModule
             throw PyErr.ValueError($"axis {axis} is out of bounds for array of dimension {newNdim}");
         var newShape = new List<int>(d.Shape);
         newShape.Insert(resolved, 1);
-        return new NdArrayData(d.DType, d.Buffer, newShape.ToArray());
+        var newStrides = new List<int>(d.Strides);
+        newStrides.Insert(resolved, 0);
+        return new NdArrayData(d.DType, d.Buffer, newShape.ToArray(), newStrides.ToArray(), d.Offset, d.Base ?? d);
     }
 
     /// <summary>Real numpy `squeeze`: with an explicit `axis`, removes just that one size-1 axis
     /// (a real `ValueError` if its size isn't actually 1); with none, removes every size-1 axis at
-    /// once. Shares the buffer — the same safe-view reasoning as `expand_dims`, in reverse.</summary>
+    /// once. A real view (Phase 12.1) — the inverse of `expand_dims`: just drop the corresponding
+    /// `Shape`/`Strides` entries together, no data movement.</summary>
     private static NdArrayData Squeeze(NdArrayData d, int? axis)
     {
         if (axis is int ax)
@@ -614,9 +644,20 @@ public static class NumpyModule
             if (d.Shape[ax] != 1)
                 throw PyErr.ValueError(
                     $"cannot select an axis to squeeze out which has size not equal to one");
-            return new NdArrayData(d.DType, d.Buffer, d.Shape.Where((_, i) => i != ax).ToArray());
+            return new NdArrayData(
+                d.DType, d.Buffer, d.Shape.Where((_, i) => i != ax).ToArray(),
+                d.Strides.Where((_, i) => i != ax).ToArray(), d.Offset, d.Base ?? d);
         }
-        return new NdArrayData(d.DType, d.Buffer, d.Shape.Where(static s => s != 1).ToArray());
+        var keptShape = new List<int>();
+        var keptStrides = new List<int>();
+        for (int i = 0; i < d.Ndim; i++)
+        {
+            if (d.Shape[i] == 1)
+                continue;
+            keptShape.Add(d.Shape[i]);
+            keptStrides.Add(d.Strides[i]);
+        }
+        return new NdArrayData(d.DType, d.Buffer, keptShape.ToArray(), keptStrides.ToArray(), d.Offset, d.Base ?? d);
     }
 
     // ---------------------------------------------------------------- Phase 10: basic linear algebra
@@ -678,8 +719,9 @@ public static class NumpyModule
 
     /// <summary>Real numpy `diagonal`/`trace`: `offset` selects a diagonal above (positive) or below
     /// (negative) the main one; length is however many elements fit before running off either edge.
-    /// A real copy (like `flatten`/`transpose` elsewhere in this shim), not a view — same "views are
-    /// Phase 12's job" reasoning.</summary>
+    /// A real copy, not a view — real numpy itself only made `diagonal` a (read-only) view in a
+    /// later version, and Phase 12.1's own checklist item only asked for "slices and `.T`", so this
+    /// one deliberately stayed out of view scope.</summary>
     private static NdArrayData Diagonal(NdArrayData d, int offset)
     {
         if (d.Ndim != 2)
@@ -703,11 +745,11 @@ public static class NumpyModule
     private static double Norm(NdArrayData d)
     {
         double sumSq = 0;
-        for (int i = 0; i < d.Size; i++)
+        ForEachBroadcastIndex(d.Shape, index =>
         {
-            double v = AsComparableDouble(d, i);
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
             sumSq += v * v;
-        }
+        });
         return Math.Sqrt(sumSq);
     }
 
@@ -758,8 +800,8 @@ public static class NumpyModule
         if (d.Ndim != 1)
             throw PyErr.ValueError("to_clr() only supports 1-D arrays in this v1 shim");
         var result = new double[d.Size];
-        for (int i = 0; i < d.Size; i++)
-            result[i] = AsComparableDouble(d, i);
+        int k = 0;
+        ForEachBroadcastIndex(d.Shape, index => result[k++] = AsComparableDouble(d, DotProduct(index, d.Strides)));
         return result;
     }
 
@@ -850,9 +892,11 @@ public static class NumpyModule
         object? replaceArg = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("replace", out var r) ? r : null;
         bool replace = replaceArg is not bool rb || rb;
 
+        // `pool` may itself be a view (Phase 12.1 — e.g. `np.random.choice(a[2:])`), so a logical
+        // 1-D index must go through `pool.Strides[0]`, not be used as a raw buffer offset.
         object? sizeArg = a.Length > 1 ? a[1] : kwargs is not null && kwargs.TryGetValue("size", out var s) ? s : null;
         if (sizeArg is null or PyNone)
-            return GetElement(pool, _random.Next(poolSize));
+            return GetElement(pool, _random.Next(poolSize) * pool.Strides[0]);
 
         int[] shape = ShapeArg(sizeArg);
         int n = SizeOf(shape);
@@ -862,7 +906,7 @@ public static class NumpyModule
         if (replace)
         {
             for (int i = 0; i < n; i++)
-                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, _random.Next(poolSize)));
+                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, _random.Next(poolSize) * pool.Strides[0]));
         }
         else
         {
@@ -871,7 +915,7 @@ public static class NumpyModule
             {
                 int j = i + _random.Next(poolSize - i);
                 (indices[i], indices[j]) = (indices[j], indices[i]);
-                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, indices[i]));
+                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, indices[i] * pool.Strides[0]));
             }
         }
         return Wrap(new NdArrayData(pool.DType, outBuf, shape));
@@ -888,28 +932,32 @@ public static class NumpyModule
     /// for `Float64`, `bool` for `Bool`, and a real `BigInteger` for `Int64` — PySharp's own actual
     /// representation of a Python `int` (never a C# `long`), so `type(a[0]).__name__` on an int64
     /// array element correctly shows `int`, matching real numpy's own int64 scalars behaving like
-    /// real Python ints.</summary>
+    /// real Python ints. `offset` is relative to `d`'s own logical start (typically `DotProduct
+    /// (index, d.Strides)`) — `d.Offset` (Phase 12.1: real views share another array's buffer at a
+    /// nonzero starting position) is added here, once, so every caller can keep treating `d` as if
+    /// it always owned a buffer starting at 0.</summary>
     private static object GetElement(NdArrayData d, int offset) => d.DType switch
     {
-        DType.Float64 => ((double[])d.Buffer)[offset],
-        DType.Bool => ((bool[])d.Buffer)[offset],
-        DType.Int64 => (BigInteger)((long[])d.Buffer)[offset],
+        DType.Float64 => ((double[])d.Buffer)[d.Offset + offset],
+        DType.Bool => ((bool[])d.Buffer)[d.Offset + offset],
+        DType.Int64 => (BigInteger)((long[])d.Buffer)[d.Offset + offset],
         _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
     };
 
     private static void SetElement(NdArrayData d, int offset, object value)
     {
+        int i = d.Offset + offset;
         switch (d.DType)
         {
             case DType.Float64:
-                ((double[])d.Buffer)[offset] = PyOps.AsDouble(value);
+                ((double[])d.Buffer)[i] = PyOps.AsDouble(value);
                 break;
             case DType.Bool:
-                ((bool[])d.Buffer)[offset] = value is bool b ? b
+                ((bool[])d.Buffer)[i] = value is bool b ? b
                     : throw PyErr.TypeError($"expected bool, got {PyOps.TypeName(value)}");
                 break;
             case DType.Int64:
-                ((long[])d.Buffer)[offset] = value switch
+                ((long[])d.Buffer)[i] = value switch
                 {
                     BigInteger bi => (long)bi,
                     double db => (long)db,
@@ -951,13 +999,25 @@ public static class NumpyModule
         }
     }
 
-    private static Array CloneBuffer(NdArrayData d) => d.DType switch
+    /// <summary>Whether `d`'s own (`Shape`, `Strides`) pair is real C-contiguous row-major layout —
+    /// independent of `Offset` (a contiguous *view*, e.g. `a[2:]` on a 1-D array, still has
+    /// `Offset != 0` but contiguous strides). Decides whether `reshape`/`ravel` can return a real
+    /// view (Phase 12.1) or must fall back to `MaterializeContiguousBuffer` first.</summary>
+    private static bool IsContiguous(NdArrayData d) => d.Strides.SequenceEqual(NdArrayData.ComputeStrides(d.Shape));
+
+    /// <summary>Walks `d` in real C-order regardless of its own strides/offset (correctly even when
+    /// `d` is itself a non-contiguous view — Phase 12.1) and returns a fresh, independent,
+    /// C-contiguous buffer holding the exact same elements in the exact same visitation order. The
+    /// one shared "materialize a real, disconnected-from-any-view copy" implementation behind both
+    /// `.copy()` (`CopyOf`) and `.flatten()` (`Flatten`), and the fallback path for `reshape`/
+    /// `ravel` when the source isn't already contiguous.</summary>
+    private static Array MaterializeContiguousBuffer(NdArrayData d)
     {
-        DType.Float64 => (double[])((double[])d.Buffer).Clone(),
-        DType.Bool => (bool[])((bool[])d.Buffer).Clone(),
-        DType.Int64 => (long[])((long[])d.Buffer).Clone(),
-        _ => throw new NotSupportedException($"unsupported dtype {d.DType}"),
-    };
+        var buf = MakeBuffer(d.DType, d.Size);
+        int k = 0;
+        ForEachBroadcastIndex(d.Shape, index => SetBufferElement(buf, d.DType, k++, GetElement(d, DotProduct(index, d.Strides))));
+        return buf;
+    }
 
     /// <summary>Numeric value of an element regardless of dtype (`True`/`False` as `1.0`/`0.0`,
     /// matching `PyOps.AsDouble`'s own bool handling) — lets comparisons/arithmetic work between
@@ -1047,8 +1107,9 @@ public static class NumpyModule
         if (d.DType == dtype)
             return CopyOf(d);
         var buf = MakeBuffer(dtype, d.Size);
-        for (int i = 0; i < d.Size; i++)
-            SetBufferElement(buf, dtype, i, CoerceTo(dtype, GetElement(d, i)));
+        int k = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+            SetBufferElement(buf, dtype, k++, CoerceTo(dtype, GetElement(d, DotProduct(index, d.Strides)))));
         return new NdArrayData(dtype, buf, (int[])d.Shape.Clone());
     }
 
@@ -1122,19 +1183,20 @@ public static class NumpyModule
     private static PyRaise RaggedArrayError() => PyErr.ValueError(
         "setting an array element with a sequence. The requested array has an inhomogeneous shape.");
 
-    // ---------------------------------------------------------------- Phase 3: indexing/slicing
+    // ---------------------------------------------------------------- Phase 3/12.1: indexing/slicing
 
-    /// <summary>Resolves a real numpy index (a single int/bool/`None`, a `PySlice`, or a `PyTuple`
-    /// mixing any of these — exactly what `Interp.EvalIndex` builds for `a[i]`/`a[1:3]`/`a[i, j]`/
-    /// `a[1:3, i]`/`a[:, None]`) into a per-*result-axis* list of source element-offsets to visit,
-    /// plus the matching "effective stride" for each — a separate array from `d.Strides` because a
-    /// `None`/`np.newaxis` entry (Phase 8.7) inserts a synthetic size-1 axis that doesn't correspond
-    /// to any real source axis at all (its "stride" is a real 0, contributing nothing to the flat
-    /// offset). An axis with an explicit integer index contributes a single offset and is "reduced"
-    /// (absent from `resultShape`); a slice or an axis with no explicit index (real numpy's own
-    /// implicit "partial indexing" — `a[i]` on an N-D array only indexes axis 0, keeping the rest)
-    /// keeps its full offset list and its size in `resultShape`.</summary>
-    private static (int[][] AxisOffsets, int[] Strides, int[] ResultShape) ResolveAxes(NdArrayData d, object index)
+    /// <summary>Resolves a real numpy *basic* index (a single int/`None`, a `PySlice`, or a
+    /// `PyTuple` mixing any of these — exactly what `Interp.EvalIndex` builds for `a[i]`/`a[1:3]`/
+    /// `a[i, j]`/`a[1:3, i]`/`a[:, None]`; per-axis *fancy* indexing with a list/array of indices was
+    /// never implemented by this shim, so every index that reaches here really is basic indexing)
+    /// into a real view (Phase 12.1): one absolute buffer offset, plus one shape/stride pair per
+    /// *kept* result axis. A `None`/`np.newaxis` entry inserts a synthetic size-1 stride-0 axis; a
+    /// slice's `step` is folded directly into that axis's stride (real numpy: `a[::-1]` is a real
+    /// negative-stride view, not a copy); a plain int index consumes and **reduces** that axis — no
+    /// shape/stride entry survives into the result at all. The view shares `d`'s buffer and traces
+    /// back to `d`'s own ultimate `Base` (or `d` itself, if `d` owns its buffer), so a chain of views
+    /// (a slice of a transpose, say) always resolves to one real owner.</summary>
+    private static NdArrayData ResolveIndexView(NdArrayData d, object index)
     {
         var items = index is PyTuple t ? t.Items : new[] { index };
         int explicitAxisCount = items.Count(static it => it is not PyNone);
@@ -1142,50 +1204,40 @@ public static class NumpyModule
             throw PyErr.IndexError(
                 $"too many indices for array: array is {d.Ndim}-dimensional, but {explicitAxisCount} were indexed");
 
-        var axisOffsets = new List<int[]>();
+        int offset = 0;
+        var shape = new List<int>();
         var strides = new List<int>();
-        var resultShape = new List<int>();
         int srcAxis = 0;
 
         foreach (var item in items)
         {
             if (item is PyNone)
             {
-                axisOffsets.Add(new[] { 0 });
+                shape.Add(1);
                 strides.Add(0);
-                resultShape.Add(1);
                 continue;
             }
             if (item is PySlice slice)
             {
                 var (start, _, step, count) = slice.Indices(d.Shape[srcAxis]);
-                var offs = new int[count];
-                for (int k = 0; k < count; k++)
-                    offs[k] = start + k * step;
-                axisOffsets.Add(offs);
-                strides.Add(d.Strides[srcAxis]);
-                resultShape.Add(count);
+                offset += start * d.Strides[srcAxis];
+                shape.Add(count);
+                strides.Add(step * d.Strides[srcAxis]);
             }
             else
             {
-                axisOffsets.Add(new[] { ResolveIntIndex(item, d.Shape[srcAxis], srcAxis) });
-                strides.Add(d.Strides[srcAxis]);
+                offset += ResolveIntIndex(item, d.Shape[srcAxis], srcAxis) * d.Strides[srcAxis];
             }
             srcAxis++;
         }
         while (srcAxis < d.Ndim)
         {
-            int n = d.Shape[srcAxis];
-            var offs = new int[n];
-            for (int k = 0; k < n; k++)
-                offs[k] = k;
-            axisOffsets.Add(offs);
+            shape.Add(d.Shape[srcAxis]);
             strides.Add(d.Strides[srcAxis]);
-            resultShape.Add(n);
             srcAxis++;
         }
 
-        return (axisOffsets.ToArray(), strides.ToArray(), resultShape.ToArray());
+        return new NdArrayData(d.DType, d.Buffer, shape.ToArray(), strides.ToArray(), d.Offset + offset, d.Base ?? d);
     }
 
     private static int ResolveIntIndex(object item, int axisLen, int axis)
@@ -1199,33 +1251,29 @@ public static class NumpyModule
     }
 
     /// <summary>`a[index]`: a fully-reduced index (an explicit int on every real axis, no
-    /// `None`/newaxis entries) returns a real Python scalar (`float` or `bool`, matching the
-    /// array's own dtype) — everything else returns a new, independent `ndarray` **copy** (real
-    /// strided views are a later, optional phase — see NUMPY_PLAN.md Phase 12). A real bool-array
-    /// index (`a[mask]`) is boolean masking (Phase 5.5), handled entirely separately from the
-    /// int/slice/tuple/None axis resolution below.</summary>
+    /// `None`/newaxis entries) returns a real Python scalar (`float`/`bool`/`int`, matching the
+    /// array's own dtype); everything else returns a real *view* (Phase 12.1) sharing `d`'s buffer,
+    /// not a copy — matching real numpy's own actual basic-indexing behavior. A real bool-array
+    /// index (`a[mask]`) is boolean masking (Phase 5.5) — a genuinely different indexing mode (real
+    /// numpy copies for it too, since a mask's `True` positions aren't expressible as a single
+    /// offset+stride), handled entirely separately from `ResolveIndexView`.</summary>
     private static object GetItem(NdArrayData d, object index)
     {
         if (BoolMaskOf(index) is { } mask)
             return Wrap(GatherMask(d, mask));
 
-        var (axisOffsets, strides, resultShape) = ResolveAxes(d, index);
-        if (resultShape.Length == 0)
-            return GetElement(d, FlatOffset(axisOffsets, strides));
-
-        var flat = new List<object>();
-        GatherRecursive(d, axisOffsets, strides, 0, 0, flat);
-        var buffer = MakeBuffer(d.DType, flat.Count);
-        for (int i = 0; i < flat.Count; i++)
-            SetBufferElement(buffer, d.DType, i, flat[i]);
-        return Wrap(new NdArrayData(d.DType, buffer, resultShape));
+        var view = ResolveIndexView(d, index);
+        return view.Ndim == 0 ? GetElement(view, 0) : Wrap(view);
     }
 
     /// <summary>`a[index] = value`: a fully-reduced index assigns a single scalar element; any
     /// other index assigns either a broadcast scalar (`a[1:3] = 5.0`) or another array whose shape
     /// must exactly match the indexed region (`a[1:3] = other` — real per-element broadcasting
-    /// beyond an exact shape match is Phase 4's job, not this one). `a[mask] = value` (Phase 5.6)
-    /// is boolean-mask assignment, handled separately from axis resolution.</summary>
+    /// beyond an exact shape match is Phase 4's job, not this one). Writes go through the same real
+    /// view `GetItem` now returns (Phase 12.1) — `SetElement`/`ForEachBroadcastIndex` against the
+    /// view mutate `d`'s own shared buffer directly, exactly like real numpy's own in-place basic-
+    /// indexing assignment. `a[mask] = value` (Phase 5.6) is boolean-mask assignment, handled
+    /// separately (masking was never expressible as a single view to begin with).</summary>
     private static void SetItem(NdArrayData d, object index, object value)
     {
         if (BoolMaskOf(index) is { } mask)
@@ -1234,56 +1282,26 @@ public static class NumpyModule
             return;
         }
 
-        var (axisOffsets, strides, resultShape) = ResolveAxes(d, index);
-        if (resultShape.Length == 0)
+        var view = ResolveIndexView(d, index);
+        if (view.Ndim == 0)
         {
-            SetElement(d, FlatOffset(axisOffsets, strides), value);
+            SetElement(view, 0, value);
             return;
         }
 
         if (value is PyInstance pi && pi.Class == NdArrayClass)
         {
             var src = Data(pi);
-            if (!src.Shape.SequenceEqual(resultShape))
+            if (!src.Shape.SequenceEqual(view.Shape))
                 throw PyErr.ValueError(
-                    $"could not broadcast input array from shape {ShapeRepr(src.Shape)} into shape {ShapeRepr(resultShape)}");
+                    $"could not broadcast input array from shape {ShapeRepr(src.Shape)} into shape {ShapeRepr(view.Shape)}");
             int i = 0;
-            ScatterRecursive(d, axisOffsets, strides, 0, 0, () => GetElement(src, i++));
+            ForEachBroadcastIndex(view.Shape, idx => SetElement(view, DotProduct(idx, view.Strides), GetElement(src, i++)));
         }
         else
         {
-            ScatterRecursive(d, axisOffsets, strides, 0, 0, () => value);
+            ForEachBroadcastIndex(view.Shape, idx => SetElement(view, DotProduct(idx, view.Strides), value));
         }
-    }
-
-    private static int FlatOffset(int[][] axisOffsets, int[] strides)
-    {
-        int offset = 0;
-        for (int axis = 0; axis < axisOffsets.Length; axis++)
-            offset += axisOffsets[axis][0] * strides[axis];
-        return offset;
-    }
-
-    private static void GatherRecursive(NdArrayData d, int[][] axisOffsets, int[] strides, int axis, int baseOffset, List<object> flat)
-    {
-        if (axis == axisOffsets.Length)
-        {
-            flat.Add(GetElement(d, baseOffset));
-            return;
-        }
-        foreach (int off in axisOffsets[axis])
-            GatherRecursive(d, axisOffsets, strides, axis + 1, baseOffset + off * strides[axis], flat);
-    }
-
-    private static void ScatterRecursive(NdArrayData d, int[][] axisOffsets, int[] strides, int axis, int baseOffset, Func<object> nextValue)
-    {
-        if (axis == axisOffsets.Length)
-        {
-            SetElement(d, baseOffset, nextValue());
-            return;
-        }
-        foreach (int off in axisOffsets[axis])
-            ScatterRecursive(d, axisOffsets, strides, axis + 1, baseOffset + off * strides[axis], nextValue);
     }
 
     // ---------------------------------------------------------------- Phase 5.5/5.6: boolean masking
@@ -1291,21 +1309,25 @@ public static class NumpyModule
     /// <summary>Recognizes a real bool-dtype `ndarray` used AS the whole index (`a[mask]`), as
     /// opposed to an int/slice/tuple index — real numpy's boolean (fancy) indexing, a genuinely
     /// different mode from axis-by-axis indexing. Returns null for every other index shape (a plain
-    /// int/slice/tuple falls through to the normal `ResolveAxes` path).</summary>
+    /// int/slice/tuple falls through to the normal `ResolveIndexView` path).</summary>
     private static NdArrayData? BoolMaskOf(object index)
         => index is PyInstance pi && pi.Class == NdArrayClass && Data(pi).DType == DType.Bool ? Data(pi) : null;
 
     /// <summary>`a[mask]`: real numpy requires the mask's shape to exactly match `a`'s (v1 scope —
     /// no partial/broadcast mask), and returns a real 1-D array of every element whose mask
-    /// position is `True`, visited in C-order.</summary>
+    /// position is `True`, visited in C-order. Walks `d` and `mask` each through their own
+    /// `Strides`/`Offset` in lockstep (Phase 12.1: either can now be a view, not just a
+    /// freshly-built contiguous array) rather than assuming either's buffer holds exactly its own
+    /// elements starting at position 0.</summary>
     private static NdArrayData GatherMask(NdArrayData d, NdArrayData mask)
     {
         RequireMatchingMaskShape(d, mask);
-        var maskBuf = (bool[])mask.Buffer;
         var selected = new List<object>();
-        for (int i = 0; i < d.Size; i++)
-            if (maskBuf[i])
-                selected.Add(GetElement(d, i));
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            if ((bool)GetElement(mask, DotProduct(index, mask.Strides)))
+                selected.Add(GetElement(d, DotProduct(index, d.Strides)));
+        });
         var buffer = MakeBuffer(d.DType, selected.Count);
         for (int i = 0; i < selected.Count; i++)
             SetBufferElement(buffer, d.DType, i, selected[i]);
@@ -1313,28 +1335,38 @@ public static class NumpyModule
     }
 
     /// <summary>`a[mask] = value`: assigns a broadcast scalar, or one value per `True` position
-    /// (in C-order) from another 1-D array whose length must equal the number of `True`s.</summary>
+    /// (in C-order) from another 1-D array whose length must equal the number of `True`s. Same
+    /// lockstep-via-own-strides walk as `GatherMask`, writing through `d`'s own real (possibly
+    /// shared) buffer via `SetElement`.</summary>
     private static void ScatterMask(NdArrayData d, NdArrayData mask, object value)
     {
         RequireMatchingMaskShape(d, mask);
-        var maskBuf = (bool[])mask.Buffer;
+        int trueCount = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+        {
+            if ((bool)GetElement(mask, DotProduct(index, mask.Strides)))
+                trueCount++;
+        });
         if (value is PyInstance pi && pi.Class == NdArrayClass)
         {
             var src = Data(pi);
-            int trueCount = maskBuf.Count(static x => x);
             if (src.Size != trueCount)
                 throw PyErr.ValueError(
                     $"NumPy boolean array indexing assignment cannot assign {src.Size} input values to the {trueCount} output values where the mask is true");
             int i = 0;
-            for (int offset = 0; offset < d.Size; offset++)
-                if (maskBuf[offset])
-                    SetElement(d, offset, GetElement(src, i++));
+            ForEachBroadcastIndex(d.Shape, index =>
+            {
+                if ((bool)GetElement(mask, DotProduct(index, mask.Strides)))
+                    SetElement(d, DotProduct(index, d.Strides), GetElement(src, i++));
+            });
         }
         else
         {
-            for (int offset = 0; offset < d.Size; offset++)
-                if (maskBuf[offset])
-                    SetElement(d, offset, value);
+            ForEachBroadcastIndex(d.Shape, index =>
+            {
+                if ((bool)GetElement(mask, DotProduct(index, mask.Strides)))
+                    SetElement(d, DotProduct(index, d.Strides), value);
+            });
         }
     }
 
@@ -1635,14 +1667,18 @@ public static class NumpyModule
         int[] excludedStrides = NdArrayData.ComputeStrides(d.Shape.Where((_, i) => i != axis).ToArray());
         var outBuf = new double[d.Size];
         var lineAcc = new Dictionary<int, double>();
+        int flatOut = 0;
         ForEachBroadcastIndex(d.Shape, index =>
         {
-            int srcOffset = DotProduct(index, d.Strides);
-            double v = AsComparableDouble(d, srcOffset);
+            double v = AsComparableDouble(d, DotProduct(index, d.Strides));
             int key = LineKey(index, axis, excludedStrides);
             double acc = lineAcc.TryGetValue(key, out var prev) ? combine(prev, v) : v;
             lineAcc[key] = acc;
-            outBuf[srcOffset] = acc;
+            // Written by C-order visitation position, not `d`'s own (possibly non-contiguous —
+            // Phase 12.1) offset: `outBuf` is a fresh buffer laid out to match `d.Shape` exactly,
+            // so its k-th visited element belongs at flat position k regardless of where `d` itself
+            // physically stores that element.
+            outBuf[flatOut++] = acc;
         });
         return new NdArrayData(DType.Float64, outBuf, (int[])d.Shape.Clone());
     }
@@ -1663,6 +1699,22 @@ public static class NumpyModule
     private static NdArrayData ElementwiseBinary(
         NdArrayData a, NdArrayData b, Func<double, double, double> op, DType? forceDType = null)
     {
+        // Phase 12.2 fast path: same-shape contiguous float64 operands (the overwhelmingly common
+        // case — no broadcasting, no dtype promotion) skip `ForEachBroadcastIndex`'s per-element
+        // closure call, `DotProduct`, and `AsComparableDouble`/`CoerceTo`'s per-element dtype
+        // `switch`, operating on the raw `double[]` buffers directly instead. See this file's own
+        // Phase 12.2 note in NUMPY_PLAN.md for the informal timing that justified adding this.
+        if (a.DType == DType.Float64 && b.DType == DType.Float64 && forceDType is null or DType.Float64
+            && a.Shape.SequenceEqual(b.Shape) && IsContiguous(a) && IsContiguous(b))
+        {
+            var fastA = (double[])a.Buffer;
+            var fastB = (double[])b.Buffer;
+            var fastOut = new double[a.Size];
+            for (int i = 0; i < fastOut.Length; i++)
+                fastOut[i] = op(fastA[a.Offset + i], fastB[b.Offset + i]);
+            return new NdArrayData(DType.Float64, fastOut, (int[])a.Shape.Clone());
+        }
+
         var (shape, stridesA, stridesB) = PrepareBroadcast(a, b);
         DType outDType = forceDType ?? PromoteForArithmetic(a.DType, b.DType);
         var outBuf = MakeBuffer(outDType, SizeOf(shape));
@@ -1734,9 +1786,20 @@ public static class NumpyModule
     private static NdArrayData ElementwiseUnary(NdArrayData d, Func<double, double> op, DType? forceDType = null)
     {
         DType outDType = forceDType ?? d.DType;
+        // Phase 12.2 fast path — same reasoning as `ElementwiseBinary`'s own.
+        if (outDType == DType.Float64 && d.DType == DType.Float64 && IsContiguous(d))
+        {
+            var fastBuf = (double[])d.Buffer;
+            var fastOut = new double[d.Size];
+            for (int i = 0; i < fastOut.Length; i++)
+                fastOut[i] = op(fastBuf[d.Offset + i]);
+            return new NdArrayData(DType.Float64, fastOut, (int[])d.Shape.Clone());
+        }
+
         var outBuf = MakeBuffer(outDType, d.Size);
-        for (int i = 0; i < d.Size; i++)
-            SetBufferElement(outBuf, outDType, i, CoerceTo(outDType, op(AsComparableDouble(d, i))));
+        int k = 0;
+        ForEachBroadcastIndex(d.Shape, index =>
+            SetBufferElement(outBuf, outDType, k++, CoerceTo(outDType, op(AsComparableDouble(d, DotProduct(index, d.Strides))))));
         return new NdArrayData(outDType, outBuf, (int[])d.Shape.Clone());
     }
 
@@ -1794,6 +1857,11 @@ public static class NumpyModule
             new PyTuple(Data(self).Shape.Select(dim => (object)(BigInteger)dim).ToArray()));
         cls.Dict["dtype"] = MakeProperty(self => DTypeInstance(Data(self).DType));
         cls.Dict["T"] = MakeProperty(self => Wrap(Transpose(Data(self), null)));
+        // Real numpy `.base`: `None` for an array that owns its own buffer, or the real underlying
+        // array for a view (Phase 12.1) — the same "does this array own its data" question
+        // `IsContiguous`/`Base` were added to answer everywhere else in this file, just exposed to
+        // Python here.
+        cls.Dict["base"] = MakeProperty(self => Data(self).Base is { } b ? Wrap(b) : PyNone.Instance);
 
         Add("__len__", (_, a, _) =>
         {
@@ -1918,18 +1986,17 @@ public static class NumpyModule
             var d = Data(a[0]);
             if (d.DType == DType.Bool)
             {
-                var buf = (bool[])d.Buffer;
-                var outBuf = new bool[buf.Length];
-                for (int i = 0; i < buf.Length; i++)
-                    outBuf[i] = !buf[i];
+                var outBuf = new bool[d.Size];
+                int k = 0;
+                ForEachBroadcastIndex(d.Shape, index => outBuf[k++] = !(bool)GetElement(d, DotProduct(index, d.Strides)));
                 return Wrap(new NdArrayData(DType.Bool, outBuf, (int[])d.Shape.Clone()));
             }
             if (d.DType == DType.Int64)
             {
-                var buf = (long[])d.Buffer;
-                var outBuf = new long[buf.Length];
-                for (int i = 0; i < buf.Length; i++)
-                    outBuf[i] = ~buf[i];
+                var outBuf = new long[d.Size];
+                int k = 0;
+                ForEachBroadcastIndex(d.Shape, index =>
+                    outBuf[k++] = ~(long)(BigInteger)GetElement(d, DotProduct(index, d.Strides)));
                 return Wrap(new NdArrayData(DType.Int64, outBuf, (int[])d.Shape.Clone()));
             }
             throw PyErr.TypeError("ufunc 'invert' not supported for the input types (float64 has no bitwise operator)");
@@ -1938,18 +2005,16 @@ public static class NumpyModule
         Add("any", (_, a, _) =>
         {
             var d = Data(a[0]);
-            for (int i = 0; i < d.Size; i++)
-                if (AsComparableDouble(d, i) != 0.0)
-                    return true;
-            return false;
+            bool found = false;
+            ForEachBroadcastIndex(d.Shape, index => found |= AsComparableDouble(d, DotProduct(index, d.Strides)) != 0.0);
+            return found;
         });
         Add("all", (_, a, _) =>
         {
             var d = Data(a[0]);
-            for (int i = 0; i < d.Size; i++)
-                if (AsComparableDouble(d, i) == 0.0)
-                    return false;
-            return true;
+            bool allTrue = true;
+            ForEachBroadcastIndex(d.Shape, index => allTrue &= AsComparableDouble(d, DotProduct(index, d.Strides)) != 0.0);
+            return allTrue;
         });
 
         // Phase 6 — reductions. Every one of these takes an optional `axis=` (positional or
