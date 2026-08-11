@@ -76,6 +76,11 @@ public static class NumpyModule
     public static readonly PyInstance BoolDType = MakeDType("bool");
     public static readonly PyInstance Int64DType = MakeDType("int64");
 
+    /// <summary>`numpy.random`'s global RNG state (Phase 11.4) — a plain C# `Random`, reseeded by
+    /// `np.random.seed(n)`; module-level (not per-`Create()`-call) so it persists across repeated
+    /// `import numpy` the same way real numpy's own global RNG state does.</summary>
+    private static Random _random = new();
+
     public static PyModule Create()
     {
         var m = new PyModule("numpy");
@@ -400,6 +405,24 @@ public static class NumpyModule
         linalg.Dict["norm"] = new PyBuiltinFunction("norm", (_, a, _) => Norm(Data(a[0])));
         m.Dict["linalg"] = linalg;
 
+        // `numpy.random` — same real-nested-submodule pattern as `linalg`. This shim's RNG is a
+        // plain C# `System.Random`, not real numpy's actual Mersenne Twister/PCG64 algorithm, so
+        // `seed(n)` makes *this shim's own* sequence reproducible run-to-run — it does not (and
+        // cannot, without porting numpy's real bit-generator) reproduce real numpy's exact values
+        // for a given seed. That's the intended v1 scope (NUMPY_PLAN.md 11.4: "small, deterministic
+        // with seed", not "bit-identical to real numpy").
+        var random = new PyModule("numpy.random");
+        random.Dict["seed"] = new PyBuiltinFunction("seed", (_, a, _) =>
+        {
+            _random = a.Length > 0 && a[0] is not PyNone ? new Random((int)PyOps.AsBigInt(a[0], "seed")) : new Random();
+            return PyNone.Instance;
+        });
+        random.Dict["rand"] = new PyBuiltinFunction("rand", (_, a, _) => RandomArray(a, static rnd => rnd.NextDouble()));
+        random.Dict["randn"] = new PyBuiltinFunction("randn", (_, a, _) => RandomArray(a, NextGaussian));
+        random.Dict["randint"] = new PyBuiltinFunction("randint", (_, a, kwargs) => RandInt(a, kwargs));
+        random.Dict["choice"] = new PyBuiltinFunction("choice", (_, a, kwargs) => Choice(a, kwargs));
+        m.Dict["random"] = random;
+
         return m;
     }
 
@@ -688,6 +711,172 @@ public static class NumpyModule
         return Math.Sqrt(sumSq);
     }
 
+    // ---------------------------------------------------------------- Phase 11: interop & conveniences
+
+    /// <summary>Real numpy `tolist()`: nested Python lists down to the leaf elements, real Python
+    /// scalars at the leaves (not numpy scalars — this shim never had a separate "numpy scalar" type
+    /// to begin with, so `GetElement`'s own Python-visible boxed value already *is* the real thing).
+    /// A 0-D array's `tolist()` is the bare scalar itself, not a 1-element list — matches real numpy.</summary>
+    private static object ToPythonList(NdArrayData d) => BuildPythonList(d, 0, 0);
+
+    private static object BuildPythonList(NdArrayData d, int dim, int baseOffset)
+    {
+        if (dim == d.Ndim)
+            return GetElement(d, baseOffset);
+        int n = d.Shape[dim];
+        var items = new object[n];
+        for (int i = 0; i < n; i++)
+            items[i] = BuildPythonList(d, dim + 1, baseOffset + i * d.Strides[dim]);
+        return new PyList(items);
+    }
+
+    private static NdArrayData RequireSize1(NdArrayData d)
+    {
+        if (d.Size != 1)
+            throw PyErr.TypeError("only size-1 arrays can be converted to Python scalars");
+        return d;
+    }
+
+    /// <summary>Truncates toward zero regardless of source dtype (real Python/numpy `int(3.7)` ==
+    /// `3`, `int(-3.7)` == `-3`) — an `Int64`-dtype element is already a real `BigInteger` from
+    /// `GetElement` and needs no conversion at all.</summary>
+    private static object ToPyInt(object value) => value switch
+    {
+        BigInteger bi => bi,
+        bool b => (BigInteger)(b ? 1 : 0),
+        double d => (BigInteger)d,
+        _ => throw new NotSupportedException($"cannot convert {PyOps.TypeName(value)} to int"),
+    };
+
+    /// <summary>Real .NET interop bridge (NUMPY_PLAN.md 11.5): a 1-D array only (documented v1
+    /// scope, matching the plan's own literal "→ `double[]`" wording) — every element is coerced
+    /// through `PyOps.AsDouble` regardless of source dtype, so an int64 array round-trips as a real
+    /// `double[]` on the .NET side, same as `AsComparableDouble`'s own dtype-generic numeric
+    /// reading elsewhere in this file.</summary>
+    private static double[] ToClrDoubleArray(NdArrayData d)
+    {
+        if (d.Ndim != 1)
+            throw PyErr.ValueError("to_clr() only supports 1-D arrays in this v1 shim");
+        var result = new double[d.Size];
+        for (int i = 0; i < d.Size; i++)
+            result[i] = AsComparableDouble(d, i);
+        return result;
+    }
+
+    /// <summary>The other direction of the same bridge: a host `double[]`/`int[]`/`long[]`/`bool[]`
+    /// injected via `PyEngine.SetVariable` arrives here as a `ClrObject` wrapping a real .NET array
+    /// (see `ClrMarshal.ToPython`'s own default case) — normalized into a `PyList` of already-
+    /// marshalled Python values up front so `ArrayFromPython`'s existing shape/dtype-inference
+    /// machinery (built for nested `PyList`/`PyTuple`) handles the rest with no duplication.</summary>
+    private static object NormalizeClrArrayLike(object value)
+    {
+        if (value is not ClrObject { Instance: Array arr })
+            return value;
+        if (arr.Rank != 1)
+            throw PyErr.TypeError("np.array from a .NET array only supports 1-D arrays in this v1 shim");
+        var items = new object[arr.Length];
+        for (int i = 0; i < arr.Length; i++)
+            items[i] = ClrMarshal.ToPython(arr.GetValue(i));
+        return new PyList(items);
+    }
+
+    /// <summary>Real numpy `rand`/`randn`: no args → a plain Python scalar (real numpy: `np.random.
+    /// rand()` is a float, not a 0-D array); one or more int args → a real `Float64` array of that
+    /// shape, one independent `sample()` draw per element.</summary>
+    private static object RandomArray(object[] a, Func<Random, double> sample)
+    {
+        if (a.Length == 0)
+            return sample(_random);
+        int[] shape = a.Select(x => (int)PyOps.AsBigInt(x, "shape")).ToArray();
+        var buf = new double[SizeOf(shape)];
+        for (int i = 0; i < buf.Length; i++)
+            buf[i] = sample(_random);
+        return Wrap(new NdArrayData(DType.Float64, buf, shape));
+    }
+
+    /// <summary>Box-Muller transform — a standard normal sample from two uniform ones, since C#'s
+    /// `Random` has no built-in Gaussian sampler.</summary>
+    private static double NextGaussian(Random rnd)
+    {
+        double u1 = 1.0 - rnd.NextDouble(); // (0, 1], never exactly 0 — avoids log(0)
+        double u2 = rnd.NextDouble();
+        return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+    }
+
+    /// <summary>Real numpy `randint(low, high=None, size=None)`: with `high` omitted, samples from
+    /// `[0, low)` (`low` is really the exclusive upper bound then); with both given, samples from
+    /// `[low, high)`. `size=None` → a real scalar Python `int`; given → a real `Int64` array.</summary>
+    private static object RandInt(object[] a, Dictionary<string, object>? kwargs)
+    {
+        object? highArg = a.Length > 1 ? a[1] : kwargs is not null && kwargs.TryGetValue("high", out var h) ? h : null;
+        long low, high;
+        if (highArg is null or PyNone)
+        {
+            low = 0;
+            high = (long)PyOps.AsBigInt(a[0], "low");
+        }
+        else
+        {
+            low = (long)PyOps.AsBigInt(a[0], "low");
+            high = (long)PyOps.AsBigInt(highArg, "high");
+        }
+        object? sizeArg = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("size", out var s) ? s : null;
+        if (sizeArg is null or PyNone)
+            return (BigInteger)_random.NextInt64(low, high);
+        int[] shape = ShapeArg(sizeArg);
+        var buf = new long[SizeOf(shape)];
+        for (int i = 0; i < buf.Length; i++)
+            buf[i] = _random.NextInt64(low, high);
+        return Wrap(new NdArrayData(DType.Int64, buf, shape));
+    }
+
+    /// <summary>Real numpy `choice(a, size=None, replace=True)`: `a` is either an int (sample from
+    /// `arange(a)`) or a real 1-D array-like; `size=None` → a single scalar element; given → a real
+    /// array of that shape, dtype matching the pool. `p=` (weighted sampling) is out of this v1
+    /// shim's scope.</summary>
+    private static object Choice(object[] a, Dictionary<string, object>? kwargs)
+    {
+        NdArrayData pool = a[0] switch
+        {
+            BigInteger poolLen => new NdArrayData(
+                DType.Int64, Enumerable.Range(0, (int)poolLen).Select(i => (long)i).ToArray(), new[] { (int)poolLen }),
+            PyInstance pi when pi.Class == NdArrayClass => Data(pi),
+            _ => ArrayFromPython(a[0]),
+        };
+        if (pool.Ndim != 1)
+            throw PyErr.ValueError("choice: a must be 1-D");
+        int poolSize = pool.Size;
+
+        object? replaceArg = a.Length > 2 ? a[2] : kwargs is not null && kwargs.TryGetValue("replace", out var r) ? r : null;
+        bool replace = replaceArg is not bool rb || rb;
+
+        object? sizeArg = a.Length > 1 ? a[1] : kwargs is not null && kwargs.TryGetValue("size", out var s) ? s : null;
+        if (sizeArg is null or PyNone)
+            return GetElement(pool, _random.Next(poolSize));
+
+        int[] shape = ShapeArg(sizeArg);
+        int n = SizeOf(shape);
+        if (!replace && n > poolSize)
+            throw PyErr.ValueError("Cannot take a larger sample than population when 'replace=False'");
+        var outBuf = MakeBuffer(pool.DType, n);
+        if (replace)
+        {
+            for (int i = 0; i < n; i++)
+                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, _random.Next(poolSize)));
+        }
+        else
+        {
+            var indices = Enumerable.Range(0, poolSize).ToArray();
+            for (int i = 0; i < n; i++)
+            {
+                int j = i + _random.Next(poolSize - i);
+                (indices[i], indices[j]) = (indices[j], indices[i]);
+                SetBufferElement(outBuf, pool.DType, i, GetElement(pool, indices[i]));
+            }
+        }
+        return Wrap(new NdArrayData(pool.DType, outBuf, shape));
+    }
+
     // ---------------------------------------------------------------- dtype-generic element access
     //
     // Phase 1-4 hardcoded `double[]` everywhere (the only dtype that existed). Phase 5 adds a real
@@ -873,6 +1062,7 @@ public static class NumpyModule
     /// `float64` (ints still promote to float — real int64 inference is Phase 9's job).</summary>
     private static NdArrayData ArrayFromPython(object value)
     {
+        value = NormalizeClrArrayLike(value);
         var shape = new List<int>();
         object? cursor = value;
         while (cursor is PyList or PyTuple)
@@ -1618,6 +1808,27 @@ public static class NumpyModule
 
         Add("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
         Add("astype", (_, a, _) => Wrap(AsDType(Data(a[0]), ParseDType(a[1]))));
+
+        // Phase 11 — interop & conveniences.
+        Add("tolist", (_, a, _) => ToPythonList(Data(a[0])));
+        Add("to_clr", (_, a, _) => ClrMarshal.ToPython(ToClrDoubleArray(Data(a[0]))));
+
+        // Real numpy: `float`/`int` on a multi-element array is a real `TypeError` ("only size-1
+        // arrays can be converted to Python scalars"); `bool` on one is a real `ValueError` instead
+        // ("truth value of an array... is ambiguous") — deliberately two different exception types,
+        // matching real numpy's own actual behavior (not the NUMPY_PLAN.md checklist text's looser
+        // "ValueError otherwise" wording, which this shim's own verify-against-real-numpy discipline
+        // takes priority over).
+        Add("__float__", (_, a, _) => PyOps.AsDouble(GetElement(RequireSize1(Data(a[0])), 0)));
+        Add("__int__", (_, a, _) => ToPyInt(GetElement(RequireSize1(Data(a[0])), 0)));
+        Add("__bool__", (_, a, _) =>
+        {
+            var d = Data(a[0]);
+            if (d.Size != 1)
+                throw PyErr.ValueError(
+                    "The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()");
+            return AsComparableDouble(d, 0) != 0.0;
+        });
 
         // Phase 7 — the two ufuncs real numpy also exposes as ndarray methods (unlike sqrt/exp/
         // sin/etc., which are module-level only).

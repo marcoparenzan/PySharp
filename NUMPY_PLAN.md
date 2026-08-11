@@ -454,14 +454,47 @@ raises a real `TypeError` otherwise) and using that one dtype consistently for e
       its own phase/PR if a real use case appears; `np.linalg.norm`/`np.trace`/`np.diagonal` above
       cover what Phase 10 actually needed.
 
-## Phase 11 — Interop & conveniences
+## Phase 11 — Interop & conveniences ✅ (2026-08-11)
 
-- [ ] 11.1 `a.tolist()` → nested Python lists (round-trips `np.array(a.tolist())`). Test.
-- [ ] 11.2 Iteration `for row in a` (yields scalars for 1-D, sub-arrays for N-D). Test.
-- [ ] 11.3 `float(a)`/`int(a)` for size-1 arrays; `bool(a)` for size-1; `ValueError` otherwise. Test.
-- [ ] 11.4 `np.random`: `seed`, `rand`, `randn`, `randint`, `choice` (small, deterministic with seed). Test.
-- [ ] 11.5 Bridge to the .NET interop: allow a `ClrObject` wrapping a .NET array/`double[]` to be
+- [x] 11.1 `a.tolist()` → nested Python lists (round-trips `np.array(a.tolist())`). Test.
+      — *Note:* a 0-D array's `tolist()` is the bare scalar itself, not a 1-element list, matching
+      real numpy. Leaves are already real Python values (`GetElement`'s own boxed type) — this shim
+      never had a separate "numpy scalar" wrapper type to unwrap.
+- [x] 11.2 Iteration `for row in a` (yields scalars for 1-D, sub-arrays for N-D). Test.
+      — *Note:* needed **no new code at all** — `PyOps.GetIter`'s existing generic fallback (an
+      object with `__getitem__` but no `__iter__` gets iterated via repeated `__getitem__(0)`,
+      `__getitem__(1)`, ... until `IndexError`) already produces exactly real numpy's own iteration
+      behavior for `ndarray`, since Phase 3's indexing already returns a scalar for a 1-D `a[i]` and a
+      real sub-array for an N-D one. Verified live and added a regression test to lock the behavior
+      in, since nothing here is `ndarray`-specific and a future refactor could silently break it.
+- [x] 11.3 `float(a)`/`int(a)` for size-1 arrays; `bool(a)` for size-1; `ValueError` otherwise. Test.
+      — *Note:* deliberately deviates from this checklist line's own wording once real numpy's actual
+      behavior was checked: `float(a)`/`int(a)` on a multi-element array is a real `TypeError` in
+      real numpy ("only size-1 arrays can be converted to Python scalars"), while `bool(a)` is the
+      one that's a real `ValueError` ("truth value of an array... is ambiguous") — two different
+      exception types, not one `ValueError` for all three. This shim's own standing discipline
+      (verify against real numpy semantics) took priority over the plan text. `int()` truncates
+      toward zero regardless of source dtype (`int(np.array([-3.7]))` is `-3`).
+- [x] 11.4 `np.random`: `seed`, `rand`, `randn`, `randint`, `choice` (small, deterministic with seed). Test.
+      — *Note:* `numpy.random` is a real nested submodule (the `linalg`/`os.path` pattern). The RNG
+      is a plain C# `System.Random` (Box-Muller for `randn`, since `Random` has no Gaussian sampler)
+      — `seed(n)` makes *this shim's own* sequence reproducible run-to-run, but does not (and can't,
+      without porting numpy's real Mersenne Twister/PCG64 bit-generator) reproduce real numpy's exact
+      values for a given seed. That matches the checklist's own "small, deterministic with seed"
+      wording, not a "bit-identical to real numpy" claim. `choice` supports `replace=True/False`;
+      weighted sampling (`p=`) is out of v1 scope.
+- [x] 11.5 Bridge to the .NET interop: allow a `ClrObject` wrapping a .NET array/`double[]` to be
   passed to `np.array(...)` and an ndarray to expose `.to_clr()` → `double[]`. Test.
+      — *Note:* both directions are 1-D only (matching the checklist's own literal `double[]`
+      wording). `np.array(clr_array)` normalizes a `ClrObject` wrapping any 1-D .NET array
+      (`double[]`/`int[]`/`long[]`/`bool[]`/...) into a `PyList` up front (each element passed through
+      the existing `ClrMarshal.ToPython`), then hands off to `ArrayFromPython`'s already-existing
+      shape/dtype-inference machinery unchanged — so a real .NET `int[]` correctly infers `int64`,
+      not just `double[]` → `float64`. `.to_clr()` converts every element through the same
+      dtype-generic `AsComparableDouble` reader used elsewhere in this file, so an int64 array
+      round-trips as a real `double[]` on the .NET side. Verified with real host-side C# tests
+      (`PyEngine.SetVariable`/reading `PyModule.Dict` back), not just `.py` source string assertions,
+      since this feature's entire point is the two-way boundary with real .NET types.
 
 ## Phase 12 — Views, performance, polish (optional / later)
 

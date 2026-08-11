@@ -19,7 +19,7 @@ commits listed.
 
 ## 2026-08-11
 
-**16 commits · +6713/-354 across 77 file-touches (summed across commits) · ~4h28m active**
+**17 commits · +6978/-371 across 82 file-touches (summed across commits) · ~4h28m active**
 
 ### Block 1 — 00:02–01:46 (1h44m)
 
@@ -58,3 +58,11 @@ incorrectly equaling itself via a reference-identity shortcut) and a latent `Con
 - `a5c44d6` project update
 - `bb42adf` Phase 8 (shape manipulation)
 - `36fe6bd` Phase 9 (dtypes & promotion)
+
+### Block 3 — 12:43:59 (single commit)
+
+`NUMPY_PLAN.md` Phase 10 — basic linear algebra: `dot`/`matmul`/`@` for 1-D/2-D operands sharing one
+`MatMul` core, `numpy.linalg` submodule (`norm`), `trace`/`diagonal`. N-D batched matmul and
+`inv`/`solve`/`det` deliberately deferred and documented.
+
+- `46de024` Phase 10 (linear algebra)
