@@ -520,6 +520,56 @@ install them (with marker parsing), still rejecting non-pure wheels but with a *
 
 ---
 
+## Developer experience & documentation roadmap
+
+Not a "distance from CPython" gap — new capabilities around the interpreter, not language/stdlib
+compatibility itself.
+
+### VSCode debugger
+
+**Status: ⚪ planned, not started.** Turn `pysharp run` into a first-class debuggable target from
+the editor (breakpoints, step over/into/out, call stack, variable inspection, watch expressions,
+a debug-console REPL) instead of only a console host.
+
+- **Real substrate already exists**: the interpreter already tracks a genuine per-exception call
+  stack (`PyRaise.Traceback`, a `List<PyFrameInfo>` — file/line/function + the real scope for
+  variable inspection, already consumed by `traceback.format_exc()`/`sys.exc_info()`) and
+  `Interp.InnermostFrame` for live frame introspection. This is exactly the substrate a Debug
+  Adapter Protocol (DAP) server needs for `stackTrace`/`scopes`/`variables` requests — not starting
+  from zero.
+- **The real engineering lift**: today the eval loop runs straight through to completion or an
+  unhandled exception — it never actually *pauses* mid-execution. Real breakpoint support means
+  teaching `Interp`'s statement-execution loop to check a breakpoint set and suspend (blocking the
+  interpreter thread until a `continue`/`next`/`stepIn`/`stepOut` command arrives from the DAP
+  client) — that's the hard part, not the protocol plumbing around it.
+- **Scope**: a small dedicated project (e.g. `PySharp.DebugAdapter`) implementing at minimum
+  `launch`/`attach`, `setBreakpoints`, `continue`/`next`/`stepIn`/`stepOut`, `stackTrace`, `scopes`,
+  `variables`, `evaluate`; a minimal VSCode debugger contribution (`.vscode/launch.json` support, or
+  a small extension) pointing at it.
+
+### "Python embedding for C# devs" — a short course
+
+**Status: ⚪ planned, not started.** A doc (or short series) teaching C# developers what "loading a
+real CPython extension" actually requires — directly prompted by this session's own live Q&A on why
+`numpy`'s `.pyd`/`.so` can't just be P/Invoked into like a normal native DLL.
+
+- **Content outline**: `.pyd`/`.so` binary anatomy (PE/COFF vs ELF, the `PyInit_<module>` entry
+  point convention, ABI-tagged filenames); the CPython C-API surface a real embedder needs
+  (`PyObject`'s fixed memory layout, reference counting, `tp_*` type slots, the GIL,
+  `Py_Initialize`); why "P/Invoke into a `.pyd`" is not a shortcut around embedding CPython — it
+  *is* embedding CPython, just through the back door; the contrast with a **plain-C-ABI** native
+  library (no embedded Python object model — e.g. SQLite, OpenBLAS/LAPACK), which real P/Invoke
+  genuinely does handle, and which is exactly this project's own Axis C strategy
+  (`Microsoft.Data.Sqlite`/`Npgsql`-style shims, and the `numpy.linalg` plan in
+  [NUMPY_PLAN.md](NUMPY_PLAN.md) Phase 10).
+  Why this project deliberately does **not** embed CPython (see Axis C above: "no *generic* path
+  without embedding CPython — which the project chose not to do") — this doc explains and justifies
+  that foundational decision, it doesn't revisit it.
+- **Where it lives**: a new top-level doc (e.g. `EMBEDDING.md`), cross-referenced from Axis C above
+  and from [NUMPY_PLAN.md](NUMPY_PLAN.md)'s own linalg section.
+
+---
+
 ## Process to add a scenario
 
 1. Write the real script in [samples/](samples/) (or install the target package from PyPI).

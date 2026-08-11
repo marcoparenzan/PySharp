@@ -43,6 +43,42 @@ performance, **not** views-everywhere semantics (documented per step).
 6. Update this file: tick the box, add a one-line note if a decision was made.
 7. When a phase lands, add/update the **ROADMAP scenario** ("N — array computing") and RELEASE_NOTES.
 
+## Reference sources for exact semantics
+
+No live Python/numpy exists in this environment (see ROADMAP.md's general verification method), so
+when a step's exact behavior isn't obvious from memory or the official docs, **read real numpy's own
+source** instead of guessing — the same "read the real thing" discipline used throughout this whole
+project (installed PyPI package source, official docs), applied here too:
+
+- **`numpy/numpy` on GitHub** (BSD-3-Clause — permissive, compatible with this project's MIT license;
+  port/adapt algorithms with attribution in the commit/comment, don't copy-paste wholesale claiming
+  it as original) is the source of truth for exact edge-case behavior (broadcasting corner cases,
+  dtype promotion, NaN handling, ...).
+- **`numpy/_core/arrayprint.py`** specifically is real **pure Python**, not C — directly readable and
+  portable as a reference for the exact array-printing algorithm (column-width alignment, precision
+  rules) that Phase 1.6 deliberately simplified ("no column-width padding/alignment yet"). Revisit
+  that simplification against the real algorithm when polish time comes (Phase 12).
+- The **compiled ufunc inner loops** (`numpy/_core/src/umath/`) are real C calling the CPython C-API
+  at the boundary — readable as an *algorithm* reference (how a given broadcast/reduction is
+  structured), never usable as a binary/link dependency (that's the whole C-extension wall this plan
+  exists to work around — see the next section).
+
+## Alternatives considered and rejected
+
+- **`Numpy.NET`** (SciSharp, github.com/SciSharp/Numpy.NET) — investigated 2026-08-11. **Not** a
+  from-scratch reimplementation: it wraps the *real* NumPy via Python.NET (pythonnet), bundling an
+  embedded CPython 3.7 + real NumPy 1.16 (via `Python.Included`) or requiring a local Python install
+  (`Numpy.Bare.dll`). Solves the opposite problem from this plan's — "call real NumPy from a C# host"
+  — not "make `import numpy` work inside a from-scratch Python-in-C# interpreter with zero CPython
+  anywhere". Using it here would mean every `ndarray` a PySharp script sees is actually a real CPython
+  `PyObject*` behind a pythonnet wrapper, participating in none of `Interp`'s own dunder dispatch
+  without a full marshaling layer — architecturally the same "embed CPython" wall ROADMAP.md's Axis C
+  already declined, just relocated into a third-party library. Rejected; the goal declared at the top
+  of ROADMAP.md ("the author wants to use *only* PySharp to run their own Python") rules it out.
+- **`tinynumpy`** (PyPI) — a genuine pure-Python numpy-workalike, real prior art for "reimplement a
+  practical subset by hand" — but dormant since 2016 (last release 1.2.1), not tracked as a design
+  reference for this plan.
+
 ---
 
 ## Phase 0 — Groundwork ✅ (2026-08-11)
