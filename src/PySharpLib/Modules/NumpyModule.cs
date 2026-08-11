@@ -85,8 +85,186 @@ public static class NumpyModule
             return Wrap(new NdArrayData(DType.Float64, flat, shape));
         });
 
+        // Phase 2 — construction. Every function here builds a real, independent float64 buffer
+        // (no dtype= keyword yet — that's Phase 9's dtype/promotion work) and shape-infers/
+        // validates exactly like real numpy's own error messages describe.
+        m.Dict["array"] = new PyBuiltinFunction("array", (_, a, _) => Wrap(ArrayFromPython(a[0])));
+
+        m.Dict["zeros"] = new PyBuiltinFunction("zeros", (_, a, kwargs) =>
+        {
+            int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
+            return Wrap(new NdArrayData(DType.Float64, new double[SizeOf(shape)], shape));
+        });
+        m.Dict["ones"] = new PyBuiltinFunction("ones", (_, a, kwargs) =>
+        {
+            int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
+            var buf = new double[SizeOf(shape)];
+            Array.Fill(buf, 1.0);
+            return Wrap(new NdArrayData(DType.Float64, buf, shape));
+        });
+        m.Dict["full"] = new PyBuiltinFunction("full", (_, a, kwargs) =>
+        {
+            int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
+            double value = PyOps.AsDouble(RequireArg(a, kwargs, 1, "fill_value"));
+            var buf = new double[SizeOf(shape)];
+            Array.Fill(buf, value);
+            return Wrap(new NdArrayData(DType.Float64, buf, shape));
+        });
+        // Real numpy's `empty` returns genuinely uninitialized memory (whatever garbage was
+        // already there) — a real correctness trap real code is only supposed to rely on when it
+        // immediately overwrites every element. A deterministic zero-filled buffer (what a real
+        // C# array already starts as) is a safe, simpler v1 stand-in: any script that reads
+        // `empty`'s contents before writing them was already relying on undefined behavior against
+        // real numpy too.
+        m.Dict["empty"] = new PyBuiltinFunction("empty", (_, a, kwargs) =>
+        {
+            int[] shape = ShapeArg(RequireArg(a, kwargs, 0, "shape"));
+            return Wrap(new NdArrayData(DType.Float64, new double[SizeOf(shape)], shape));
+        });
+
+        m.Dict["arange"] = new PyBuiltinFunction("arange", (_, a, kwargs) =>
+        {
+            double start = 0, stop, step = 1;
+            if (a.Length == 1)
+                stop = PyOps.AsDouble(a[0]);
+            else if (a.Length == 2)
+            {
+                start = PyOps.AsDouble(a[0]);
+                stop = PyOps.AsDouble(a[1]);
+            }
+            else
+            {
+                start = PyOps.AsDouble(a[0]);
+                stop = PyOps.AsDouble(a[1]);
+                step = PyOps.AsDouble(a[2]);
+            }
+            if (step == 0)
+                throw PyErr.ValueError("arange: step cannot be zero");
+            int count = Math.Max(0, (int)Math.Ceiling((stop - start) / step));
+            var buf = new double[count];
+            for (int i = 0; i < count; i++)
+                buf[i] = start + i * step;
+            return Wrap(new NdArrayData(DType.Float64, buf, new[] { count }));
+        });
+
+        m.Dict["linspace"] = new PyBuiltinFunction("linspace", (interp, a, kwargs) =>
+        {
+            double start = PyOps.AsDouble(a[0]);
+            double stop = PyOps.AsDouble(a[1]);
+            int num = a.Length > 2 ? (int)PyOps.AsBigInt(a[2], "num")
+                : kwargs is not null && kwargs.TryGetValue("num", out var n) ? (int)PyOps.AsBigInt(n, "num") : 50;
+            bool endpoint = a.Length > 3 ? PyOps.Truthy(interp, a[3])
+                : kwargs is not null && kwargs.TryGetValue("endpoint", out var e) ? PyOps.Truthy(interp, e) : true;
+            if (num < 0)
+                throw PyErr.ValueError("Number of samples, num, must be non-negative.");
+            var buf = new double[num];
+            if (num == 1)
+                buf[0] = start;
+            else if (num > 1)
+            {
+                double stepVal = (stop - start) / (endpoint ? num - 1 : num);
+                for (int i = 0; i < num; i++)
+                    buf[i] = start + i * stepVal;
+                if (endpoint)
+                    buf[num - 1] = stop; // exact endpoint, avoiding float drift from the step math
+            }
+            return Wrap(new NdArrayData(DType.Float64, buf, new[] { num }));
+        });
+
+        m.Dict["eye"] = new PyBuiltinFunction("eye", (_, a, kwargs) =>
+        {
+            int rows = (int)PyOps.AsBigInt(a[0], "N");
+            int cols = a.Length > 1 ? (int)PyOps.AsBigInt(a[1], "M")
+                : kwargs is not null && kwargs.TryGetValue("M", out var mm) ? (int)PyOps.AsBigInt(mm, "M") : rows;
+            var buf = new double[rows * cols];
+            for (int i = 0; i < Math.Min(rows, cols); i++)
+                buf[i * cols + i] = 1.0;
+            return Wrap(new NdArrayData(DType.Float64, buf, new[] { rows, cols }));
+        });
+        m.Dict["identity"] = new PyBuiltinFunction("identity", (_, a, _) =>
+        {
+            int n = (int)PyOps.AsBigInt(a[0], "n");
+            var buf = new double[n * n];
+            for (int i = 0; i < n; i++)
+                buf[i * n + i] = 1.0;
+            return Wrap(new NdArrayData(DType.Float64, buf, new[] { n, n }));
+        });
+
+        m.Dict["copy"] = new PyBuiltinFunction("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
+
         return m;
     }
+
+    private static object RequireArg(object[] a, Dictionary<string, object>? kwargs, int index, string name)
+        => a.Length > index ? a[index]
+            : kwargs is not null && kwargs.TryGetValue(name, out var v) ? v
+            : throw PyErr.TypeError($"missing required argument: '{name}'");
+
+    private static int SizeOf(int[] shape) => shape.Aggregate(1, (acc, dim) => acc * dim);
+
+    private static int[] ShapeArg(object arg) => arg switch
+    {
+        BigInteger n => new[] { (int)n },
+        PyTuple t => t.Items.Select(x => (int)PyOps.AsBigInt(x, "shape")).ToArray(),
+        PyList l => l.Items.Select(x => (int)PyOps.AsBigInt(x, "shape")).ToArray(),
+        _ => throw PyErr.TypeError($"expected int or sequence of int for shape, got {PyOps.TypeName(arg)}"),
+    };
+
+    private static NdArrayData CopyOf(NdArrayData d)
+        => new(d.DType, (double[])((double[])d.Buffer).Clone(), (int[])d.Shape.Clone());
+
+    /// <summary>Real numpy shape inference off a (possibly nested) Python list/tuple: the shape is
+    /// read by descending through the *first* element of each level (matching real numpy), then a
+    /// single validating pass confirms every branch actually has that same shape — a mismatch
+    /// anywhere (a ragged row, a scalar where a nested list was expected, or vice versa) raises the
+    /// real `ValueError` numpy itself raises for an inhomogeneous shape. A bare scalar (no list at
+    /// all) produces a real 0-d array, matching `np.array(5.0)`.</summary>
+    private static NdArrayData ArrayFromPython(object value)
+    {
+        var shape = new List<int>();
+        object? cursor = value;
+        while (cursor is PyList or PyTuple)
+        {
+            var items = SequenceItems(cursor);
+            shape.Add(items.Count);
+            if (items.Count == 0)
+                break;
+            cursor = items[0];
+        }
+        var flat = new List<double>();
+        AppendFlat(value, shape.ToArray(), 0, flat);
+        return new NdArrayData(DType.Float64, flat.ToArray(), shape.ToArray());
+    }
+
+    private static IReadOnlyList<object> SequenceItems(object o) => o switch
+    {
+        PyList l => l.Items,
+        PyTuple t => t.Items,
+        _ => throw new InvalidOperationException("not a sequence"),
+    };
+
+    private static void AppendFlat(object value, int[] shape, int depth, List<double> flat)
+    {
+        bool isLeaf = depth == shape.Length;
+        bool isSequence = value is PyList or PyTuple;
+        if (isLeaf)
+        {
+            if (isSequence)
+                throw RaggedArrayError();
+            flat.Add(PyOps.AsDouble(value));
+            return;
+        }
+        if (!isSequence)
+            throw RaggedArrayError();
+        var items = SequenceItems(value);
+        if (items.Count != shape[depth])
+            throw RaggedArrayError();
+        foreach (var item in items)
+            AppendFlat(item, shape, depth + 1, flat);
+    }
+
+    private static PyRaise RaggedArrayError() => PyErr.ValueError(
+        "setting an array element with a sequence. The requested array has an inhomogeneous shape.");
 
     public static PyInstance Wrap(NdArrayData data)
     {
@@ -118,6 +296,8 @@ public static class NumpyModule
 
         Add("__repr__", (_, a, _) => $"array({FormatArray(Data(a[0]))})");
         Add("__str__", (_, a, _) => FormatArray(Data(a[0])));
+
+        Add("copy", (_, a, _) => Wrap(CopyOf(Data(a[0]))));
 
         return cls;
     }

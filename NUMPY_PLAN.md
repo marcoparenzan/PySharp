@@ -91,17 +91,32 @@ performance, **not** views-everywhere semantics (documented per step).
   (documented simplification — "keep it simple" per this step). No column-width padding/alignment
   yet either (real numpy pads elements to a common width; deferred).
 
-## Phase 2 — Construction
+## Phase 2 — Construction ✅ (2026-08-11)
 
-- [ ] 2.1 `np.array(list)` for a **1-D** Python list of numbers → `float64` ndarray. Test.
-- [ ] 2.2 `np.array(nested list)` for **2-D/N-D**; infer shape recursively; raise `ValueError` on
+- [x] 2.1 `np.array(list)` for a **1-D** Python list of numbers → `float64` ndarray. Test.
+  — *Note:* real int→float64 promotion (`np.array([1,2,3])` → `[1. 2. 3.]`), matching the dtype
+  rollout (int64 is Phase 9).
+- [x] 2.2 `np.array(nested list)` for **2-D/N-D**; infer shape recursively; raise `ValueError` on
   ragged input. Test both success and the ragged error.
-- [ ] 2.3 `np.zeros(shape)` and `np.ones(shape)` where `shape` is an int or a tuple. Test.
-- [ ] 2.4 `np.full(shape, value)` and `np.empty(shape)`. Test.
-- [ ] 2.5 `np.arange([start,] stop[, step])` (float64). Test incl. negative step.
-- [ ] 2.6 `np.linspace(start, stop, num=50, endpoint=True)`. Test.
-- [ ] 2.7 `np.eye(N[, M])` and `np.identity(n)`. Test.
-- [ ] 2.8 `array.copy()` and `np.copy(a)`. Test independence from the source.
+  — *Note:* shape inferred by descending the *first* element of each level (matching real numpy),
+  then a validating pass catches any ragged row AND any scalar-where-a-list-was-expected mismatch
+  (`np.array([1, [2, 3]])`) with the same real `ValueError`. A bare scalar (`np.array(5.0)`)
+  correctly produces a real 0-d array. `np.array(existing_ndarray)` (copy-from-ndarray) is **not**
+  handled yet — out of this step's literal scope (Python list/tuple input only); flagging for a
+  later phase if a real script needs it.
+- [x] 2.3 `np.zeros(shape)` and `np.ones(shape)` where `shape` is an int or a tuple. Test.
+- [x] 2.4 `np.full(shape, value)` and `np.empty(shape)`. Test.
+  — *Note:* `empty` is deterministically zero-filled (a real C# array's own default state), not
+  real numpy's genuinely uninitialized memory — documented in the code as a deliberate, safe v1
+  simplification (any script relying on `empty`'s garbage contents was already relying on
+  undefined behavior against real numpy too).
+- [x] 2.5 `np.arange([start,] stop[, step])` (float64). Test incl. negative step.
+- [x] 2.6 `np.linspace(start, stop, num=50, endpoint=True)`. Test.
+  — *Note:* the exact endpoint value is written directly (not derived from the step multiplication)
+  to avoid float drift at the boundary, matching real numpy's own behavior there.
+- [x] 2.7 `np.eye(N[, M])` and `np.identity(n)`. Test. — *Note:* `eye` supports a rectangular
+  `N != M` shape.
+- [x] 2.8 `array.copy()` and `np.copy(a)`. Test independence from the source.
 
 ## Phase 3 — Indexing & slicing (copies)
 
