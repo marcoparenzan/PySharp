@@ -139,19 +139,32 @@ performance, **not** views-everywhere semantics (documented per step).
   assigning a `(3,)` array into a `(2,3)` slice — are Phase 4's job); a mismatch raises the real
   `ValueError` numpy itself raises ("could not broadcast input array from shape ... into shape ...").
 
-## Phase 4 — Elementwise ops & broadcasting
+## Phase 4 — Elementwise ops & broadcasting ✅ (2026-08-11)
 
-- [ ] 4.1 Add `@` (matmul) to the operator→dunder map (`__matmul__`) if missing; verify `+ - * / **`
+- [x] 4.1 Add `@` (matmul) to the operator→dunder map (`__matmul__`) if missing; verify `+ - * / **`
   already map to `__add__`/… (research + tiny fix). Test that `ndarray.__add__` is reachable via `+`.
-- [ ] 4.2 Elementwise `a + b` for **same-shape** arrays (`__add__`); then `- * /` (`__sub__` etc.). Test.
-- [ ] 4.3 Scalar broadcasting: `a + 2`, `2 + a` (`__radd__`), same for `- * / **`. Test.
-- [ ] 4.4 Broadcasting shape rule — compute the broadcast shape of two shapes (right-aligned, dims
-  equal or 1). Pure C# helper + unit test (no Python).
-- [ ] 4.5 Broadcasted elementwise ops using stride-0 iteration over the broadcast shape. Test
+  — *Note:* `Interp.BinDunders` already mapped every operator including `@`/`__matmul__` (and their
+  reflected `__r*__` forms) before this phase — no interpreter fix was actually needed, only real
+  `__add__`/etc. implementations to reach. `__matmul__` itself is intentionally left unimplemented
+  here (real matrix multiplication is Phase 10, linear algebra).
+- [x] 4.2 Elementwise `a + b` for **same-shape** arrays (`__add__`); then `- * /` (`__sub__` etc.). Test.
+- [x] 4.3 Scalar broadcasting: `a + 2`, `2 + a` (`__radd__`), same for `- * / **`. Test.
+- [x] 4.4 Broadcasting shape rule — compute the broadcast shape of two shapes (right-aligned, dims
+  equal or 1). Pure C# helper + unit test (no Python). — *Note:* `NumpyModule.BroadcastShape` made
+  `public` specifically so it's directly C#-unit-testable, mirroring `NdArrayData`'s own Phase 1.1
+  precedent.
+- [x] 4.5 Broadcasted elementwise ops using stride-0 iteration over the broadcast shape. Test
   `(2,3) + (3,)`, `(2,1) + (1,3)`, and an incompatible-shape `ValueError`.
-- [ ] 4.6 Unary `-a` (`__neg__`), `abs(a)` (`__abs__`), `+a`. Test.
-- [ ] 4.7 `**` power elementwise and with scalar exponent. Test.
-- [ ] 4.8 In-place `+= -= *= /=` (may reuse binary op + rebind; document if not true in-place). Test.
+  — *Note:* a plain Python scalar is converted to a real 0-d `NdArrayData` before broadcasting, so
+  `2 + arr` and `np.array(2.0) + arr` share the exact same code path — no scalar special-casing.
+- [x] 4.6 Unary `-a` (`__neg__`), `abs(a)` (`__abs__`), `+a`. Test.
+- [x] 4.7 `**` power elementwise and with scalar exponent. Test.
+- [x] 4.8 In-place `+= -= *= /=` (may reuse binary op + rebind; document if not true in-place). Test.
+  — *Note:* confirmed `Interp.ExecAugAssign` already falls back to the plain binary dunder +
+  rebinding the name when no `__iadd__`/etc. is defined — no `__i*__` methods were added, so `+=`
+  is genuinely **not** in-place: `y = x; x += 1` leaves `y` pointing at the original, unlike real
+  numpy's actual buffer mutation. Documented as a deliberate v1 simplification (verified live and
+  tested); revisit only if a real script's correctness depends on the aliasing.
 
 ## Phase 5 — Comparisons, bool arrays, masking
 

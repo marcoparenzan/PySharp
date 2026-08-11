@@ -403,6 +403,108 @@ public static class NumpyModule
 
     private static string ShapeRepr(int[] shape) => shape.Length == 1 ? $"({shape[0]},)" : $"({string.Join(", ", shape)})";
 
+    // ---------------------------------------------------------------- Phase 4: broadcasting
+
+    /// <summary>Real numpy broadcasting: two shapes are compared right-aligned (the shorter one
+    /// padded with 1s on the left), and each dimension pair must either match exactly or have one
+    /// side equal to 1 (which stretches to the other side's size) — anything else is a real
+    /// incompatible-shape `ValueError`. Public (not just internal to this module) so it can be
+    /// unit-tested directly in C#, no Python involved — see NUMPY_PLAN.md Phase 4.4.</summary>
+    public static int[] BroadcastShape(int[] shapeA, int[] shapeB)
+    {
+        int ndim = Math.Max(shapeA.Length, shapeB.Length);
+        var result = new int[ndim];
+        int padA = ndim - shapeA.Length, padB = ndim - shapeB.Length;
+        for (int i = 0; i < ndim; i++)
+        {
+            int da = i < padA ? 1 : shapeA[i - padA];
+            int db = i < padB ? 1 : shapeB[i - padB];
+            if (da == db)
+                result[i] = da;
+            else if (da == 1)
+                result[i] = db;
+            else if (db == 1)
+                result[i] = da;
+            else
+                throw PyErr.ValueError(
+                    $"operands could not be broadcast together with shapes {ShapeRepr(shapeA)} {ShapeRepr(shapeB)}");
+        }
+        return result;
+    }
+
+    /// <summary>An operand's own strides, reinterpreted against the (already-computed) broadcast
+    /// shape: a dimension this operand doesn't have (shape padding) or has size 1 in but the
+    /// broadcast size is bigger gets stride 0 — the real "stride-0 iteration" trick that makes the
+    /// same source element get read repeatedly for the stretched dimension, with no data actually
+    /// duplicated.</summary>
+    private static int[] BroadcastStrides(int[] shape, int[] strides, int[] broadcastShape)
+    {
+        int ndim = broadcastShape.Length;
+        int pad = ndim - shape.Length;
+        var result = new int[ndim];
+        for (int i = 0; i < ndim; i++)
+        {
+            if (i < pad)
+            {
+                result[i] = 0;
+                continue;
+            }
+            int dimSize = shape[i - pad];
+            result[i] = dimSize == 1 && broadcastShape[i] != 1 ? 0 : strides[i - pad];
+        }
+        return result;
+    }
+
+    private static NdArrayData ElementwiseBinary(NdArrayData a, NdArrayData b, Func<double, double, double> op)
+    {
+        int[] shape = BroadcastShape(a.Shape, b.Shape);
+        int[] stridesA = BroadcastStrides(a.Shape, a.Strides, shape);
+        int[] stridesB = BroadcastStrides(b.Shape, b.Strides, shape);
+        var bufA = (double[])a.Buffer;
+        var bufB = (double[])b.Buffer;
+        int size = shape.Aggregate(1, (acc, dim) => acc * dim);
+        var outBuf = new double[size];
+        var index = new int[shape.Length];
+        for (int flat = 0; flat < size; flat++)
+        {
+            int offA = 0, offB = 0;
+            for (int d = 0; d < shape.Length; d++)
+            {
+                offA += index[d] * stridesA[d];
+                offB += index[d] * stridesB[d];
+            }
+            outBuf[flat] = op(bufA[offA], bufB[offB]);
+            for (int d = shape.Length - 1; d >= 0; d--)
+            {
+                if (++index[d] < shape[d])
+                    break;
+                index[d] = 0;
+            }
+        }
+        return new NdArrayData(DType.Float64, outBuf, shape);
+    }
+
+    private static NdArrayData ElementwiseUnary(NdArrayData d, Func<double, double> op)
+    {
+        var buf = (double[])d.Buffer;
+        var outBuf = new double[buf.Length];
+        for (int i = 0; i < buf.Length; i++)
+            outBuf[i] = op(buf[i]);
+        return new NdArrayData(d.DType, outBuf, (int[])d.Shape.Clone());
+    }
+
+    private static object ElementwiseOp(object aObj, object bObj, Func<double, double, double> op)
+        => Wrap(ElementwiseBinary(OperandData(aObj), OperandData(bObj), op));
+
+    /// <summary>Lets `ElementwiseBinary`/broadcasting treat a plain Python scalar (int/float/bool)
+    /// exactly like a real 0-d array — `2 + arr` and `np.array(2.0) + arr` take the same code path,
+    /// no special-casing needed.</summary>
+    private static NdArrayData OperandData(object o) => o switch
+    {
+        PyInstance pi when pi.Class == NdArrayClass => Data(pi),
+        _ => new NdArrayData(DType.Float64, new[] { PyOps.AsDouble(o) }, Array.Empty<int>()),
+    };
+
     public static PyInstance Wrap(NdArrayData data)
     {
         var inst = new PyInstance(NdArrayClass);
@@ -442,6 +544,30 @@ public static class NumpyModule
             SetItem(Data(a[0]), a[1], a[2]);
             return PyNone.Instance;
         });
+
+        // Phase 4 — elementwise ops & real broadcasting. `@`/`__matmul__` is already wired into
+        // the interpreter's own operator table (`Interp.BinDunders`) and deliberately left
+        // unimplemented here — real matrix multiplication is Phase 10 (linear algebra), not this
+        // one. `+= -= *= /=` need no dedicated `__iadd__`/etc. here at all: `Interp.ExecAugAssign`
+        // already falls back to the plain binary dunder + rebinding the name when no `__i*__` is
+        // defined (see NUMPY_PLAN.md Phase 4.8's own note) — a real, deliberate simplification,
+        // *not* true in-place mutation (an aliased second reference to the same array does NOT see
+        // the update, unlike real numpy's actual in-place buffer mutation; nothing here has real
+        // views/aliasing yet to make that difference observable in practice either).
+        Add("__add__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x + y));
+        Add("__radd__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x + y));
+        Add("__sub__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x - y));
+        Add("__rsub__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x - y));
+        Add("__mul__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x * y));
+        Add("__rmul__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x * y));
+        Add("__truediv__", (_, a, _) => ElementwiseOp(a[0], a[1], static (x, y) => x / y));
+        Add("__rtruediv__", (_, a, _) => ElementwiseOp(a[1], a[0], static (x, y) => x / y));
+        Add("__pow__", (_, a, _) => ElementwiseOp(a[0], a[1], Math.Pow));
+        Add("__rpow__", (_, a, _) => ElementwiseOp(a[1], a[0], Math.Pow));
+
+        Add("__neg__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), static x => -x)));
+        Add("__pos__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), static x => x)));
+        Add("__abs__", (_, a, _) => Wrap(ElementwiseUnary(Data(a[0]), Math.Abs)));
 
         return cls;
     }
