@@ -19,7 +19,7 @@ commits listed.
 
 ## 2026-08-11
 
-**18 commits · +7390/-379 across 86 file-touches (summed across commits) · ~4h50m active**
+**20 commits · +8304/-642 across 104 file-touches (summed across commits) · ~5h07m active**
 
 ### Block 1 — 00:02–01:46 (1h44m)
 
@@ -68,3 +68,16 @@ one `MatMul` core, `numpy.linalg` submodule (`norm`), `trace`/`diagonal` (N-D ba
 
 - `46de024` Phase 10 (linear algebra)
 - `18c2c51` Phase 11 (interop & conveniences)
+
+### Block 4 — 14:14–14:31 (17m)
+
+`NUMPY_PLAN.md` Phase 12 (views, performance, polish) — basic indexing/`.T`/`reshape`/`ravel`/
+`expand_dims`/`squeeze` became real strided views (5 pre-existing latent bugs found and fixed along
+the way), a measured ~7.4x contiguous-`float64` fast path, `samples/numpy_demo.py`, a numpy-quickstart
+conformance sweep — closing out all 12 NUMPY_PLAN.md phases. Then `FASTAPI_PLAN.md` Phase 5 (docs):
+scenario 2 flipped to done in ROADMAP.md (re-verified the underlying work was still green first —
+1228/1228, 45/45 FastAPI tests — before documenting it as done), a RELEASE_NOTES entry, and several
+stale "in progress"/"missing" claims in README.md fixed.
+
+- `c63dd21` numpy Phase 12 (views/perf/polish) — 18 new tests
+- `f53cd93` FastAPI Phase 5 (docs)

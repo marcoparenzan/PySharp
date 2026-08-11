@@ -49,7 +49,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 10 | **Django** | _to be created_ | ⚪ Planned | a real, unmodified Django app (Django itself is pure Python — no C extensions in its core, unlike pydantic-core/numpy). Much heavier than scenario 2's FastAPI: WSGI (Django's default; ASGI is opt-in), the ORM (real SQL generation + migrations, heavy metaclass use on `Model`), the template engine, `django.contrib.admin`, class-based views, forms/sessions, `django-admin` management commands, the `settings.py` module-level config pattern |
 | 11 | **ASP.NET Core hosting PySharp** | _to be created_ | ⚪ Planned | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into Python scripts/plugins from C# request handlers — Python as a scripting/plugin layer inside a real production .NET service. Ties directly into the standing TODO ("Extract PySharpLib as a standalone NuGet library") |
 | 12 | **Array computing** (numpy shim) | [samples/numpy_demo.py](samples/numpy_demo.py) | ✅ **Done** | a real C# **`numpy`**-shaped shim (not real numpy — a compiled CPython C extension a from-scratch interpreter can't load): `float64`/`int64`/`bool` dtypes with real arithmetic promotion, construction, indexing/slicing as real strided views (Phase 12.1), broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`, `trace`/`diagonal`), `np.random`, a two-way .NET array interop bridge — see NUMPY_PLAN.md's full 12-phase plan |
-| T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` exists; for rich APIs a dedicated **C# wrapper/shim** is created |
+| T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` now supports scalars, strings, real `Structure`/`byref`/`POINTER`/buffers (verified against real `kernel32` structs/output-pointer APIs — see CTYPES_PLAN.md); `CFUNCTYPE`/callbacks still out of scope; for very rich APIs a dedicated **C# wrapper/shim** is still the fallback |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
@@ -440,9 +440,28 @@ strided views) and every phase's own verification notes. Covered by
 ### Cross-cutting — Native libraries 🟡
 
 General rule: **a native library is invoked from C#**, so it is exposed to Python either (a) via
-`ctypes` for simple scalar calls (already supported for basic signatures), or (b) by creating a
-dedicated **C# wrapper/shim** that presents an idiomatic Python API over the .NET/native lib. It is
-the same strategy as scenario 3 (`sqlite3` is a shim on a .NET driver).
+`ctypes`, or (b) by creating a dedicated **C# wrapper/shim** that presents an idiomatic Python API
+over the .NET/native lib. It is the same strategy as scenario 3 (`sqlite3` is a shim on a .NET
+driver).
+
+**`ctypes` (see CTYPES_PLAN.md)**: beyond scalar arguments/returns and `char*`/`wchar*` strings
+(verified against real `kernel32`/`msvcrt` DLLs), `ctypes` now has real `Structure` (real per-field
+storage, real natural-alignment layout — computed automatically, not hand-specified), `byref`,
+`POINTER`, and `create_string_buffer`/`create_unicode_buffer`. Every value (scalar or struct) is
+backed by a real C# `byte[]`, not `Marshal.AllocHGlobal` — `byref()` pins that same managed array for
+one native call, so a native function's writes land directly in it with no separate marshal-back
+step. Verified against two real Windows APIs that need structs/output pointers: `GetSystemInfo`
+(struct fields checked against well-known fixed OS constants — page size 4096, allocation
+granularity 65536, `PROCESSOR_ARCHITECTURE_AMD64` == 9 — not just "didn't crash") and
+`GetComputerNameW` (a `byref` `DWORD` + a `create_unicode_buffer` round-trip). Found and fixed a
+real static-mutable-`PyClass`-field race along the way: xUnit runs tests in parallel, and a shared
+static field reassigned on every `import ctypes` let one test's concurrent module creation silently
+overwrite another test's in-flight class identity — fixed by making every ctypes-specific class a
+real local variable threaded through as a parameter, never a static field (the same class of bug
+`FASTAPI_PLAN.md`'s `GenericAliasModule` races were). **Still out of scope**: `CFUNCTYPE`/callbacks
+(native code calling back into Python — a separate, larger chunk needing careful delegate-lifetime
+management), by-value struct passing (real x64 ABI register-vs-stack rules), generic `ctype * N`
+array syntax.
 
 ### Cross-cutting — .NET object injection (embedding interop) ✅
 
@@ -534,14 +553,14 @@ strategies, all *per-package*:
 
 There is no *generic* path without embedding CPython — which the project chose not to do.
 
-**numpy** — the hardest single case, and the first one given a dedicated phased plan: see
-[NUMPY_PLAN.md](NUMPY_PLAN.md) (⚪ not started — Phase 0 groundwork not yet begun), a 12-phase,
-checkbox-level execution plan for a C# `numpy`-shaped shim (`ndarray` as a `PyClass` + C# wrap,
-exactly like the `socket` module, so arithmetic/indexing/iteration reuse the interpreter's
-existing dunder dispatch with no core changes). Phases run construction → indexing/slicing →
-elementwise ops/broadcasting → comparisons/masking → reductions → ufuncs → shape manipulation →
-dtypes/promotion → basic linear algebra → interop, with real strided views deferred to an optional
-final polish phase (copies first, for correctness).
+**numpy** — the hardest single case, tackled with a dedicated phased plan: see
+[NUMPY_PLAN.md](NUMPY_PLAN.md) — ✅ **all 12 phases done** (scenario 12). A C# `numpy`-shaped shim
+(`ndarray` as a `PyClass` + C# wrap, exactly like the `socket` module, so arithmetic/indexing/
+iteration reuse the interpreter's existing dunder dispatch with no core changes): construction,
+`float64`/`int64`/`bool` dtypes with real promotion, indexing/slicing as real strided views
+(Phase 12.1 — basic indexing/`.T`/`reshape`/`ravel`/`expand_dims`/`squeeze` share the source buffer),
+broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra, `np.random`, and a
+two-way .NET array interop bridge.
 
 ### Axis D — Packaging / pip
 
