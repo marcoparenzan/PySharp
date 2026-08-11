@@ -38,7 +38,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 |---|---|---|---|---|
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
-| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | 🟡 **In progress** (2.0/2.0+/2a/2b/2c ✅, 2d 🟡 pydantic BaseModel + 30-pattern robustness sweep, 2e ✅ real FastAPI app live over real HTTP) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, live over curl) |
+| 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | ✅ **Done** (2.0/2.0+/2a/2b/2c/2d/2e all ✅ — a real, unmodified FastAPI app, full CRUD + WebSockets + graceful shutdown, served live over real HTTP entirely by PySharp) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, 30-pattern robustness sweep ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, WebSockets, graceful shutdown, live over curl) |
 | 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | 🟡 In progress (3a ✅ sqlite3, 3c ✅ SQL Server, 3b ⚪ blocked — no Postgres server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅; Postgres (`Npgsql`) blocked on server availability — see SQL_PLAN.md |
 | 4 | **HTTP client** (requests-like) | [samples/requests_demo.py](samples/requests_demo.py) | ✅ **Done** | real `http.client` (subclassable HTTPConnection/HTTPSConnection/HTTPResponse) ✅ — the real, unmodified `requests` package runs live over real HTTPS (GET/POST/redirects/sessions/cookies), see HTTP_PLAN.md |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
@@ -131,7 +131,7 @@ after opening, since the CONNACK reader callback could never fire. Fixed with on
 `AIOMQTT_PLAN.md` Phase 6.4); confirmed working end-to-end afterward. Offline tests:
 [AiomqttSmokeTests.cs](src/PySharp.Tests/M15_Aiomqtt/AiomqttSmokeTests.cs).
 
-### Scenario 2 — FastAPI API (no SQL) 🔴 — **key scenario**
+### Scenario 2 — FastAPI API (no SQL) ✅ — **key scenario**
 
 **Why it is key.** An API is the capability that turns PySharp from a *script runner* into a *service
 host*. A script (like the IoT one) starts, does its thing, ends; an API **stays alive, listens,
@@ -183,7 +183,7 @@ as the test bench.
   `__origin__`/`__args__`, the generalized `__mro_entries__` protocol), ~~`contextlib`~~ ✅ (scenario
   1b), `abc`, `pathlib`, `weakref`, `ipaddress`, `pickle`, `colorsys`, `decimal`, `complex`. `email`/
   `http` for the HTTP details remain open for 2e.
-- **2d — data validation (pydantic).** 🟡 **In progress**, pydantic **v1** chosen (pure Python, no
+- **2d — data validation (pydantic).** ✅ **Done**, pydantic **v1** chosen (pure Python, no
   `pydantic-core` Rust wall). `import pydantic` succeeds end to end; a `BaseModel` subclass now
   constructs, validates real field types, raises real `ValidationError` on bad input, and serializes
   via `.dict()`. Getting there required building real (simplified) **custom-metaclass support** into
@@ -227,10 +227,15 @@ as the test bench.
   hot-reload on file change (a dev-only convenience, not attempted — out of scope for this sample).
 
 Milestone outcome: first (2.0) an HTTP endpoint answering a GET on `localhost` with synchronous
-handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp. Full
-scenario-2 status, including the pydantic v1 probe-driven blow-by-blow, lives in `FASTAPI_PLAN.md` —
-this roadmap entry is kept in sync at each major checkpoint but the plan doc is the live source of
-truth while 2d/2e are in progress.
+handlers; then (2a–2e) the same reached in **FastAPI** compatibility, all run by PySharp — **scenario
+2 is now done**: a real, unmodified FastAPI app (full CRUD, WebSockets, graceful shutdown, real
+pydantic validation) served live over real HTTP entirely by PySharp, zero framework code modified.
+Full scenario-2 status, including the pydantic v1 probe-driven blow-by-blow (dozens of real
+interpreter/stdlib gaps found and fixed round by round, most of them general-purpose fixes rather
+than FastAPI-specific ones), lives in `FASTAPI_PLAN.md`. Small, separately-scoped items intentionally
+left open (not blocking "done"):
+`except*` syntax (PEP 654 exception groups), a nested-import `locals()`/`globals()` scoping edge
+case, hot-reload-on-file-change for `asgi_server.py` (a dev-only convenience).
 
 ### Scenario 3 — SQL access 🟡
 
@@ -470,13 +475,19 @@ and *which scenario drove it*.
 | 9 — JSON + YAML | new stdlib module **`yaml`** (safe_load/dump, PyYAML subset) | [YamlModule.cs](src/PySharpLib/Modules/YamlModule.cs); test [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs) |
 | 1b — aiomqtt | new stdlib module **`contextlib`** (`contextmanager`/`suppress`, needed `PyGenerator.ThrowInto` — inject an exception at a suspended `yield`, like `gen.throw()`); **`asyncio.Queue`/`Lock`/`Event`/`Semaphore`/`BoundedSemaphore`**, **`asyncio.wait`/`FIRST_COMPLETED`**; event-loop **`add_reader`/`add_writer`/`call_soon_threadsafe`/`run_in_executor`** (a `Socket.Select`-based poller thread + a `SocketModule` fd→`Socket` registry); real **`dataclasses`** field-driven `__init__`/`__repr__`/`__eq__`/frozen generation (walks the MRO so a no-new-fields subclass still inherits its base's fields); `types` module (`TracebackType`); `sys.version_info` rich comparison against a tuple; `typing.Concatenate`/`Self`/`TypeAlias`/`ParamSpec`; `isinstance(x, int)` now recognizes `IntEnum` members; `Interp.SetAttr`'s `__setattr__` dispatch now accepts a builtin (not just user-defined) hook; `ssl.CertificateError` (alias of `SSLCertVerificationError`); `create_task`/`loop.create_task` relaxed to accept a bare `Future` | [ContextlibModule.cs](src/PySharpLib/Modules/ContextlibModule.cs), [AsyncioModule.cs](src/PySharpLib/Modules/AsyncioModule.cs), [Async.cs](src/PySharpLib/Runtime/Async.cs), [MiscModules.cs](src/PySharpLib/Modules/MiscModules.cs), [SocketModule.cs](src/PySharpLib/Modules/SocketModule.cs), [SslModule.cs](src/PySharpLib/Modules/SslModule.cs), [SysModule.cs](src/PySharpLib/Modules/SysModule.cs), [Builtins.cs](src/PySharpLib/Builtins/Builtins.cs), [Interp.cs](src/PySharpLib/Interpretation/Interp.cs), [PyGenerator.cs](src/PySharpLib/Runtime/PyGenerator.cs); full log in `AIOMQTT_PLAN.md` |
 | 2c/2d — pydantic v1 (real dependency-chain probe) | **~70 real gaps closed** driving `import pydantic` from failing to succeeding, then a `BaseModel` subclass to constructing/validating/`.dict()`-ing: new stdlib modules `re` (real regex engine), `datetime`, `ipaddress` (incl. real `_BaseAddress`/`_BaseNetwork` base classes), `pathlib`, `weakref`, `pickle`, `colorsys`; real `typing`/`types` metaprogramming (`get_type_hints`, generic-alias tracking with real `__origin__`/`__args__`, the generalized `__mro_entries__` protocol enabling `TypedDict` as a base class, `types.new_class`/`resolve_bases`/`prepare_class`, the 3-arg `type(name, bases, ns)` form); real (simplified) **custom-metaclass support** in `ExecClassDef` (`class X(Y, metaclass=M): ...` now calls `M.__new__` for real, with `super().__new__`/direct stub-base `.__new__` access both bottoming out at a real class-build fallback); `object.__setattr__(obj, '__dict__', newdict)` bulk-namespace-replace; `issubclass`/`isinstance` accepting builtin types as either argument; `dict.keys()` as a real (order-preserving) dict_keys-shaped view usable with the set operators; `v.__class__` returning the real constructible builtin type instead of a bare stand-in. Two more generically important interpreter bugs found along the way (not pydantic-specific): `from pkg import name` was masking real fallback-import errors behind a generic message; `globals()`/`locals()` at true module top level leaked writes into the shared builtins module. Full phased blow-by-blow (every fix with its own regression test) in `FASTAPI_PLAN.md` | `Modules/ReModule.cs`, `Modules/DateTimeModule.cs`, `Modules/IpAddressModule.cs`, `Modules/PathlibModule.cs`, `Modules/WeakrefModule.cs`, `Modules/PickleModule.cs`, `Modules/ColorSysModule.cs`, `Modules/MiscModules.cs`, `Modules/GenericAliasModule.cs`, `Interpretation/Interp.cs` (`ExecClassDef`, `TryGetAttr`), `Runtime/PyClass.cs` (`Metaclass`), `Runtime/PyDict.cs` (`PyDictKeysView`), `Builtins/Builtins.cs`; tests `M6_Stdlib`, `M4_Functions/MetaclassTests.cs`, `M16_FastApi`; full log in `FASTAPI_PLAN.md` |
+| 2e — starlette + ASGI + real FastAPI | **Dozens more real gaps closed** getting real starlette 1.4.1 + anyio, then real fastapi 0.99.1, running end to end: new stdlib modules `shlex`, `contextvars`, `importlib`(`.util`), `textwrap`, `subprocess` (`Popen` on `System.Diagnostics.Process`), `tempfile`, `queue` (thread-safe, `BlockingCollection`-backed), `secrets`, `concurrent.futures.Future`, `html`; real `match`/`case` structural pattern matching (PEP 634, full parser + interpreter support); real **async generators** (`PyAsyncGenerator`, hybridizing yield- and await-suspension) powering `contextlib.asynccontextmanager` and WebSocket streaming helpers for real; a real **recursion-depth guard** (`RecursionError` at CPython's default 1000, on a real 64MB-stack execution thread); real `__slots__`-backed per-instance storage (`PyClass.HasSlot`/`PyInstance.Slots`) closing pydantic's `__fields_set__` leak; a real `memoryview` builtin; real PEP 604 (`X \| Y`)/PEP 585 (`tuple[int, str]`) runtime support; three real, generically-important concurrency/threading bugs (`Importer.ImportAbsolute` holding its lock across a recursive *execute*, letting a module-level generator deadlock a second thread; two non-thread-safe `Dictionary`s in `GenericAliasModule` corrupting under real parallel test execution, fixed with `ConcurrentDictionary`/`[ThreadStatic]`); real `asyncio.current_task()`/`Task`-is-a-`Future` fixes; real `signal.signal()` (SIGINT/SIGTERM via .NET `PosixSignalRegistration`) for graceful ASGI-server shutdown. Full phased blow-by-blow (every fix with its own regression test, ~120 new tests total across Phases 3–4) in `FASTAPI_PLAN.md` | `Modules/` (several new), `Interpretation/Interp.cs`, `Runtime/Async.cs` (`PyAsyncGenerator`), `Runtime/PyClass.cs`/`PyInstance.cs` (slots), `Parsing/Parser.cs`+`Ast.cs` (`match`/`case`); samples [asgi_server.py](samples/asgi_server.py), [fastapi_demo.py](samples/fastapi_demo.py); tests `M16_FastApi`; full log in `FASTAPI_PLAN.md` |
 
 With `co_varnames` (names) + `__annotations__` (types, including `'return'`) the **signature is
-complete**: the framework injects every parameter, treating unannotated ones as `str` (like FastAPI).
+complete**: the framework injects every parameter, treating unannotated ones as `str` (like FastAPI)
+— superseded in practice once real FastAPI/pydantic took over parameter injection/validation for the
+actual scenario-2 target app (2e), though `http_api.py`'s own hand-rolled injector still works as
+documented for the pre-FastAPI "walking skeleton" stage (2.0/2.0+).
 
-**Known remaining gaps for scenario 2** (not yet closed): `inspect.signature` as an idiomatic wrapper
-over `__code__`; evaluating annotations as strings for forward refs; `*args`/`**kwargs` parameters not
-handled by the framework's injector.
+**Scenario 2 is now fully done.** The handful of items noted along the way as intentionally
+out-of-scope: `except*` syntax (PEP 654 exception groups — `BaseExceptionGroup`/`ExceptionGroup` exist
+as real types, but the `except*` syntax itself isn't parsed), a nested-import `locals()`/`globals()`
+scoping edge case, and hot-reload-on-file-change for `asgi_server.py` (a dev-only convenience). None
+of these blocked the real, live, end-to-end FastAPI milestone.
 
 ---
 

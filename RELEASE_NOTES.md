@@ -155,9 +155,41 @@ The heaviest prerequisite of the FastAPI scenario — native asynchrony — is i
   server where each connection is its own Task and a slow handler does **not** block the others.
   Verified end-to-end (`curl` on all routes + a real TCP request from an xUnit test) and covered by
   22 new tests in [M10_Async](src/PySharp.Tests/M10_Async/).
-- **Still out of scope:** async generators (`yield` inside `async def`), async synchronization
-  primitives (`asyncio.Lock`/`Event`/`Queue`/`Semaphore`), and the remaining FastAPI stack
-  (`re`/`datetime`/`inspect`, an ASGI server, pydantic — `pydantic-core` is compiled in Rust).
+- **Still out of scope at the time:** async generators (`yield` inside `async def`), async
+  synchronization primitives (`asyncio.Lock`/`Event`/`Queue`/`Semaphore`), and the remaining FastAPI
+  stack (`re`/`datetime`/`inspect`, an ASGI server, pydantic — `pydantic-core` is compiled in Rust).
+  **All of these are done now — see the next section.**
+
+### FastAPI (scenario 2) — complete (2026-08-10)
+
+The **key scenario** of the roadmap: a real, unmodified `FastAPI()` app — full CRUD, typed path/query
+params, real pydantic request-body validation, `HTTPException`, WebSockets, graceful shutdown — served
+live over real HTTP entirely by PySharp, zero framework code modified.
+
+- **pydantic v1** (chosen over v2 to avoid the `pydantic-core` Rust wall): `import pydantic` succeeds;
+  a `BaseModel` subclass constructs, validates real field types, raises real `ValidationError`, and
+  serializes via `.dict()`/`.json()`. Required real (simplified) **custom-metaclass support** in
+  `ExecClassDef` — the first scenario where "custom metaclasses are ignored" (a deliberate prior
+  simplification) actually blocked something. A 30-pattern real-world robustness sweep then probed
+  field types/validators/`Config` options well beyond any one sample app's needs.
+- **starlette 1.4.1 + anyio** (both real, unmodified, from PyPI): real ASGI request dispatch, routing,
+  exception handling (default + custom), static files, WebSockets (including real async-generator-
+  backed streaming helpers), and lifespan events — all verified against real, unmodified packages.
+- **`samples/asgi_server.py`**: a real, minimal, reusable ASGI/3 HTTP server over PySharp's own async
+  socket I/O — real RFC 6455 WebSocket handshake/framing/fragmentation, and real `signal.signal()`
+  (SIGINT/SIGTERM)-backed graceful shutdown.
+- **`samples/fastapi_demo.py`**: the live target app, run as a background process and driven entirely
+  with real `curl` over real HTTP/1.1 — every route matched hand-derived expected output exactly.
+- **New language/runtime capability landed along the way** (general-purpose, not FastAPI-specific):
+  real `match`/`case` structural pattern matching (PEP 634); real **async generators** (a new
+  `PyAsyncGenerator`, hybridizing yield- and await-suspension); a real recursion-depth guard
+  (`RecursionError` at CPython's default limit, on a real 64MB-stack thread); real `__slots__`-backed
+  per-instance storage separate from an instance's regular attribute dict; three real, generically
+  important concurrency bugs found and fixed (`Importer.ImportAbsolute` holding its lock across a
+  recursive *execute*, and two non-thread-safe dictionaries corrupting under real parallel test
+  execution).
+- Dozens of real interpreter/stdlib gaps found and fixed round by round — full phased blow-by-blow in
+  `FASTAPI_PLAN.md`.
 
 ---
 

@@ -2707,13 +2707,36 @@ whatever real gaps that turns up.
   just the interpreter-level mechanism). Full suite green: 1041/1041 (up from 1019), confirmed via 8
   consecutive full-suite runs.
 
-## Phase 5 — docs
+## Phase 5 — docs ✅ (2026-08-11)
 
-- [ ] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
+- [x] 5.1 ROADMAP.md: scenario 2 status flip to done (or partial, with a clear remaining-gap list),
   interpreter evolution log entries for every stdlib module/fix this plan lands.
-- [ ] 5.2 RELEASE_NOTES.md + version bump (ask the author for the version number, same as
+      — *Note:* before touching docs, re-verified the current state was still real and green (not
+      stale from a prior session): full suite 1228/1228, `M16_FastApi` 45/45 (which exercises
+      `fastapi_demo.py` against real, installed fastapi/starlette/pydantic/httpx packages, not
+      mocks). Flipped scenario 2's header, table row, and 2d sub-item to ✅ Done; added a
+      consolidated "2e — starlette + ASGI + real FastAPI" row to the interpreter evolution log table
+      (2c/2d's pydantic row already existed; 2e covering Phases 3-4 was entirely missing); removed
+      the stale "known remaining gaps" note left over from the pre-FastAPI hand-rolled injector
+      stage, replaced with the actual small out-of-scope items (`except*` syntax, a nested-import
+      scoping edge case, hot-reload).
+- [x] 5.2 RELEASE_NOTES.md + version bump (ask the author for the version number, same as
   AIOMQTT_PLAN.md's 7.2).
-- [ ] 5.3 README.md "Verified scenarios and limits" update.
+      — *Note:* added as a new "### FastAPI (scenario 2) — complete" subsection under the existing
+      `## v1.0.0` entry, matching this file's own established pattern (incremental `###` subsections
+      documenting milestones as they land, not a version bump per milestone — the numpy shim's own
+      Phase 12.4 work the day before *did* introduce a new `## v1.1.0` top-level entry, which stays
+      as the next one after this). No csproj `<Version>` bump needed here — Phase 5 is docs-only, no
+      interpreter/library code changed, and the currently-packed 1.6.0 tool (from the numpy work)
+      already includes everything FastAPI needs.
+- [x] 5.3 README.md "Verified scenarios and limits" update.
+      — *Note:* moved FastAPI from the stale "In progress"/"Does not work (yet)" sections (which
+      described the pre-`__slots__` `__fields_set__` gap and "ASGI stack still missing" — both long
+      since fixed) into "Done scenarios", with an accurate summary of what actually works. Also fixed
+      two other stale claims the same table/list carried: `sqlite3`/`importlib`/`email`/`http` were
+      still listed as "still missing" (all exist now); the `FastAPI` "does not work" table row was
+      replaced with the two scenarios that genuinely still don't (Postgres, blocked on server
+      availability; Django, not started).
 
 ---
 
@@ -3035,3 +3058,23 @@ uvicorn-equivalent process manager (today's `serve()` is single-connection-at-a-
 no graceful shutdown/reload story), and the pre-existing, separately-scoped gaps noted along the way
 (`except*` syntax, nested-import `locals()` scoping, non-`'__dict__'`-slots-only instances still
 getting a usable `__dict__`).
+
+**Phase 4.3–4.5 closed every one of those smaller-scoped items except the deliberately-deferred
+ones**: real WebSocket support landed in `fastapi_demo.py` itself (4.3.1–4.3.3, RFC 6455 handshake +
+framing + fragmentation + closing handshake, verified live both with a from-scratch client and
+through starlette's own `WebSocket`); real graceful shutdown via `signal.signal()` (4.4, plus two
+genuine event-loop bugs found and fixed chasing it); and the 30-pattern pydantic robustness sweep
+(4.5, 7 more real gaps closed). 1041/1041 tests green, confirmed via 8 consecutive full-suite runs.
+
+**Phase 5 (docs) is now done too (2026-08-11) — this plan is complete.** ROADMAP.md's scenario 2 was
+flipped to ✅ Done (status header, table row, the 2d sub-item, and a new interpreter-evolution-log row
+covering Phase 3-4's work, which had been entirely missing from that table); RELEASE_NOTES.md got a
+new subsection; README.md's "Verified scenarios and limits" section had FastAPI moved out of "In
+progress"/"does not work" (both describing gaps closed a session or more ago) and into "Done", plus
+two other stale claims in the same section fixed along the way (`sqlite3`/`importlib`/`email`/`http`
+were still listed missing; they aren't). Re-verified the underlying claim was still true before
+writing any of this: full suite 1228/1228, `M16_FastApi` 45/45, against real installed
+fastapi/starlette/pydantic/httpx packages (not mocks) — no regression from the numpy shim work done
+in between. Genuinely remaining, intentionally out of scope: `except*` syntax (PEP 654), the
+nested-import `locals()`/`globals()` scoping edge case, hot-reload-on-file-change for
+`asgi_server.py`. None of these block scenario 2's "done" status.

@@ -463,13 +463,18 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   generic-alias tracking).
 - **Done scenarios**: Azure IoT Hub device (MQTT, sync **and async**), a sync FastAPI-shaped HTTP API,
   an **async FastAPI-shaped HTTP API on a real asyncio event loop**
-  ([async_api.py](samples/async_api.py)), an MQTT subscribe round-trip, and YAML+JSON
-  (de)serialization — see [ROADMAP.md](ROADMAP.md) and [samples/](samples/).
-- **In progress**: real **pydantic v1** (pure Python, from PyPI unmodified) — `import pydantic`
-  succeeds, and a `BaseModel` subclass constructs, validates real field types, raises real
-  `ValidationError`, and serializes via `.dict()`. See [FASTAPI_PLAN.md](FASTAPI_PLAN.md) for the
-  full probe-driven log and the current known gap (`.dict()` leaking a `__fields_set__` key, since
-  real `__slots__`-backed separate storage isn't implemented).
+  ([async_api.py](samples/async_api.py)), a **real, unmodified FastAPI app** — full CRUD, real
+  pydantic v1 validation, WebSockets, graceful shutdown — served live over real HTTP entirely by
+  PySharp ([samples/fastapi_demo.py](samples/fastapi_demo.py), scenario 2, see below), an MQTT
+  subscribe round-trip, and YAML+JSON (de)serialization — see [ROADMAP.md](ROADMAP.md) and
+  [samples/](samples/).
+- **FastAPI (scenario 2, the roadmap's key scenario) is done**: real, unmodified `fastapi`/`starlette`/
+  `anyio`/`pydantic` v1 (all from PyPI) run a real `FastAPI()` app end to end — routing, typed path/
+  query params, pydantic request-body validation (incl. the real 422 error shape), `HTTPException`,
+  WebSockets, and graceful shutdown (`signal.signal()`). Getting there required real (simplified)
+  custom-metaclass support, real `__slots__`-backed per-instance storage, real `match`/`case`, real
+  async generators, and a real recursion-depth guard — see [FASTAPI_PLAN.md](FASTAPI_PLAN.md) for the
+  full probe-driven log.
 - **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt,
   pydantic v1).
 - **numpy**: a real C# shim (not the real numpy, which is a compiled C extension a from-scratch
@@ -483,10 +488,11 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 
 | Scenario | Verified blocker | Feasibility |
 |---|---|---|
-| **SQLite / Postgres** | the `sqlite3` module is missing (in CPython it is a C extension, not on PyPI) | **Feasible**: add a C# `sqlite3` DB-API module backed by `Microsoft.Data.Sqlite` (Postgres via `Npgsql`), following the other modules in `Modules/` |
-| **FastAPI** | `async`/`await` ✅, an `asyncio` event loop ✅, and pydantic v1 (`BaseModel` construct/validate) ✅ now exist; still missing: an ASGI stack (starlette/uvicorn) and full `__slots__` support | **Well underway**: async, the stdlib surface pydantic needs, and a working `BaseModel` are all done. What's left is the ASGI server layer. See [ROADMAP.md](ROADMAP.md) scenario 2 and [FASTAPI_PLAN.md](FASTAPI_PLAN.md) |
+| **Postgres** | `Npgsql` support exists in principle (same pattern as `pyodbc`/SQL Server) but is blocked on having a real Postgres server available to verify against | **Feasible, blocked on environment**: SQLite and SQL Server (via `pyodbc`/`Microsoft.Data.SqlClient`) both already work — see [ROADMAP.md](ROADMAP.md) scenario 3 and [SQL_PLAN.md](SQL_PLAN.md) |
+| **Django** | a real, unmodified Django app needs WSGI, the ORM (real SQL generation + migrations, heavy metaclass use), the template engine, `django.contrib.admin`, class-based views | **Not started**: much heavier than FastAPI (scenario 2, now done) — see [ROADMAP.md](ROADMAP.md) scenario 10 |
 
-Modules still missing today: `importlib`, `sqlite3`, `email`/`http` (needed for the ASGI work above).
+`sqlite3` (scenario 3), `importlib`, and `email`/`http` (scenario 2, `FASTAPI_PLAN.md`) are no longer
+missing — all three now exist, closing out gaps this section used to list.
 Adding one means writing a module in [src/PySharpLib/Modules/](src/PySharpLib/Modules/) and
 registering it in `StdlibModules.RegisterAll`.
 
