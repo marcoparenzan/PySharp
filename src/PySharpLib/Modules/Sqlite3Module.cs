@@ -60,7 +60,29 @@ public static class Sqlite3Module
         d["threadsafety"] = (BigInteger)1;
         d["PARSE_DECLTYPES"] = (BigInteger)1;
         d["PARSE_COLNAMES"] = (BigInteger)2;
+        // Real CPython: `sqlite3.version`/`version_info` are the (long-stale, effectively frozen)
+        // "pysqlite" wrapper version — not the underlying SQLite library's own version. Found via
+        // real sqlalchemy's own `dialects/sqlite/pysqlite.py` version-gating logic reading both.
+        d["version"] = "2.6.0";
+        d["version_info"] = new PyTuple(new object[] { (BigInteger)2, (BigInteger)6, (BigInteger)0 });
+        d["sqlite_version"] = SqliteVersionString;
+        d["sqlite_version_info"] = new PyTuple(SqliteVersionString.Split('.')
+            .Select(p => (object)new BigInteger(int.Parse(p))).ToArray());
         return m;
+    }
+
+    // Real underlying SQLite C library version (via Microsoft.Data.Sqlite's real driver), not a
+    // hardcoded guess — computed once. Found via real sqlalchemy's own `dialects/sqlite/base.py`
+    // version-gated behavior (`self.dbapi.sqlite_version_info < (3, 7, 16)`, etc.).
+    private static readonly string SqliteVersionString = GetSqliteVersion();
+
+    private static string GetSqliteVersion()
+    {
+        using var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT sqlite_version();";
+        return (string)cmd.ExecuteScalar()!;
     }
 
     // ---------------------------------------------------------------- Connection
@@ -157,6 +179,38 @@ public static class Sqlite3Module
             bool hadExc = a.Length > 1 && a[1] is not PyNone;
             if (hadExc) RollbackTx(connInst); else CommitTx(connInst);
             return false;
+        });
+
+        // Real CPython sqlite3.Connection.create_function(name, narg, func, *, deterministic=False):
+        // registers a real custom SQL function, backed by Microsoft.Data.Sqlite's own
+        // SqliteConnection.CreateFunction (a real SQLite C API sqlite3_create_function binding, not
+        // a stub). Found via real sqlalchemy's own `dialects/sqlite/pysqlite.py` `on_connect`
+        // (registers `regexp`/`floor` unconditionally on every new connection).
+        Add("create_function", (interp, a, kwargs) =>
+        {
+            var conn = Conn((PyInstance)a[0]);
+            string name = PyOps.Str(interp, a[1]);
+            int narg = (int)PyOps.AsBigInt(a[2], "narg");
+            object func = a[3];
+            bool deterministic = kwargs is not null && kwargs.TryGetValue("deterministic", out var dv)
+                && PyOps.Truthy(interp, dv);
+
+            object? Invoke(object?[] sqlArgs)
+            {
+                var pyArgs = sqlArgs.Select(FromSqliteValue).ToArray();
+                return ToSqliteValue(interp.Call(func, pyArgs));
+            }
+
+            switch (narg)
+            {
+                case 0: conn.CreateFunction(name, () => Invoke(Array.Empty<object?>()), deterministic); break;
+                case 1: conn.CreateFunction<object, object>(name, a1 => Invoke(new[] { a1 }), deterministic); break;
+                case 2: conn.CreateFunction<object, object, object>(name, (a1, a2) => Invoke(new[] { a1, a2 }), deterministic); break;
+                case 3: conn.CreateFunction<object, object, object, object>(name, (a1, a2, a3) => Invoke(new[] { a1, a2, a3 }), deterministic); break;
+                case 4: conn.CreateFunction<object, object, object, object, object>(name, (a1, a2, a3, a4) => Invoke(new[] { a1, a2, a3, a4 }), deterministic); break;
+                default: throw PyErr.NotImplementedError($"create_function with {narg} arguments not supported");
+            }
+            return PyNone.Instance;
         });
 
         cls.Dict["in_transaction"] = new PyProperty
@@ -627,9 +681,9 @@ public static class Sqlite3Module
         _ => throw PyErr.Raise(InterfaceError, $"Error binding parameter: type '{PyOps.TypeName(v)}' is not supported"),
     };
 
-    private static object FromSqliteValue(object v) => v switch
+    private static object FromSqliteValue(object? v) => v switch
     {
-        DBNull => PyNone.Instance,
+        null or DBNull => PyNone.Instance,
         long l => (BigInteger)l,
         double d => d,
         string s => s,

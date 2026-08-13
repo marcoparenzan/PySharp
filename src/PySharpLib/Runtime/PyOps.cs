@@ -146,6 +146,36 @@ public static class PyOps
         // sides read the same already-boxed NaN).
         if (ReferenceEquals(a, b) && a is not double)
             return true;
+        // Real CPython: a `str` subclass instance (e.g. real sqlalchemy's own `quoted_name(str)`)
+        // hashes/compares by *value*, exactly like a plain str — `d[quoted_name("x")]` and `d["x"]`
+        // are the same dict slot. Checked before the generic PyInstance dead-end below (which has no
+        // value-equality case for any instance — every other user class compares by identity only,
+        // a separate, pre-existing simplification unrelated to this).
+        if (a is PyInstance sia && sia.StrValue is not null)
+            return b is string sbv ? sia.StrValue == sbv
+                : b is PyInstance sib && sib.StrValue is not null && sia.StrValue == sib.StrValue;
+        if (b is PyInstance sib2 && sib2.StrValue is not null)
+            return a is string sav && sav == sib2.StrValue;
+        // Same reasoning for a real `class Foo(int): ...` instance (see IntMethods' own doc comment,
+        // TypeMethods.cs) — but scoped specifically to instances whose class derives from the "int"
+        // pseudo-base, not any PyInstance that merely happens to carry a `.Dict["value"]` BigInteger
+        // (e.g. a plain, non-int `Enum` member with an int value, which must NOT become numerically
+        // hashable/equal-by-value at this low level — only a real int subclass does in CPython).
+        if (a is PyInstance iia && IsIntSubclassInstance(iia, out var iiaVal))
+            return b switch
+            {
+                BigInteger bb => iiaVal == bb,
+                bool bbool => iiaVal == (bbool ? BigInteger.One : BigInteger.Zero),
+                PyInstance iib when IsIntSubclassInstance(iib, out var iibVal) => iiaVal == iibVal,
+                _ => false,
+            };
+        if (b is PyInstance iib2 && IsIntSubclassInstance(iib2, out var iib2Val))
+            return a switch
+            {
+                BigInteger ab => ab == iib2Val,
+                bool abool => (abool ? BigInteger.One : BigInteger.Zero) == iib2Val,
+                _ => false,
+            };
         switch (a)
         {
             case bool ab when b is bool bb: return ab == bb;
@@ -208,6 +238,21 @@ public static class PyOps
         return false;
     }
 
+    /// <summary>True when `inst` is a real `class Foo(int): ...` subclass instance (not merely any
+    /// PyInstance that happens to carry a `.Dict["value"]` BigInteger, e.g. a plain non-int `Enum`
+    /// member) — see PyEquals'/PyHash's own use of this just above/below.</summary>
+    private static bool IsIntSubclassInstance(PyInstance inst, out BigInteger value)
+    {
+        if (inst.Class.IsSubclassOf(Interp.GetPseudoBaseClass("int"))
+            && inst.Dict.TryGet("value", out var v) && v is BigInteger bi)
+        {
+            value = bi;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
     public static int PyHash(object o) => o switch
     {
         PyNone => 0,
@@ -215,6 +260,10 @@ public static class PyOps
         BigInteger i => i.GetHashCode() == int.MinValue ? 0 : HashBigInt(i),
         double d => HashDouble(d),
         string s => s.GetHashCode(),
+        // A `str`/`int` subclass instance hashes exactly like its plain value — see PyEquals' own
+        // matching cases just above.
+        PyInstance si when si.StrValue is not null => si.StrValue.GetHashCode(),
+        PyInstance ii when IsIntSubclassInstance(ii, out var iv) => HashBigInt(iv),
         PyBytes b => b.GetHashCode(),
         PyTuple t => HashTuple(t),
         PyFrozenSet f => f.Items.Aggregate(0, (acc, x) => acc ^ PyHash(x)),

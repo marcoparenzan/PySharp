@@ -212,23 +212,151 @@ Real gaps found and fixed so far, probing with a real `declarative_base()` + map
   *metaclass* was registered (e.g. any class built via `DeclarativeMeta`) — completely broken by the
   downgrade. Fixed in the `type()` builtin's 1-arg form.
 
-**Current wall**: real `class quoted_name(util.MemoizedSlots, str): ...` — a genuine `str` subclass,
-used pervasively for column/table/identifier names throughout the ORM and SQL-compiler pipeline
-(`"..." + a_quoted_name_instance` inside `orm/mapper.py`'s own logging helper is where it first
-surfaces, but this is not a one-off — quoted_name instances flow through comparison, hashing,
-dict-key use, and the full string-method surface elsewhere). This is a substantially bigger and
-riskier undertaking than the earlier `dict`/`list`/`set` subclassing work: those are already
-boxed/wrapped C# reference types (`PyDict`/`PyList`/`PySet`), so giving a `PyInstance` a lazily-
-allocated backing store and installing real dunders was a contained, mechanical extension. Real
-Python strings are represented here as raw, unboxed C# `string` values threaded natively through
-nearly the entire interpreter (literals, dict keys, f-strings, the `TypeMethods.TryGetBuiltinAttr`
-`obj switch { string => StrModules.Table, ... }` dispatch, countless internal `is string`/`(string)`
-casts) — there is no existing seam to hang a "real string subclass instance" off of without either
-(a) a much larger refactor giving every such internal site a `PyInstance`-aware fallback, or (b) a
-narrower, admittedly-incomplete shim (e.g. only `__new__`/`__add__`/`__radd__`/`__str__`/`__eq__`/
-`__hash__`, falling short of full str-method parity) that would likely keep hitting the same class of
-wall deeper in the compiler pipeline. Flagged for an explicit decision on how to proceed rather than
-silently picking either option.
+- [x] **A new, substantial capability (explicit author go-ahead after a size/risk flag): full real
+  `class Foo(str): ...` subclassing.** Instances behave as real strings everywhere — all real str
+  methods, concatenation (`+`/`+=` either direction), comparison operators, `len`/indexing/slicing/
+  iteration/`in`, and (critically) value-based hashing/equality so a subclass instance and its plain
+  `str` equivalent are the *same* dict key (`d[quoted_name("x")]` and `d["x"]` collide, matching real
+  CPython). Implemented via `PyInstance.StrValue` (set once at construction, matching real string
+  immutability) plus real dunders/methods installed on the "str" pseudo-base
+  (`Interp.GetPseudoBaseClass`, reusing `StrModules.Table` from `TypeMethods.cs`), an `isinstance`
+  fix, and `PyOps.PyHash`/`PyEquals` value-equality special cases. `TypeMethods.StrArg` (the shared
+  helper nearly every str method's secondary argument goes through) was also fixed to unwrap a
+  str-subclass instance, so passing one anywhere a plain string is expected just works. Found via
+  real sqlalchemy's own `sql/elements.py` `class quoted_name(util.MemoizedSlots, str): ...`, used
+  pervasively for column/table/identifier names throughout the ORM and SQL-compiler pipeline.
+- [x] **A real, general interpreter bug this exposed: `super().__new__(cls, value)` incorrectly
+  prepended an implicit extra argument.** Real CPython's `__new__` is implicitly a staticmethod —
+  never auto-bound — but `PySuper`'s attribute dispatch wrapped *every* found function/builtin as a
+  bound method regardless of name, silently shifting every explicit argument over by one position
+  (`value` landing where `cls` was expected one level down). This had been invisible until now
+  because the existing `object.__new__` fallback is lenient enough to mask it for the common
+  zero-extra-arg case. Fixed by special-casing `__new__` in the `PySuper` case of
+  `Interp.TryGetAttr` to stay unbound. Found via real sqlalchemy's own `quoted_name.__new__`:
+  `super().__new__(cls, value)` was silently constructing a broken instance whose `str()`/`repr()`
+  printed the *class itself* instead of the value.
+- [x] **A second real, general bug in the same family: a plain class attribute referencing a builtin
+  type or a factory-returned closure (e.g. `execute_sequence_format = tuple`,
+  `schema_for_object = operator.attrgetter("schema")`) was incorrectly auto-bound to `self` on
+  instance access**, exactly as if it were a real method — real CPython only auto-binds genuine
+  `def`-defined functions; a plain value or a callable *object* (not a function) never does. Fixed
+  two ways: (a) `BindClassAttr` now leaves a `PyBuiltinFunction` unbound when its name is a known
+  builtin type constructor (`BuiltinTypeNames`); (b) `operator.attrgetter`/`itemgetter`/
+  `methodcaller` now wrap their returned closures in `PyStaticMethod` (which never auto-binds, and
+  is now itself directly callable — a new `CallCore` case delegates to the wrapped function, so
+  `sorted(items, key=operator.attrgetter(...))` keeps working). Found via real sqlalchemy's own
+  `engine/default.py` `dialect.execute_sequence_format()` (silently became
+  `tuple(dialect_instance)`, "not iterable") and `sql/compiler.py`
+  `self.schema_for_object(table)` (silently called with `table` shifted out and `self` in its place).
+- [x] Real `dict.__missing__` support — a dict subclass overriding it gets it called instead of a
+  raw `KeyError` on a miss (real CPython's mechanism behind `collections.defaultdict`). Found via
+  real sqlalchemy's own `sql/base.py` `DialectKWArgs.dialect_options = util.PopulateDict(...)`
+  (`util/_collections.py`'s own real `PopulateDict(dict)` using `__missing__` to lazily populate
+  per-dialect option dicts on first access).
+- [x] **A real, general parser/semantics gap: `typing.Literal[...]`'s own arguments were being
+  ForwardRef-wrapped like every other generic subscript's string arguments** — but `Literal`'s
+  arguments are literal *values*, never forward-referenced type names, so `Literal[...].__args__`
+  held `ForwardRef('x')` objects instead of the plain strings, breaking any real `x in
+  SomeLiteral.__args__` check. Found via real sqlalchemy's own `orm/session.py`
+  `JoinTransactionMode = Literal["conditional_savepoint", ...]`, whose own `Session.__init__`
+  validates its default value against `.__args__` this way — sqlalchemy's own default was being
+  rejected by sqlalchemy's own validation. Fixed in `GenericAliasModule.Subscript`.
+- [x] **Real "str enum" mixin support** (`class Color(str, Enum): RED = "red"`) — each member is a
+  real `str` too (multiple inheritance, matching real CPython), not just an `Enum` member that
+  happens to hold a string value: `Color.RED == "red"` is real str equality/hashing, usable directly
+  as a dict key interchangeably with the plain string. `ConvertToEnum` now also sets
+  `PyInstance.StrValue` on each member when the enum class derives from the "str" pseudo-base — found
+  live via a real pydantic str-enum field crashing with `str.__eq__(): invalid argument type` (an
+  enum member built directly by `ConvertToEnum`, bypassing `str.__new__`, never had `StrValue` set,
+  yet the "str" pseudo-base's own `__eq__` was winning the MRO lookup ahead of `Enum`'s).
+- [x] Real `BaseException.with_traceback(tb)` — sets `__traceback__` and returns the same instance,
+  the common `raise value.with_traceback(traceback)` re-raise idiom. Found via real sqlalchemy's own
+  `util/langhelpers.py` `reraise`-style `__exit__` handler (`pool/base.py`'s connection-creation
+  error path).
+- [x] **A real, general gap: `**expr` unpacking only ever accepted a literal `dict`**, rejecting any
+  real mapping-protocol object — including a real `class Foo(dict): ...` subclass instance. Fixed in
+  `Interp.EvalCall` to also accept anything satisfying the mapping protocol (reusing
+  `PyOps.TryGetMappingItems`, the same real `keys()`+`__getitem__` duck-typing check `dict.update()`
+  already used). Found via real sqlalchemy's own `pool/base.py` connection-creator call chain
+  unpacking a real `immutabledict` of connect args with `**`.
+- [x] `set.isdisjoint`/`.difference_update`/`.intersection_update`/`.symmetric_difference_update`
+  didn't exist (only the non-mutating `union`/`intersection`/`difference`/`symmetric_difference` and
+  plain `update` did) — added, plus the matching `frozenset.isdisjoint`. Found via real sqlalchemy's
+  own `util/topological.py` `sort_as_subsets` (dependency-graph topological sort for DDL emission
+  order).
+- [x] `sqlite3.dbapi2`, `sqlite3.sqlite_version`/`sqlite_version_info`,
+  and `sqlite3.Connection.create_function` didn't exist. `sqlite3.dbapi2` re-exports the real,
+  already-imported `sqlite3` module (a common real idiom, `from sqlite3 import dbapi2 as sqlite`);
+  `sqlite_version_info` reports the real underlying SQLite C library version (via a real
+  `SELECT sqlite_version()`, not a hardcoded guess); `create_function` registers a real callable SQL
+  function backed by Microsoft.Data.Sqlite's own `SqliteConnection.CreateFunction` (arities 0–4).
+  Found via real sqlalchemy's own `dialects/sqlite/pysqlite.py` `import_dbapi`/`on_connect`
+  (registers `regexp`/`floor` as real SQL functions on every new connection).
+
+- [x] **A new, substantial capability (explicit author go-ahead after a size/risk flag): real
+  `class Foo(int): ...` subclassing**, the same general mechanism as dict/list/set/str — instances
+  behave as real ints (arithmetic `+ - * // % & | ^ << >>`, comparisons, `bool`/`hash`/`repr`, and
+  value-based hashing/equality so a subclass instance and its plain `int` equivalent are the same
+  dict key), via the *existing* `PyInstance.Dict["value"]` convention already shared by the
+  httpx-style `int.__new__(cls, value)` special case and by `IntEnum` members (`PyOps.AsBigInt`
+  already read either shape) — no new field needed. Scoped specifically to instances whose class
+  derives from the "int" pseudo-base in `PyOps.PyHash`/`PyEquals`, so a plain non-int `Enum` member
+  that merely happens to hold an int value does *not* become numerically hashable/equal-by-value at
+  this level (only a real int subclass does in CPython). Found via real sqlalchemy's own
+  `util/langhelpers.py` `class symbol(int): ...` (`util.symbol`, real int-valued sentinels combined
+  with `&`/`|`, e.g. inside `FastIntFlag`'s own machinery).
+- [x] **A real, general interpreter bug: `operator.eq`/`ne`/`lt`/`le`/`gt`/`ge` were wired to
+  `Interp.BinaryOp`** (arithmetic dispatch, which has no concept of comparison at all and always
+  raised "unsupported operand type(s)") **instead of `Interp.CompareRaw`** (which also preserves a
+  non-bool `__eq__`-etc. return value, e.g. a real SQL expression object, matching what the `==`
+  syntax itself already did). Found via real sqlalchemy's own expression-building internals, which
+  call `operator.eq`/etc. as plain functions pervasively, not just via `==` syntax. `CompareRaw`
+  widened from `private` to `internal` so `OperatorModule` can call it directly.
+- [x] **A real, general interpreter gap: introspecting a builtin type *constructor* directly (`str`,
+  `int`, ... — not a user class) via `.__mro__`/`.__bases__` fell all the way through to a generic
+  AttributeError**, misreported as `'function' object has no attribute '__mro__'` (a builtin type
+  constructor and a plain function share the same internal representation, both typed as
+  `"function"`). Fixed by delegating to the same "str"/"int"/... pseudo-base `class Foo(str): ...`
+  already uses. Found via real sqlalchemy's own `sql/coercions.py` `expect()`:
+  `resolved.__class__.__mro__` where `resolved` is a plain string, i.e. `str.__mro__`.
+- [x] **A real, general, and notably subtle interpreter gap: reassigning a function's
+  `__defaults__`/`__kwdefaults__` was stored as an inert attribute, never actually consulted by
+  argument binding** — real CPython's calling machinery always reads them fresh at call time, so
+  `func.__defaults__ = new_tuple` genuinely changes what a *future* call resolves unfilled parameters
+  to. `PyFunction.Defaults` (the dictionary argument-binding actually reads) is now updated in lock-
+  step whenever `__defaults__`/`__kwdefaults__` is reassigned, mapping the tuple positionally onto
+  the *trailing* N positional parameters (matching real CPython's own alignment rule) and merging
+  `__kwdefaults__` entries directly by name. Found via real sqlalchemy's own
+  `util/langhelpers.py` `decorator()` helper (a signature-preserving decorator factory used
+  pervasively, e.g. by `@_generative`): it `exec()`-generates a wrapper whose own source only has
+  dummy `None` placeholder defaults (to avoid embedding large default objects into generated code),
+  then does `decorated.__defaults__ = fn.__defaults__` to give the wrapper the *real* target
+  function's defaults — every one of these wrapped functions was silently losing its real default
+  argument values and failing with spurious "missing required argument" errors on the very first
+  call that relied on a default (e.g. `Engine`'s own `query_cache_size` default of 500 arriving as
+  `None`, or `UpdateBase.return_defaults()`'s own keyword defaults going missing).
+- [x] `re.compile(x)` didn't handle `x` already being a compiled `Pattern` (real CPython: idempotent,
+  returns it as-is) — always tried to treat it as raw pattern text and failed. Found via real
+  sqlalchemy's own `sql/compiler.py` bind-name-escaping logic re-passing a pre-compiled
+  `_bind_translate_re` through a `re.compile`-shaped helper.
+- [x] `re.match`/`search`/`fullmatch`/etc.'s subject-string coercion didn't accept a real
+  `class Foo(str): ...` subclass instance (only a literal `str`/`bytes`) — fixed in `ReModule`'s
+  shared `ToWorkingString` helper. Found via real sqlalchemy's own `sql/elements.py`
+  `class quoted_name(..., str): ...` identifiers flowing into real regex validation
+  (`_requires_quotes`'s `legal_characters.match(str(value))`).
+
+Real end-to-end progress verified so far against a real, unmodified sqlalchemy 2.0.51 + this
+project's own real `sqlite3` module: `declarative_base()`, a mapped `User` class definition,
+`Base.metadata.create_all(engine)` (full real `CREATE TABLE` DDL compilation and execution),
+`Session(engine)`, `session.add(...)`, and `session.commit()` running all the way into real INSERT
+statement compilation and flush execution all now work correctly against a real SQLite in-memory
+database. Currently debugging the next wall: `UpdateBase.return_defaults()` (itself a
+`@_generative`/`@util.decorator`-wrapped method) raising `missing required keyword-only argument:
+'cols'` — `cols` is actually a `*cols` var-args parameter in the real source, so something in the
+signature-preserving decorator's `compat.inspect_formatargspec`-based code generation (a hand-rolled
+shim standing in for a function real CPython itself removed in 3.11) is misreporting/misgenerating
+the wrapper's own var-args parameter as a required keyword-only one — not yet root-caused. The actual
+insert/query/read-back round trip is not yet verified end-to-end.
 
 ## Phase 2 — docs (not started)
 

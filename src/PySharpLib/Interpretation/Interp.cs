@@ -262,7 +262,7 @@ public sealed class Interp
                 object result = fn;
                 for (int i = d.Decorators.Count - 1; i >= 0; i--)
                     result = Call(Eval(d.Decorators[i], env), new[] { result });
-                env.Set(d.Name, result);
+                env.Set(MangleBindingName(d.Name, env), result);
                 break;
             }
 
@@ -524,6 +524,7 @@ public sealed class Interp
         var classEnv = new Env(env.Module, env)
         {
             IsClassScope = true,
+            MangleClassName = c.Name,
             EnumAuto = bases.Any(b => b.TryLookup("__is_enum__", out _))
                 ? new EnumAutoState { IsFlag = bases.Any(b => b.TryLookup("__is_flag__", out _)) }
                 : null,
@@ -673,16 +674,16 @@ public sealed class Interp
             if (!PseudoBases.TryGetValue(name, out var cls))
             {
                 cls = new PyClass(name, new List<PyClass>());
-                // Real `class Foo(dict/list/set): ...`: unlike int/str (immutable — a subclass
-                // instance never needs real scalar storage of its own), a mutable-container subclass
-                // instance genuinely needs to behave as that container (`f[k]`, `len(f)`, iteration,
-                // `.update()`/`.append()`/`.add()`, ...). Installing the matching *Methods.Table's
-                // dunders/methods here — the same ones `dict.<name>`/`list.<name>`/`set.<name>`
-                // resolve to when accessed on the builtin object itself — makes normal PyInstance
-                // attribute/`__getitem__`-etc. dispatch (already generic for any PyInstance) work for
-                // free. Found via real sqlalchemy's own `util/_py_collections.py`
-                // `immutabledict(ImmutableDictBase[_KT, _VT])` and `orm/collections.py`
-                // `InstrumentedList(list)`/`InstrumentedSet(set)`.
+                // Real `class Foo(dict/list/set/str): ...`: a subclass instance genuinely needs to
+                // behave as that builtin (`f[k]`, `len(f)`, iteration, `.update()`/`.append()`/
+                // `.add()`, real str methods, ...). Installing the matching *Methods.Table's
+                // dunders/methods here — the same ones `dict.<name>`/`list.<name>`/`set.<name>`/
+                // `str.<name>` resolve to when accessed on the builtin object itself — makes normal
+                // PyInstance attribute/`__getitem__`-etc. dispatch (already generic for any
+                // PyInstance) work for free. Found via real sqlalchemy's own
+                // `util/_py_collections.py` `immutabledict(ImmutableDictBase[_KT, _VT])`,
+                // `orm/collections.py` `InstrumentedList(list)`/`InstrumentedSet(set)`, and
+                // `sql/elements.py` `class quoted_name(util.MemoizedSlots, str): ...`.
                 if (name == "dict")
                     foreach (var (methodName, fn) in Runtime.DictMethods.Table)
                         cls.Dict[methodName] = fn;
@@ -691,6 +692,12 @@ public sealed class Interp
                         cls.Dict[methodName] = fn;
                 else if (name == "set")
                     foreach (var (methodName, fn) in Runtime.SetMethods.Table)
+                        cls.Dict[methodName] = fn;
+                else if (name == "str")
+                    foreach (var (methodName, fn) in Runtime.StrModules.Table)
+                        cls.Dict[methodName] = fn;
+                else if (name == "int")
+                    foreach (var (methodName, fn) in Runtime.IntMethods.Table)
                         cls.Dict[methodName] = fn;
                 PseudoBases[name] = cls;
             }
@@ -863,6 +870,16 @@ public sealed class Interp
                 member.Dict["_name_"] = key;
                 member.Dict["value"] = resolvedValue;
                 member.Dict["_value_"] = resolvedValue;
+                // Real CPython "str enum" mixin (`class Color(str, Enum): RED = "red"`): each member
+                // genuinely IS a real str too (multiple inheritance, same underlying value at the C
+                // level) — `Color.RED == "red"` is real str equality, not Enum's own `__eq__`. Since
+                // the "str" pseudo-base sits earlier in the MRO than Enum's for this base order, its
+                // `__eq__`/`__hash__`/etc. win the lookup and read `PyInstance.StrValue` — which nothing
+                // else here ever sets for an enum member (built directly, not via `str.__new__`).
+                // Found live via a real pydantic str-enum field crashing with "str.__eq__(): invalid
+                // argument type" the first time this member got compared.
+                if (resolvedValue is string sv && cls.IsSubclassOf(GetPseudoBaseClass("str")))
+                    member.StrValue = sv;
                 canonical.Add((resolvedValue, member));
             }
             cls.Dict[key] = member;
@@ -1334,7 +1351,7 @@ public sealed class Interp
             case AttributeExpr a:
             {
                 var obj = Eval(a.Obj, env);
-                DelAttr(obj, a.Name);
+                DelAttr(obj, MangleAttrName(a.Name));
                 break;
             }
             case IndexExpr i:
@@ -1357,6 +1374,40 @@ public sealed class Interp
         }
     }
 
+    /// <summary>Real CPython name mangling (the Python data model's own "private name mangling"
+    /// rule): an attribute name of the form `__name` (2+ leading underscores, not a dunder — at
+    /// most 1 trailing underscore) written lexically inside a class body's method is rewritten at
+    /// compile time to `_ClassName__name` (the class's own name, with ITS leading underscores
+    /// stripped, prepended) — so `self.__x` inside `class Foo:` really reads/writes
+    /// `self._Foo__x`. PySharp is a tree-walking interpreter with no separate compile step, so this
+    /// is applied here instead, at the point an `AttributeExpr`'s name is actually used, using the
+    /// currently-executing function's own `DefiningClass` (set at class-definition time) as the
+    /// mangling scope. Found via real sqlalchemy's own `sql/annotation.py` `Annotated.__init__`:
+    /// `self.__element = element`, read back elsewhere through the already-mangled literal
+    /// `self._Annotated__element` — without this, the two never agreed on the same instance slot,
+    /// and the resulting AttributeError cascaded into infinite `__getattr__` recursion.</summary>
+    private static string MangleAttrName(string name)
+    {
+        if (name.Length < 3 || name[0] != '_' || name[1] != '_' || name.EndsWith("__", StringComparison.Ordinal))
+            return name;
+        if (InnermostFrame?.Fn?.DefiningClass is not { } cls)
+            return name;
+        return "_" + cls.Name.TrimStart('_') + name;
+    }
+
+    /// <summary>The write/binding side of the same real CPython name-mangling rule (see
+    /// <see cref="MangleAttrName"/>) — a `__name`-shaped name bound *directly* in a class body's own
+    /// scope (`def __foo(self): ...`, a plain `__x = 1`) is stored under `_ClassName__name`, matching
+    /// what a `self.__foo`/`self.__x` read elsewhere resolves to.</summary>
+    private static string MangleBindingName(string name, Env env)
+    {
+        if (!env.IsClassScope || env.MangleClassName is not { } className)
+            return name;
+        if (name.Length < 3 || name[0] != '_' || name[1] != '_' || name.EndsWith("__", StringComparison.Ordinal))
+            return name;
+        return "_" + className.TrimStart('_') + name;
+    }
+
     // ================================================================ assegnazione
 
     public void AssignTo(Expr target, object value, Env env)
@@ -1364,10 +1415,10 @@ public sealed class Interp
         switch (target)
         {
             case NameExpr n:
-                env.Set(n.Id, value);
+                env.Set(MangleBindingName(n.Id, env), value);
                 break;
             case AttributeExpr a:
-                SetAttr(Eval(a.Obj, env), a.Name, value);
+                SetAttr(Eval(a.Obj, env), MangleAttrName(a.Name), value);
                 break;
             case IndexExpr i:
                 SetItem(Eval(i.Obj, env), EvalIndex(i.Index, env), value);
@@ -1509,7 +1560,7 @@ public sealed class Interp
                 return EvalCall(call, env);
 
             case AttributeExpr a:
-                return GetAttr(Eval(a.Obj, env), a.Name);
+                return GetAttr(Eval(a.Obj, env), MangleAttrName(a.Name));
 
             case IndexExpr i:
                 return GetItem(Eval(i.Obj, env), EvalIndex(i.Index, env));
@@ -1742,14 +1793,33 @@ public sealed class Interp
             else if (arg.IsDoubleStar)
             {
                 var mapping = Eval(arg.Value, env);
-                if (mapping is not PyDict d)
-                    throw PyErr.TypeError("argument after ** must be a mapping");
                 kwargs ??= new Dictionary<string, object>();
-                foreach (var e in d.Entries)
+                if (mapping is PyDict d)
                 {
-                    if (e.Key is not string key)
-                        throw PyErr.TypeError("keywords must be strings");
-                    kwargs[key] = e.Value;
+                    foreach (var e in d.Entries)
+                    {
+                        if (e.Key is not string key)
+                            throw PyErr.TypeError("keywords must be strings");
+                        kwargs[key] = e.Value;
+                    }
+                }
+                // Real CPython: `**expr` accepts anything satisfying the mapping protocol (a real
+                // `keys()` + `__getitem__`), not just a literal dict — includes a real
+                // `class Foo(dict): ...` subclass instance (e.g. sqlalchemy's own `immutabledict`).
+                // Found via real sqlalchemy's own `pool/base.py` connection-creator call chain
+                // unpacking a real `immutabledict` of connect args with `**`.
+                else if (PyOps.TryGetMappingItems(this, mapping, out var mapItems))
+                {
+                    foreach (var (k, v) in mapItems)
+                    {
+                        if (k is not string key)
+                            throw PyErr.TypeError("keywords must be strings");
+                        kwargs[key] = v;
+                    }
+                }
+                else
+                {
+                    throw PyErr.TypeError("argument after ** must be a mapping");
                 }
             }
             else if (arg.Name is not null)
@@ -1828,6 +1898,18 @@ public sealed class Interp
 
             case PyFunction fn:
                 return CallFunction(fn, args, kwargs);
+
+            // Real CPython: a bare `staticmethod` object is itself directly callable (delegates
+            // straight to the wrapped function) — not just usable via class-attribute access. Also
+            // what makes operator.attrgetter/itemgetter/methodcaller's returned closures (wrapped in
+            // PyStaticMethod specifically so BindClassAttr/direct-class-access never auto-bind them
+            // to `self` when stored as a plain class attribute — see OperatorModule.cs) work when
+            // called directly too, e.g. `sorted(items, key=operator.attrgetter("name"))`. Found via
+            // real sqlalchemy's own `sql/compiler.py`:
+            // `schema_for_object: ... = operator.attrgetter("schema")` as a plain
+            // IdentifierPreparer class attribute, invoked as `self.schema_for_object(table)`.
+            case PyStaticMethod sm:
+                return Call(sm.Function, args, kwargs);
 
             case PyClass cls:
                 // Real ABCMeta IS a subclass of `type`, so calling it with the same 3-arg
@@ -2210,8 +2292,13 @@ public sealed class Interp
     /// `OrderCompare` — same dunder dispatch (including reflection for `&lt; &lt;= &gt; &gt;=`),
     /// but returns the dunder's actual return value instead of forcing it through `PyOps.Truthy`.
     /// `is`/`is not`/`in`/`not in` and the plain-value fast paths (numbers, strings, ...) are
-    /// unaffected — they already only ever produce a real bool, so there's nothing to un-collapse.</summary>
-    private object CompareRaw(string op, object left, object right)
+    /// unaffected — they already only ever produce a real bool, so there's nothing to un-collapse.
+    /// Internal (not private): also called directly by OperatorModule's `eq`/`ne`/`lt`/`le`/`gt`/
+    /// `ge` — those must NOT go through BinaryOp (which has no idea how to compare, only arithmetic),
+    /// and must preserve a non-bool `__eq__`/etc. return value (e.g. real sqlalchemy's own
+    /// `ColumnOperators.__eq__` returning a real SQL `BinaryExpression`, not a bool) rather than
+    /// collapsing it through `PyOps.Truthy`.</summary>
+    internal object CompareRaw(string op, object left, object right)
     {
         switch (op)
         {
@@ -2833,7 +2920,21 @@ public sealed class Interp
                     return true;
                 if (inst.Dict.TryGet(name, out value!))
                     return true;
-                if (inst.Class.TryLookup(name, out var classAttr))
+                // Real CPython: a name declared in `__slots__` becomes a real per-class data
+                // descriptor — it shadows a same-named method/attribute inherited from a base class
+                // (since the descriptor lives on the more-derived class), and reading it while unset
+                // raises AttributeError, which is what lets a fallback `__getattr__` take over rather
+                // than an inherited base-class method winning instead. PySharp doesn't materialize a
+                // real descriptor object per slot, but the *effect* is the same: once we know `name`
+                // is a declared slot (checked above via inst.Slots and found unset), it must never
+                // fall through to inst.Class.TryLookup's plain MRO walk, which knows nothing about
+                // slots and would happily return an inherited method instead. Found via real
+                // sqlalchemy's own `orm/properties.py` `ColumnProperty.Comparator` (`__slots__ =
+                // ("__clause_element__", ...)`, no real `def` at runtime — only a
+                // `_memoized_method___clause_element__` for `util.MemoizedSlots.__getattr__` to find)
+                // shadowing `PropComparator.__clause_element__`'s own abstract placeholder
+                // (`raise NotImplementedError`) two classes up — the placeholder was winning instead.
+                if (!inst.Class.HasSlot(name) && inst.Class.TryLookup(name, out var classAttr))
                 {
                     value = BindClassAttr(classAttr, inst);
                     return true;
@@ -2905,6 +3006,19 @@ public sealed class Interp
                     && inst.Class.IsSubclassOf(PyErr.BaseException))
                 {
                     value = PyNone.Instance;
+                    return true;
+                }
+                // Real CPython: `exc.with_traceback(tb)` sets `__traceback__` and returns the same
+                // exception instance — the common `raise value.with_traceback(traceback)` re-raise
+                // idiom. Found via real sqlalchemy's own `util/langhelpers.py` `reraise`-style
+                // `__exit__` handler (`pool/base.py`'s connection-creation error path).
+                if (name == "with_traceback" && inst.Class.IsSubclassOf(PyErr.BaseException))
+                {
+                    value = new PyBuiltinFunction("with_traceback", (_, a, _) =>
+                    {
+                        inst.Dict["__traceback__"] = a.Length > 0 ? a[0] : PyNone.Instance;
+                        return inst;
+                    });
                     return true;
                 }
                 // Real CPython: every OSError instance genuinely has `.errno`/`.strerror`/
@@ -3078,6 +3192,21 @@ public sealed class Interp
                             inst.Dict["_value_"] = raw;
                             return inst;
                         });
+                        return true;
+                    // Real CPython: `str.__mro__`/`str.__bases__` (introspecting a builtin type
+                    // constructor directly, not a user class) work the same as for any other class —
+                    // delegates to the same "str"/"int"/... pseudo-base `class Foo(str): ...` already
+                    // uses, so its real (if minimal) Mro/Bases are visible here too. Found via real
+                    // sqlalchemy's own `sql/coercions.py` `expect()`: `resolved.__class__.__mro__`
+                    // where `resolved` is a plain string, i.e. `str.__mro__` — previously fell all the
+                    // way through to a generic AttributeError (misreported as `'function' object has
+                    // no attribute '__mro__'`, since a builtin type constructor and a plain function
+                    // are both represented the same way here).
+                    case "__mro__" when Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bfn.Name):
+                        value = new PyTuple(GetPseudoBaseClass(bfn.Name).Mro.Cast<object>().ToArray());
+                        return true;
+                    case "__bases__" when Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bfn.Name):
+                        value = new PyTuple(GetPseudoBaseClass(bfn.Name).Bases.Cast<object>().ToArray());
                         return true;
                 }
                 // other attributes (e.g. builtin type methods like str.upper): normal path — must run
@@ -3260,14 +3389,31 @@ public sealed class Interp
                         value = obj;
                         return true;
                 }
-                value = PyNone.Instance;
-                return false;
+                // Real CPython: a bound method's `__doc__`/other attributes not specific to the
+                // binding itself delegate straight to the underlying function object
+                // (`bound.__doc__ == bound.__func__.__doc__`). Found via real sqlalchemy's own
+                // `util/langhelpers.py` `MemoizedSlots.__getattr__`: `oneshot.__doc__ =
+                // meth.__doc__` (copying a real memoized method's docstring onto its one-shot
+                // wrapper) — previously always raised AttributeError, which this exact call site
+                // couldn't distinguish from "no memoized method found", masking the real memoized
+                // value (e.g. `quoted_name`'s own `.lower`) behind a generic "object has no
+                // attribute" error instead.
+                return TryGetAttr(bm.Function, name, out value);
 
             case PySuper sup:
                 if (sup.TryLookup(name, out var superAttr))
                 {
                     value = superAttr switch
                     {
+                        // __new__ is implicitly a staticmethod in real CPython — never auto-bound to
+                        // an implicit first arg. The caller always passes the target class
+                        // explicitly (`super().__new__(cls, ...)`), so wrapping it as a bound method
+                        // here would silently prepend `sup.Self` as an *extra* argument, shifting
+                        // every real argument over by one position. Found via real sqlalchemy's own
+                        // `sql/elements.py` `quoted_name.__new__`: `super().__new__(cls, value)` —
+                        // `value` landed where `cls` was expected one level down.
+                        PyBuiltinFunction bf when name == "__new__" => bf,
+                        PyFunction f when name == "__new__" => f,
                         PyFunction f => new PyBoundMethod(sup.Self, f),
                         PyBuiltinFunction bf => new PyBoundMethod(sup.Self, bf),
                         PyStaticMethod s => s.Function,
@@ -3394,6 +3540,16 @@ public sealed class Interp
         => classAttr switch
         {
             PyFunction fn => new PyBoundMethod(inst, fn),
+            // Real CPython: only genuine functions/methods are non-data descriptors that auto-bind
+            // to `self` — a class attribute that's merely a plain *value* referencing a builtin type
+            // (e.g. real sqlalchemy's own `execute_sequence_format = tuple`) is not a descriptor at
+            // all, so `instance.execute_sequence_format` returns `tuple` itself, unbound. PySharp
+            // represents both "a builtin method" and "a builtin type constructor" as the same
+            // PyBuiltinFunction C# shape, so BuiltinTypeNames is the only way to tell them apart.
+            // Found via real sqlalchemy's own `engine/default.py` `dialect.execute_sequence_format()`
+            // — silently became `tuple(dialect_instance)` (trying to iterate the dialect itself)
+            // instead of plain `tuple()`.
+            PyBuiltinFunction bf when Builtins.BuiltinsFactory.BuiltinTypeNames.Contains(bf.Name) => bf,
             PyBuiltinFunction bf => new PyBoundMethod(inst, bf),
             PyStaticMethod s => s.Function,
             PyClassMethod c => new PyBoundMethod(inst.Class, c.Function),
@@ -3457,6 +3613,31 @@ public sealed class Interp
                 return;
             case PyFunction fn:
                 fn.Attributes[name] = value;
+                // Real CPython: reassigning `__defaults__`/`__kwdefaults__` rebinds the actual
+                // default values applied on every future call — the function-calling machinery
+                // always reads them fresh, not just whatever the `def` statement's own default
+                // expressions originally evaluated to. `fn.Defaults` is what argument-binding
+                // actually consults, so it must be updated too, not just the raw attribute. Found
+                // via real sqlalchemy's own `util/langhelpers.py` `decorator()` helper:
+                // `decorated.__defaults__ = fn.__defaults__`, giving an exec()-generated signature-
+                // matching wrapper (whose own generated source only has dummy `None` placeholder
+                // defaults, to avoid embedding large default objects into generated code) the real
+                // target function's actual defaults. Without this, every `@util.decorator`-wrapped
+                // sqlalchemy function silently lost its real default argument values.
+                if (name == "__defaults__" && value is PyTuple dt)
+                {
+                    var positional = fn.Params.Positional;
+                    int start = positional.Count - dt.Items.Length;
+                    for (int i = 0; i < dt.Items.Length; i++)
+                        if (start + i >= 0)
+                            fn.Defaults[positional[start + i].Name] = dt.Items[i];
+                }
+                else if (name == "__kwdefaults__" && value is PyDict kd)
+                {
+                    foreach (var e in kd.Entries)
+                        if (e.Key is string k)
+                            fn.Defaults[k] = e.Value;
+                }
                 return;
             case PyBuiltinFunction bfn:
                 bfn.Attributes[name] = value;

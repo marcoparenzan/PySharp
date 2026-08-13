@@ -19,6 +19,14 @@ public static class OperatorModule
             d[name] = new PyBuiltinFunction(name, (interp, a, _) => interp.BinaryOp(op, a[0], a[1]));
         void Un(string name, string op) =>
             d[name] = new PyBuiltinFunction(name, (interp, a, _) => interp.UnaryOp(op, a[0]));
+        // Real CPython: operator.eq/ne/lt/le/gt/ge are COMPARISONS, not arithmetic — BinaryOp has no
+        // idea how to compare anything and would always raise "unsupported operand type(s)".
+        // CompareRaw also preserves a non-bool `__eq__`/etc. return value (e.g. real sqlalchemy's own
+        // `ColumnOperators.__eq__` returning a real SQL expression object), matching what the `==`
+        // syntax itself already does. Found via real sqlalchemy's own expression-building internals,
+        // which call `operator.eq`/etc. as plain functions pervasively (not just via `==` syntax).
+        void Cmp(string name, string op) =>
+            d[name] = new PyBuiltinFunction(name, (interp, a, _) => interp.CompareRaw(op, a[0], a[1]));
 
         Bin("add", "+"); Bin("__add__", "+");
         Bin("sub", "-"); Bin("__sub__", "-");
@@ -32,12 +40,12 @@ public static class OperatorModule
         Bin("xor", "^"); Bin("__xor__", "^");
         Bin("lshift", "<<"); Bin("__lshift__", "<<");
         Bin("rshift", ">>"); Bin("__rshift__", ">>");
-        Bin("eq", "=="); Bin("__eq__", "==");
-        Bin("ne", "!="); Bin("__ne__", "!=");
-        Bin("lt", "<"); Bin("__lt__", "<");
-        Bin("le", "<="); Bin("__le__", "<=");
-        Bin("gt", ">"); Bin("__gt__", ">");
-        Bin("ge", ">="); Bin("__ge__", ">=");
+        Cmp("eq", "=="); Cmp("__eq__", "==");
+        Cmp("ne", "!="); Cmp("__ne__", "!=");
+        Cmp("lt", "<"); Cmp("__lt__", "<");
+        Cmp("le", "<="); Cmp("__le__", "<=");
+        Cmp("gt", ">"); Cmp("__gt__", ">");
+        Cmp("ge", ">="); Cmp("__ge__", ">=");
 
         Un("neg", "-"); Un("__neg__", "-");
         Un("pos", "+"); Un("__pos__", "+");
@@ -54,28 +62,37 @@ public static class OperatorModule
         d["getitem"] = new PyBuiltinFunction("getitem", (interp, a, _) => interp.GetItem(a[0], a[1]));
         d["truth"] = new PyBuiltinFunction("truth", (interp, a, _) => PyOps.Truthy(interp, a[0]));
 
+        // Real CPython: attrgetter/itemgetter/methodcaller return a real callable *object* (an
+        // instance of their own C-implemented type), not a plain function — so storing one as an
+        // ordinary class attribute (e.g. real sqlalchemy's own `sql/compiler.py`:
+        // `schema_for_object = operator.attrgetter("schema")`) and then accessing it through an
+        // instance does NOT auto-bind `self` as an extra argument, unlike a real `def`-defined
+        // method would. PySharp represents both under the same PyBuiltinFunction C# shape, so these
+        // are wrapped in PyStaticMethod specifically to opt out of BindClassAttr's auto-bind rule
+        // (PyStaticMethod unwraps to the raw function everywhere it's *read* as a class attribute)
+        // while staying directly callable on its own (see CallCore's own PyStaticMethod case).
         d["itemgetter"] = new PyBuiltinFunction("itemgetter", (_, a, _) =>
         {
             var keys = a.ToArray();
-            return new PyBuiltinFunction("itemgetter.<locals>.f", (interp2, b, _) =>
+            return new PyStaticMethod(new PyBuiltinFunction("itemgetter.<locals>.f", (interp2, b, _) =>
                 keys.Length == 1
                     ? interp2.GetItem(b[0], keys[0])
-                    : new PyTuple(keys.Select(k => interp2.GetItem(b[0], k)).ToArray()));
+                    : new PyTuple(keys.Select(k => interp2.GetItem(b[0], k)).ToArray())));
         });
         d["attrgetter"] = new PyBuiltinFunction("attrgetter", (_, a, _) =>
         {
             var names = a.ToArray();
-            return new PyBuiltinFunction("attrgetter.<locals>.f", (interp2, b, _) =>
+            return new PyStaticMethod(new PyBuiltinFunction("attrgetter.<locals>.f", (interp2, b, _) =>
                 names.Length == 1
                     ? GetAttrPath(interp2, b[0], (string)names[0])
-                    : new PyTuple(names.Select(n => GetAttrPath(interp2, b[0], (string)n)).ToArray()));
+                    : new PyTuple(names.Select(n => GetAttrPath(interp2, b[0], (string)n)).ToArray())));
         });
         d["methodcaller"] = new PyBuiltinFunction("methodcaller", (_, a, kwargs) =>
         {
             string name = (string)a[0];
             var extra = a.Skip(1).ToArray();
-            return new PyBuiltinFunction("methodcaller.<locals>.f", (interp2, b, _) =>
-                interp2.CallMethod(b[0], name, extra, kwargs));
+            return new PyStaticMethod(new PyBuiltinFunction("methodcaller.<locals>.f", (interp2, b, _) =>
+                interp2.CallMethod(b[0], name, extra, kwargs)));
         });
 
         return m;

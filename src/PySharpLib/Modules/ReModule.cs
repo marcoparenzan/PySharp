@@ -136,6 +136,14 @@ public static class ReModule
             case PyBytes b:
                 isBytes = true;
                 return Encoding.Latin1.GetString(b.Data);
+            // A real `class Foo(str): ...` subclass instance (see PyInstance.StrValue's own doc
+            // comment) is a real string everywhere else already — `re` must accept one too. Found
+            // via real sqlalchemy's own `sql/elements.py` `class quoted_name(..., str): ...`
+            // identifiers flowing into real regex matching (e.g. `_requires_quotes`'s
+            // `legal_characters.match(str(value))`/other real `re` usage on identifier names).
+            case PyInstance inst when inst.StrValue is not null:
+                isBytes = false;
+                return inst.StrValue;
             default:
                 throw PyErr.TypeError($"expected string or bytes-like object, got '{PyOps.TypeName(o)}'");
         }
@@ -380,6 +388,13 @@ public static class ReModule
 
     private static PyInstance MakeCompiled(object patternArg, RegexOptions opts)
     {
+        // Real CPython: `re.compile(x)` is idempotent — if `x` is already a compiled Pattern, it's
+        // returned as-is (flags must be 0 when re-passing one; not enforced here, nothing reachable
+        // needs that edge). Found via real sqlalchemy's own `sql/compiler.py` bind-name-escaping
+        // logic, which stores a pre-compiled `_bind_translate_re` and can pass it back through
+        // `re.compile`-shaped helpers.
+        if (patternArg is PyInstance already && already.Class == PatternClass)
+            return already;
         string workingPattern = ToWorkingString(patternArg, out bool isBytes);
         Regex regex;
         try

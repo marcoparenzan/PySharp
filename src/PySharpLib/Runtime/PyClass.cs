@@ -174,6 +174,14 @@ public sealed class PyInstance
 
     public PySet EnsureSetItems() => SetItems ??= new PySet();
 
+    /// <summary>Backing value for an instance of a real `class Foo(str): ...` — see StrModules'
+    /// dunders/methods in TypeMethods.cs. Unlike Mapping/Sequence/SetItems (mutable, lazily
+    /// allocated), this is set once at construction (`str.__new__(cls, value)`), matching real
+    /// CPython string immutability — never mutated afterward. Found via real sqlalchemy's own
+    /// `sql/elements.py` `class quoted_name(util.MemoizedSlots, str): ...`, used pervasively for
+    /// column/table/identifier names throughout the ORM and SQL-compiler pipeline.</summary>
+    public string? StrValue { get; set; }
+
     public PyInstance(PyClass cls) => Class = cls;
 
     public override string ToString() => $"<{Class.Name} object>";

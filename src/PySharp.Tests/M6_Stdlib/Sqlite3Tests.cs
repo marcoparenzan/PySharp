@@ -171,4 +171,31 @@ public class Sqlite3Tests
             except sqlite3.ProgrammingError:
                 print("closed")
             """));
+
+    // Real CPython: `sqlite3.dbapi2` re-exports the same names as `sqlite3` itself (a common real
+    // idiom, `from sqlite3 import dbapi2 as sqlite`), and `sqlite_version_info` is the real
+    // underlying SQLite C library's own version, not a hardcoded stand-in. Found via real
+    // sqlalchemy's own `dialects/sqlite/pysqlite.py` `import_dbapi`.
+    [Fact]
+    public void Dbapi2_reexports_sqlite3_and_reports_a_real_sqlite_version()
+        => Assert.Equal("True\nTrue", Run("""
+            from sqlite3 import dbapi2
+            print(dbapi2.Error is sqlite3.Error)
+            major, minor, patch = sqlite3.sqlite_version_info
+            print(major >= 3)
+            """));
+
+    // Real CPython sqlite3.Connection.create_function(name, narg, func): registers a real custom
+    // SQL function, callable from SQL text. Found via real sqlalchemy's own
+    // `dialects/sqlite/pysqlite.py` `on_connect` (registers `regexp`/`floor` on every new
+    // connection).
+    [Fact]
+    public void Create_function_registers_a_real_callable_sql_function()
+        => Assert.Equal("[(1, 0), (2, 1)]", Run("""
+            conn = sqlite3.connect(":memory:")
+            conn.create_function("is_even", 1, lambda x: x % 2 == 0)
+            conn.execute("CREATE TABLE t (id INTEGER)")
+            conn.execute("INSERT INTO t (id) VALUES (1), (2)")
+            print(conn.execute("SELECT id, is_even(id) FROM t ORDER BY id").fetchall())
+            """));
 }

@@ -24,6 +24,14 @@ public sealed class Env
     /// <summary>True for a class body's scope: excluded from the closure chain.</summary>
     public bool IsClassScope { get; init; }
 
+    /// <summary>Non-null only for a class body's own scope: the class's own name (as written in
+    /// source, before any name mangling), used to mangle a `__name`-shaped binding made *directly*
+    /// in the class body (a `def __foo(self): ...` or a plain `__x = 1`) to `_ClassName__name` —
+    /// see <see cref="Interp.MangleAttrName"/>'s own doc comment for the read/write side of the
+    /// same real CPython rule. Without this half too, a mangled *read* (`self.__foo`) would look for
+    /// a binding that was never actually stored under the mangled key.</summary>
+    public string? MangleClassName { get; init; }
+
     /// <summary>Non-null only for an `enum`/`Flag`/etc. class body's own scope — real CPython
     /// resolves each `NAME = auto()` to its actual int value *immediately* at class-body assignment
     /// time (via `_EnumDict.__setitem__`), not in a later pass once the whole body has executed, so

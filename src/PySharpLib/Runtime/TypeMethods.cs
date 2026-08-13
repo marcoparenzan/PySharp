@@ -29,6 +29,7 @@ public static class TypeMethods
                 "bytearray" => ByteArrayMethods.Table,
                 "type" => TypeConstructorMethods.Table,
                 "chain" => ChainMethods.Table,
+                "int" => IntMethods.Table,
                 _ => null,
             };
             if (typeTable is not null && typeTable.TryGetValue(name, out var unbound))
@@ -171,8 +172,16 @@ public static class TypeMethods
     internal static object? OptArg(object[] args, int i)
         => i < args.Length ? args[i] : null;
 
-    internal static string StrArg(object o, string what)
-        => o as string ?? throw PyErr.TypeError($"{what} must be str, not {PyOps.TypeName(o)}");
+    // Accepts either a raw string or a `class Foo(str): ...` subclass instance (see
+    // PyInstance.StrValue's own doc comment) — real CPython accepts any str subclass anywhere a
+    // plain str is expected. Central helper used by nearly every str method's secondary arguments
+    // (sub/sep/prefix/...), so fixing it here covers all of them at once.
+    internal static string StrArg(object o, string what) => o switch
+    {
+        string s => s,
+        PyInstance inst when inst.StrValue is not null => inst.StrValue,
+        _ => throw PyErr.TypeError($"{what} must be str, not {PyOps.TypeName(o)}"),
+    };
 }
 
 public static class StrModules
@@ -353,10 +362,80 @@ public static class StrModules
             string s = S(a), p = TypeMethods.StrArg(a[1], "suffix");
             return p.Length > 0 && s.EndsWith(p, StringComparison.Ordinal) ? s[..^p.Length] : s;
         });
+        // The dunders below back a real `class Foo(str): ...` subclass instance (a PyInstance — see
+        // PyInstance.StrValue's own doc comment) as well as unbound `str.<dunder>` calls, the same
+        // reasoning as DictMethods'/ListMethods'/SetMethods' own dunders. Found via real sqlalchemy's
+        // own `sql/elements.py` `class quoted_name(util.MemoizedSlots, str): ...`.
+        Add("__new__", (interp, a, _) =>
+        {
+            string value = a.Length > 1 ? PyOps.Str(interp, a[1]) : "";
+            return a.Length > 0 && a[0] is PyClass cls
+                ? new PyInstance(cls) { StrValue = value }
+                : (object)value;
+        });
+        // Real str.__init__ is a no-op (the value is fixed by __new__) — same reasoning as every
+        // other real CPython immutable-value type's __init__.
+        Add("__init__", (_, _, _) => PyNone.Instance);
+        Add("__str__", (_, a, _) => S(a));
+        Add("__repr__", (interp, a, _) => PyOps.Repr(interp, S(a)));
+        Add("__len__", (_, a, _) => new BigInteger(S(a).Length));
+        Add("__hash__", (_, a, _) => new BigInteger(S(a).GetHashCode()));
+        Add("__eq__", (_, a, _) => a[1] switch
+        {
+            string os => S(a) == os,
+            PyInstance oi when oi.StrValue is not null => S(a) == oi.StrValue,
+            _ => (object)PyNotImplemented.Instance,
+        });
+        Add("__getitem__", (interp, a, _) => interp.GetItem(S(a), a[1]));
+        Add("__iter__", (_, a, _) => new PyIterator(S(a).Select(c => (object)c.ToString()).GetEnumerator()));
+        Add("__contains__", (_, a, _) => S(a).Contains(TypeMethods.StrArg(a[1], "substring"), StringComparison.Ordinal));
+        Add("__add__", (_, a, _) => a[1] switch
+        {
+            string os => S(a) + os,
+            PyInstance oi when oi.StrValue is not null => S(a) + oi.StrValue,
+            _ => (object)PyNotImplemented.Instance,
+        });
+        Add("__radd__", (_, a, _) => a[1] switch
+        {
+            string os => os + S(a),
+            PyInstance oi when oi.StrValue is not null => oi.StrValue + S(a),
+            _ => (object)PyNotImplemented.Instance,
+        });
+        Add("__mul__", (_, a, _) => a[1] is BigInteger n ? RepeatStr(S(a), n) : (object)PyNotImplemented.Instance);
+        Add("__rmul__", (_, a, _) => a[1] is BigInteger n ? RepeatStr(S(a), n) : (object)PyNotImplemented.Instance);
+        foreach (var (dunder, cmp) in new[] { ("__lt__", -1), ("__le__", 0), ("__gt__", 1), ("__ge__", 2) })
+        {
+            int mode = cmp;
+            Add(dunder, (_, a, _) =>
+            {
+                string? other = a[1] switch { string os => os, PyInstance oi when oi.StrValue is not null => oi.StrValue, _ => null };
+                if (other is null)
+                    return PyNotImplemented.Instance;
+                int c = string.CompareOrdinal(S(a), other);
+                return mode switch { -1 => c < 0, 0 => c <= 0, 1 => c > 0, _ => c >= 0 };
+            });
+        }
         return t;
     }
 
-    private static string S(object[] args) => (string)args[0];
+    // Accepts either a raw string or a PyInstance whose class derives from the "str" pseudo-base —
+    // see PyInstance.StrValue's own doc comment.
+    private static string S(object[] args) => args[0] switch
+    {
+        string s => s,
+        PyInstance inst when inst.StrValue is not null => inst.StrValue,
+        _ => (string)args[0],
+    };
+
+    private static string RepeatStr(string s, BigInteger n)
+    {
+        if (n <= 0)
+            return "";
+        var sb = new StringBuilder(s.Length * (int)n);
+        for (int i = 0; i < (int)n; i++)
+            sb.Append(s);
+        return sb.ToString();
+    }
 
     private static char FillChar(object[] a)
         => a.Length > 2 ? TypeMethods.StrArg(a[2], "fillchar")[0] : ' ';
@@ -1101,7 +1180,20 @@ public static class DictMethods
             D(a)[a[1]] = a[2];
             return PyNone.Instance;
         });
-        Add("__getitem__", (_, a, _) => D(a).TryGet(a[1], out var v) ? v : throw PyErr.KeyError(a[1]));
+        // Real CPython: a dict subclass overriding `__missing__(key)` gets it called instead of a
+        // raw KeyError on a missing key (e.g. `collections.defaultdict`'s own real mechanism — and
+        // real sqlalchemy's own `util/_collections.py` `PopulateDict`, a plain `dict` subclass using
+        // it to lazily populate `Column.dialect_options["sqlite"]` on first access). Found via real
+        // sqlalchemy's own `sql/base.py` `DialectKWArgs.dialect_options = util.PopulateDict(...)`.
+        Add("__getitem__", (interp, a, _) =>
+        {
+            var d = D(a);
+            if (d.TryGet(a[1], out var v))
+                return v;
+            if (a[0] is PyInstance inst && inst.Class.TryLookup("__missing__", out var missing))
+                return interp.Call(new PyBoundMethod(inst, missing), new[] { a[1] });
+            throw PyErr.KeyError(a[1]);
+        });
         Add("__delitem__", (_, a, _) =>
         {
             if (!D(a).Remove(a[1]))
@@ -1236,8 +1328,26 @@ public static class SetMethods
                 S(a).Items.UnionWith(PyOps.Iterate(interp, a[i]));
             return PyNone.Instance;
         });
+        Add("intersection_update", (interp, a, _) =>
+        {
+            for (int i = 1; i < a.Length; i++)
+                S(a).Items.IntersectWith(PyOps.Iterate(interp, a[i]));
+            return PyNone.Instance;
+        });
+        Add("difference_update", (interp, a, _) =>
+        {
+            for (int i = 1; i < a.Length; i++)
+                S(a).Items.ExceptWith(PyOps.Iterate(interp, a[i]));
+            return PyNone.Instance;
+        });
+        Add("symmetric_difference_update", (interp, a, _) =>
+        {
+            S(a).Items.SymmetricExceptWith(PyOps.Iterate(interp, a[1]));
+            return PyNone.Instance;
+        });
         Add("issubset", (interp, a, _) => S(a).Items.IsSubsetOf(PyOps.Iterate(interp, a[1])));
         Add("issuperset", (interp, a, _) => S(a).Items.IsSupersetOf(PyOps.Iterate(interp, a[1])));
+        Add("isdisjoint", (interp, a, _) => !S(a).Items.Overlaps(PyOps.Iterate(interp, a[1])));
         Add("copy", (_, a, _) => new PySet(S(a).Items));
         // The dunders below back a real `class Foo(set): ...` subclass instance (a PyInstance — see
         // PyInstance.SetItems' own doc comment) as well as unbound `set.<dunder>` calls, the same
@@ -1317,6 +1427,7 @@ public static class FrozenSetMethods
         });
         Add("issubset", (interp, a, _) => F(a).IsSubsetOf(PyOps.Iterate(interp, a[1])));
         Add("issuperset", (interp, a, _) => F(a).IsSupersetOf(PyOps.Iterate(interp, a[1])));
+        Add("isdisjoint", (interp, a, _) => !F(a).Overlaps(PyOps.Iterate(interp, a[1])));
         Add("copy", (_, a, _) => new PyFrozenSet(F(a)));
         return t;
     }
@@ -1656,5 +1767,100 @@ public static class RangeMethods
             throw PyErr.ValueError($"{PyOps.Repr(interp, a[1])} is not in range");
         });
         return t;
+    }
+}
+
+/// <summary>Real `class Foo(int): ...` subclassing — instances behave as real ints (arithmetic,
+/// comparisons, hashing/equality with plain ints), via the same `PyInstance.Dict["value"]`
+/// convention already used by the existing `int.__new__(cls, value)` special case (real httpx's own
+/// IntEnum-with-tuple-value pattern) and by IntEnum members — `PyOps.AsBigInt` already reads either
+/// shape uniformly. Real CPython: arithmetic on an int subclass returns a plain `int` (not another
+/// instance of the subclass) unless the subclass overrides the operator itself — matches here since
+/// every op below returns the raw computed value. Found via real sqlalchemy's own
+/// `util/langhelpers.py` `class symbol(int): ...` (`util.symbol`, real int-valued sentinels
+/// combined with `&`/`|`, e.g. inside `FastIntFlag`'s own machinery).</summary>
+public static class IntMethods
+{
+    public static readonly Dictionary<string, PyBuiltinFunction> Table = Build();
+
+    private static Dictionary<string, PyBuiltinFunction> Build()
+    {
+        var t = new Dictionary<string, PyBuiltinFunction>();
+        void Add(string name, BuiltinFn fn) => t[name] = new PyBuiltinFunction($"int.{name}", fn);
+
+        Add("__new__", (_, a, kwargs) =>
+        {
+            object raw = a.Length > 1 ? a[1]
+                : kwargs is not null && kwargs.TryGetValue("value", out var v) ? v
+                : BigInteger.Zero;
+            BigInteger val = raw switch
+            {
+                BigInteger bi => bi,
+                bool b => b ? BigInteger.One : BigInteger.Zero,
+                double d => new BigInteger(Math.Truncate(d)),
+                string s => BigInteger.Parse(s.Trim(), CultureInfo.InvariantCulture),
+                _ => PyOps.AsBigInt(raw, "value"),
+            };
+            if (a.Length > 0 && a[0] is PyClass cls)
+            {
+                var inst = new PyInstance(cls);
+                inst.Dict["value"] = val;
+                inst.Dict["_value_"] = val;
+                return inst;
+            }
+            return val;
+        });
+        Add("__init__", (_, _, _) => PyNone.Instance);
+        Add("__int__", (_, a, _) => V(a));
+        Add("__index__", (_, a, _) => V(a));
+        Add("__bool__", (_, a, _) => !V(a).IsZero);
+        Add("__str__", (_, a, _) => V(a).ToString(CultureInfo.InvariantCulture));
+        Add("__repr__", (_, a, _) => V(a).ToString(CultureInfo.InvariantCulture));
+        Add("__hash__", (_, a, _) => new BigInteger(PyOps.PyHash(V(a))));
+        Add("__neg__", (_, a, _) => -V(a));
+        Add("__pos__", (_, a, _) => V(a));
+        Add("__abs__", (_, a, _) => BigInteger.Abs(V(a)));
+        Add("__invert__", (_, a, _) => -V(a) - BigInteger.One);
+
+        foreach (var op in new[] { "add", "sub", "mul", "mod", "and", "or", "xor", "lshift", "rshift", "floordiv" })
+        {
+            string binOp = op switch
+            {
+                "add" => "+", "sub" => "-", "mul" => "*", "mod" => "%",
+                "and" => "&", "or" => "|", "xor" => "^",
+                "lshift" => "<<", "rshift" => ">>", "floordiv" => "//",
+                _ => throw new InvalidOperationException(),
+            };
+            Add($"__{op}__", (interp, a, _) =>
+                TryOtherValue(a[1], out var other) ? interp.BinaryOp(binOp, V(a), other) : (object)PyNotImplemented.Instance);
+            Add($"__r{op}__", (interp, a, _) =>
+                TryOtherValue(a[1], out var other) ? interp.BinaryOp(binOp, other, V(a)) : (object)PyNotImplemented.Instance);
+        }
+        Add("__eq__", (_, a, _) => TryOtherValue(a[1], out var other) ? V(a) == other : (object)PyNotImplemented.Instance);
+        foreach (var (dunder, mode) in new[] { ("__lt__", -1), ("__le__", 0), ("__gt__", 1), ("__ge__", 2) })
+        {
+            int m = mode;
+            Add(dunder, (_, a, _) =>
+            {
+                if (!TryOtherValue(a[1], out var other))
+                    return PyNotImplemented.Instance;
+                int c = V(a).CompareTo(other);
+                return m switch { -1 => c < 0, 0 => c <= 0, 1 => c > 0, _ => c >= 0 };
+            });
+        }
+        return t;
+    }
+
+    private static BigInteger V(object[] args) => PyOps.AsBigInt(args[0], "int value");
+
+    private static bool TryOtherValue(object o, out BigInteger value)
+    {
+        switch (o)
+        {
+            case BigInteger bi: value = bi; return true;
+            case bool b: value = b ? BigInteger.One : BigInteger.Zero; return true;
+            case PyInstance inst when inst.Dict.TryGet("value", out var v) && v is BigInteger bv: value = bv; return true;
+            default: value = default; return false;
+        }
     }
 }

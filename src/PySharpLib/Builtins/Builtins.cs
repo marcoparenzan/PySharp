@@ -822,15 +822,29 @@ public static class BuiltinsFactory
         // `import` statement itself desugars to — found via real requests' own `packages.py`
         // (`locals()[package] = __import__(package)`, a backwards-compat shim aliasing
         // `requests.packages.urllib3` to the real top-level `urllib3`), reachable from `import
-        // requests`. Scoped to absolute imports (level=0) with a name that has no dots and no
-        // fromlist, matching every real reachable call site — CPython's own fuller semantics
-        // (submodule-vs-package return value depending on fromlist, relative-import level
-        // resolution against the caller's package) aren't needed by anything in scope.
+        // requests`. Scoped to absolute imports (level=0) — CPython's own relative-import level
+        // resolution against the caller's package isn't needed by anything in scope.
         Add("__import__", (interp, args, kwargs) =>
         {
             string name = (string)args[0];
             var current = Interp.InnermostFrame?.Env.Module ?? module;
-            return interp.ImportHook!(interp, name, 0, current);
+            var leaf = interp.ImportHook!(interp, name, 0, current);
+            // Real CPython: with no `fromlist`, __import__ returns the top-level *package*, not the
+            // leaf submodule — the same "import a.b.c binds just a" rule the `import` statement
+            // itself already implements (see ExecStmts' ImportStmt case) — the caller is expected to
+            // drill back down via attribute access. With a (truthy) fromlist, the leaf module itself
+            // is returned instead (the `from a.b import c` shape). Found via real sqlalchemy's own
+            // `dialects/__init__.py` `_auto_fn`: `__import__("sqlalchemy.dialects.sqlite").dialects`
+            // — silently returning the leaf broke the `.dialects` attribute access afterward.
+            object? fromlist = args.Length > 3 ? args[3]
+                : kwargs is not null && kwargs.TryGetValue("fromlist", out var fl) ? fl : null;
+            bool hasFromlist = fromlist is not (null or PyNone) && PyOps.Truthy(interp, fromlist);
+            if (!hasFromlist && name.Contains('.'))
+            {
+                string top = name.Split('.')[0];
+                return interp.ImportHook!(interp, top, 0, current);
+            }
+            return leaf;
         });
 
         Add("iter", (interp, args, _) =>
@@ -1100,10 +1114,16 @@ public static class BuiltinsFactory
 
     private static bool TypeMatchesBuiltinName(object obj, string name) => name switch
     {
-        "int" => obj is BigInteger or bool || IsIntEnumMember(obj),
+        // A real `class Foo(int): ...` instance (not just an IntEnum member) is a PyInstance too —
+        // see IntMethods' own doc comment (TypeMethods.cs).
+        "int" => obj is BigInteger or bool || IsIntEnumMember(obj)
+            || (obj is PyInstance ii && ii.Class.IsSubclassOf(Interp.GetPseudoBaseClass("int"))),
         "float" => obj is double,
         "bool" => obj is bool,
-        "str" => obj is string,
+        // A real `class Foo(str): ...` instance is a PyInstance (not a raw C# string — see
+        // PyInstance.StrValue's own doc comment), so `isinstance(Foo("x"), str)` needs this extra
+        // check alongside the literal case.
+        "str" => obj is string || (obj is PyInstance sti && sti.Class.IsSubclassOf(Interp.GetPseudoBaseClass("str"))),
         "bytes" => obj is PyBytes,
         "bytearray" => obj is PyByteArray,
         // A real `class Foo(list/dict/set): ...` instance is a PyInstance (not a raw PyList/PyDict/

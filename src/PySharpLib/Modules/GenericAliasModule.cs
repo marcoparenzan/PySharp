@@ -105,7 +105,14 @@ public static class GenericAliasModule
     public static PyInstance Subscript(PyClass cls, object index)
     {
         var origin = OriginMap.TryGetValue(cls, out var mapped) ? mapped : cls;
-        var args = (index is PyTuple t ? t.Items : new[] { index }).Select(WrapForwardRef).ToArray();
+        var rawArgs = index is PyTuple t ? t.Items : new[] { index };
+        // Real CPython: `Literal[...]`'s own arguments are literal *values* (str/int/bool/None/enum
+        // members) — unlike every other generic subscript, they're never forward-referenced type
+        // names, so they must never get ForwardRef-wrapped. Found via real sqlalchemy's own
+        // `orm/session.py` `JoinTransactionMode = Literal["conditional_savepoint", ...]`, whose own
+        // `.__args__` needs to stay the literal strings for `x in JoinTransactionMode.__args__` (a
+        // real validation check against Session's own default value) to work at all.
+        var args = cls.Name == "Literal" ? rawArgs : rawArgs.Select(WrapForwardRef).ToArray();
         if (ArgsTransform.TryGetValue(cls, out var transform))
             args = transform(args);
         return MakeAlias(origin, args);

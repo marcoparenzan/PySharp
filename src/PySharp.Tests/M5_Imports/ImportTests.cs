@@ -377,4 +377,23 @@ public class ImportTests : IDisposable
         Assert.Contains(Path.Combine(_root, "boom.py"), output);
         Assert.DoesNotContain("\"<string>\"", output);
     }
+
+    // Real CPython: `__import__("a.b")` with no `fromlist` returns the top-level package `a` (the
+    // caller is expected to drill back down via attribute access) — a real dotted name previously
+    // silently returned the leaf submodule instead. With a truthy `fromlist`, the leaf module itself
+    // is returned (the `from a.b import c` shape). Found via real sqlalchemy's own
+    // `dialects/__init__.py` `_auto_fn`: `__import__("sqlalchemy.dialects.sqlite").dialects`.
+    [Fact]
+    public void Import_builtin_with_dotted_name_returns_top_level_package_unless_fromlist_given()
+    {
+        WriteModule("pkgtop/__init__.py", "X = 1\n");
+        WriteModule("pkgtop/sub.py", "Y = 2\n");
+        Assert.Equal("pkgtop\npkgtop.sub\n2\n", Run("""
+            top = __import__("pkgtop.sub")
+            print(top.__name__)
+            leaf = __import__("pkgtop.sub", fromlist=["Y"])
+            print(leaf.__name__)
+            print(leaf.Y)
+            """));
+    }
 }
