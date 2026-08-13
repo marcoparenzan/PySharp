@@ -282,9 +282,16 @@ public static class StrModules
             var parts = new List<string>();
             foreach (var item in PyOps.Iterate(interp, a[1]))
             {
-                parts.Add(item as string
-                          ?? throw PyErr.TypeError(
-                              $"sequence item {parts.Count}: expected str instance, {PyOps.TypeName(item)} found"));
+                // Real CPython: str.join accepts any str subclass, not just plain str (e.g. real
+                // sqlalchemy's own `quoted_name`, a `class quoted_name(str): ...`, joined directly
+                // into `", ".join([...])` when composing FROM-clause SQL text).
+                parts.Add(item switch
+                {
+                    string s => s,
+                    PyInstance inst when inst.StrValue is not null => inst.StrValue,
+                    _ => throw PyErr.TypeError(
+                        $"sequence item {parts.Count}: expected str instance, {PyOps.TypeName(item)} found"),
+                });
             }
             return string.Join(sep, parts);
         });

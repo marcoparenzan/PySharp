@@ -67,8 +67,17 @@ public sealed class PyFunction
 
     public override string ToString() => $"<function {Name}>";
 
-    /// <summary>Minimal code object for signature introspection (fn.__code__).</summary>
-    public PyCode Code => new(this);
+    private PyCode? _code;
+
+    /// <summary>Minimal code object for signature introspection (fn.__code__). Real CPython: a
+    /// function's `__code__` is a single, stable object created once at definition time — code that
+    /// compares two `__code__` objects by identity (`is`) is a real, common introspection pattern
+    /// (e.g. real sqlalchemy's own `type_api.py` `_has_column_expression`: `self.__class__.
+    /// column_expression.__code__ is not TypeEngine.column_expression.__code__`, checking whether a
+    /// method was overridden by comparing the underlying code objects) — recomputing a fresh PyCode
+    /// on every access made every such comparison always report "different" even for the exact same
+    /// underlying function, so lazily cache it instead.</summary>
+    public PyCode Code => _code ??= new PyCode(this);
 }
 
 /// <summary>
@@ -79,7 +88,10 @@ public sealed class PyFunction
 public sealed class PyCode
 {
     public string Name { get; }
-    /// <summary>Names in order: positional, then *args, then keyword-only, then **kwargs.</summary>
+    /// <summary>Names in order: positional, then keyword-only, then *args, then **kwargs — matching
+    /// real CPython's actual `co_varnames` layout (keyword-only names come *before* the `*args`
+    /// name, not after — easy to get backwards since positionally/textually `*args` is written
+    /// before the keyword-only parameters in a real `def` signature).</summary>
     public string[] VarNames { get; }
     /// <summary>Number of positional parameters (co_argcount).</summary>
     public int ArgCount { get; }
@@ -103,12 +115,12 @@ public sealed class PyCode
         foreach (var p in fn.Params.Positional)
             names.Add(p.Name);
         ArgCount = fn.Params.Positional.Count;
-        bool hasVarArgs = !string.IsNullOrEmpty(fn.Params.StarArgs);
-        if (hasVarArgs)
-            names.Add(fn.Params.StarArgs!);
         foreach (var p in fn.Params.KwOnly)
             names.Add(p.Name);
         KwOnlyArgCount = fn.Params.KwOnly.Count;
+        bool hasVarArgs = !string.IsNullOrEmpty(fn.Params.StarArgs);
+        if (hasVarArgs)
+            names.Add(fn.Params.StarArgs!);
         bool hasVarKeywords = !string.IsNullOrEmpty(fn.Params.KwArgs);
         if (hasVarKeywords)
             names.Add(fn.Params.KwArgs!);

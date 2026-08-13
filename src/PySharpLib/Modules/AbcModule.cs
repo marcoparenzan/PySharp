@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -17,7 +18,17 @@ namespace PySharpLib.Modules;
 /// </summary>
 public static class AbcModule
 {
-    public static readonly PyClass AbcMetaClass = new("ABCMeta", new List<PyClass>());
+    // Real CPython: `class ABCMeta(type): ...` — ABCMeta genuinely IS a subclass of `type`. A real
+    // custom metaclass built on it (e.g. pydantic's own `class ModelMetaclass(ABCMeta): ...`) must
+    // pass the same "is this actually a metaclass?" check `ObjectNewFallback`/`Instantiate` use to
+    // recognize a real `type.__new__(mcs, name, bases, namespace)`-shaped call — without this base,
+    // `mcs.IsSubclassOf(GetPseudoBaseClass("type"))` was false for every ABCMeta-derived metaclass,
+    // so `ModelMetaclass.__new__`'s own `super().__new__(mcs, name, bases, new_namespace, **kwargs)`
+    // fell through to the "just build a blank instance of mcs" branch instead of building the real
+    // class — every model class silently became a blank ModelMetaclass instance instead of a real
+    // class, losing every method (including a real `__init__`) it was supposed to carry.
+    public static readonly PyClass AbcMetaClass =
+        new("ABCMeta", new List<PyClass> { Interp.GetPseudoBaseClass("type") });
     public static readonly PyClass AbcClass = new("ABC", new List<PyClass>());
 
     static AbcModule()

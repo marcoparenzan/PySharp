@@ -10,7 +10,7 @@ via the pure-Python `pg8000` driver (avoiding `psycopg2`'s C extension).
 SQLAlchemy against a real SQLite database, root-cause each real gap, fix it generally (not
 SQLAlchemy-specific hacks), write a regression test per fix, keep the full suite green.
 
-## Phase 0 — groundwork: `import sqlalchemy` in progress (not yet complete)
+## Phase 0 — groundwork: `import sqlalchemy` (done)
 
 Real gaps found and fixed so far, each with its own root cause (not SQLAlchemy-specific patches),
 found via probing `import sqlalchemy` round by round:
@@ -156,7 +156,7 @@ found via probing `import sqlalchemy` round by round:
 **Phase 0 complete**: `import sqlalchemy` succeeds end to end against the real, unmodified 2.0.51
 package (`print(sqlalchemy.__version__)` → `2.0.51`).
 
-## Phase 1 — a minimal real ORM round-trip against SQLite (in progress)
+## Phase 1 — a minimal real ORM round-trip against SQLite (done)
 
 Target: real `declarative_base()`/`DeclarativeBase`, a mapped class, `Session`, `add`/`commit`/
 `query`/`select` — a real end-to-end insert+query against this project's own real `sqlite3` module,
@@ -345,18 +345,63 @@ Real gaps found and fixed so far, probing with a real `declarative_base()` + map
   `class quoted_name(..., str): ...` identifiers flowing into real regex validation
   (`_requires_quotes`'s `legal_characters.match(str(value))`).
 
-Real end-to-end progress verified so far against a real, unmodified sqlalchemy 2.0.51 + this
-project's own real `sqlite3` module: `declarative_base()`, a mapped `User` class definition,
-`Base.metadata.create_all(engine)` (full real `CREATE TABLE` DDL compilation and execution),
-`Session(engine)`, `session.add(...)`, and `session.commit()` running all the way into real INSERT
-statement compilation and flush execution all now work correctly against a real SQLite in-memory
-database. Currently debugging the next wall: `UpdateBase.return_defaults()` (itself a
-`@_generative`/`@util.decorator`-wrapped method) raising `missing required keyword-only argument:
-'cols'` — `cols` is actually a `*cols` var-args parameter in the real source, so something in the
-signature-preserving decorator's `compat.inspect_formatargspec`-based code generation (a hand-rolled
-shim standing in for a function real CPython itself removed in 3.11) is misreporting/misgenerating
-the wrapper's own var-args parameter as a required keyword-only one — not yet root-caused. The actual
-insert/query/read-back round trip is not yet verified end-to-end.
+- [x] **`PyCode.co_varnames` had the wrong real-CPython ordering**: built as `[positional, *args,
+  kwonly, **kwargs]`, but real CPython's actual layout is `[positional, kwonly, *args, **kwargs]`
+  (keyword-only names come *before* the `*args` name, not after). Broke any `inspect.
+  getfullargspec`-style introspection reading `co_varnames[argcount + kwonlycount]` to find the
+  var-args name. This was the actual root cause of the `return_defaults()` `'cols'` wall above:
+  `compat.inspect_formatargspec` (sqlalchemy's own hand-rolled port of the function real CPython
+  removed in 3.11) misread `*cols` as a required keyword-only parameter under the old ordering.
+- [x] **`PyFunction.Code` (`fn.__code__`) built a fresh `PyCode` object on every access** instead of
+  caching it — broke any code comparing two `__code__` reads by identity (`is`), a real, documented
+  CPython pattern (e.g. real sqlalchemy's own `type_api.py` `_has_column_expression`: `self.
+  __class__.column_expression.__code__ is not TypeEngine.column_expression.__code__`, an "was this
+  method overridden" check that always reported "yes", even unmodified). Now lazily cached per
+  `PyFunction`.
+- [x] **`instance.__dict__ = newdict` (plain attribute assignment, not just the explicit `object.
+  __setattr__` unbound form) must replace the whole instance namespace at once** — was instead
+  storing the value under the literal key `"__dict__"`, silently losing every other attribute (reading
+  `.__dict__` back looked correct by coincidence). This is the exact mechanism behind sqlalchemy's own
+  `Generative._generate()`, used internally by every `@_generative`-decorated SQL-expression method.
+- [x] **`object.__new__`'s "was this actually a `type.__new__(mcs, name, bases, ns)`-shaped call?"
+  heuristic matched ANY call with a string then a tuple as the next two args**, regardless of whether
+  the first argument was actually a metaclass — misfired for a real `typing.NamedTuple` whose first
+  field is `str`-typed and second is `tuple`-typed, e.g. real sqlalchemy's own `sql/compiler.py class
+  _InsertManyValuesBatch(NamedTuple): replaced_statement: str; replaced_parameters: ...` —
+  constructing a real instance was misdetected as "build a brand-new class named after the SQL text"
+  instead. Fixed by gating on the same "is `cls` actually a metaclass?" guard `Interp.Instantiate`
+  already uses for calling a metaclass directly.
+- [x] **Functions (and builtins) didn't support the descriptor protocol on themselves**
+  (`func.__get__(obj, type)`) — real CPython functions ARE descriptors; this is the actual machinery
+  behind "accessing a function through a class turns it into a bound method". `obj is None` (class-
+  level access) returns the plain function unchanged, matching real Python 3 (no more "unbound
+  method" wrapper). Found via real sqlalchemy's own `util/langhelpers.py` `hybridmethod.__get__`:
+  `self.clslevel.__get__(owner, owner.__class__)`, explicitly re-invoking the descriptor protocol on
+  a plain function to bind it to the class itself as if it were an instance — the final wall blocking
+  `session.execute(select(...))`.
+- [x] `str.join` rejected a real `class Foo(str): ...` subclass instance in the sequence (only a
+  literal `str`), even though real CPython accepts any str subclass. Found via real sqlalchemy's own
+  `quoted_name` (`class quoted_name(..., str): ...`) flowing straight into `", ".join([...])` while
+  composing a FROM-clause's SQL text.
+- [x] **A regression introduced by the `object.__new__` metaclass-shape guard fix above: real
+  `abc.ABCMeta` (`class ABCMeta(type): ...` in real CPython) had no bases at all in PySharp's own stub**,
+  so any real custom metaclass built on it (the exact pattern pydantic's own `class ModelMetaclass
+  (ABCMeta): ...` uses) failed the "is this actually a metaclass?" check — `super().__new__(mcs, name,
+  bases, namespace)` silently fell through to "build a blank instance of `mcs`" instead of building the
+  real class, dropping every method (including a real `__init__`) the namespace carried. Fixed by
+  giving `AbcModule.AbcMetaClass` the real "type" pseudo-base as a base. Caught by re-running the full
+  regression suite (not sqlalchemy-specific — this broke pydantic's own `import pydantic` and three
+  `MetaclassTests`/`IntrospectionTests` cases that had gone stale/unverified since the four fixes above
+  were made without a full-suite run).
+
+**Phase 1 is done.** The full insert + query round trip now runs end-to-end against a real,
+unmodified sqlalchemy 2.0.51 + this project's own real `sqlite3` module: `declarative_base()`, a
+mapped `User` class definition, `Base.metadata.create_all(engine)` (real `CREATE TABLE` DDL),
+`Session(engine)`, `session.add(...)`, `session.commit()` (a full real INSERT flush, including the
+`insertmanyvalues`/RETURNING-clause machinery), `session.execute(select(User).order_by(User.name))
+.scalars().all()`, and `session.get(User, 1)` all produce exactly the expected real values against a
+real SQLite in-memory database — verified end-to-end in `M22_Orm/OrmSmokeTests.cs`. Getting here took
+~30 real, general interpreter fixes, none of them sqlalchemy-specific (see the itemized lists above).
 
 ## Phase 2 — docs (not started)
 

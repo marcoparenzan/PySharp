@@ -483,13 +483,18 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`),
   `np.random`, and a two-way .NET array interop bridge. See [NUMPY_PLAN.md](NUMPY_PLAN.md)'s full
   12-phase plan (all phases done) and ROADMAP.md scenario 12.
+- **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live against this project's own
+  real `sqlite3` module — `declarative_base()`, a mapped class, `create_all()` DDL, `Session.add()`/
+  `.commit()` (a full real INSERT flush), and `session.execute(select(...))`/`session.get(...)`
+  verified end to end with a real insert-then-query round trip. See [ORM_PLAN.md](ORM_PLAN.md) (both
+  phases done) and ROADMAP.md scenario 13.
 
 ### Does not work (yet)
 
 | Scenario | Verified blocker | Feasibility |
 |---|---|---|
-| **Postgres** | `Npgsql` support exists in principle (same pattern as `pyodbc`/SQL Server) but is blocked on having a real Postgres server available to verify against | **Feasible, blocked on environment**: SQLite and SQL Server (via `pyodbc`/`Microsoft.Data.SqlClient`) both already work — see [ROADMAP.md](ROADMAP.md) scenario 3 and [SQL_PLAN.md](SQL_PLAN.md) |
-| **Django** | a real, unmodified Django app needs WSGI, the ORM (real SQL generation + migrations, heavy metaclass use), the template engine, `django.contrib.admin`, class-based views | **Not started**: much heavier than FastAPI (scenario 2, now done) — see [ROADMAP.md](ROADMAP.md) scenario 10 |
+| **Postgres** | `Npgsql` support exists in principle (same pattern as `pyodbc`/SQL Server) but is blocked on having a real Postgres server available to verify against; a pure-Python `pg8000` SQLAlchemy dialect is the planned route instead | **Feasible, blocked on environment**: SQLite (raw `sqlite3` and now a real SQLAlchemy ORM round trip) and SQL Server (via `pyodbc`/`Microsoft.Data.SqlClient`) both already work — see [ROADMAP.md](ROADMAP.md) scenarios 3 and 13, [SQL_PLAN.md](SQL_PLAN.md) and [ORM_PLAN.md](ORM_PLAN.md) |
+| **Django** | a real, unmodified Django app needs WSGI, migrations, the template engine, `django.contrib.admin`, class-based views | **Partially de-risked**: a real ORM round trip (SQLAlchemy) now works (see above), but Django itself is much heavier than FastAPI (scenario 2, now done) and not started — see [ROADMAP.md](ROADMAP.md) scenario 10 |
 
 `sqlite3` (scenario 3), `importlib`, and `email`/`http` (scenario 2, `FASTAPI_PLAN.md`) are no longer
 missing — all three now exist, closing out gaps this section used to list.

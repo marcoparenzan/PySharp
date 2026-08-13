@@ -437,6 +437,23 @@ indexing, broadcasting, reductions, ufuncs, shape manipulation, linear algebra, 
 strided views) and every phase's own verification notes. Covered by
 [src/PySharp.Tests/M14_Numpy](src/PySharp.Tests/M14_Numpy/) (120+ tests).
 
+### Scenario 13 — ORM (SQLAlchemy) ✅
+
+The real, unmodified **SQLAlchemy 2.0.51** (`py3-none-any` wheel, no C-extension dependency by
+default) runs live against this project's own real `sqlite3` module: `declarative_base()`, a mapped
+class, `Base.metadata.create_all(engine)` (real `CREATE TABLE` DDL), `Session.add()`/`.commit()` (a
+full real INSERT flush, including the `insertmanyvalues`/RETURNING-clause machinery), and
+`session.execute(select(...)).scalars().all()`/`session.get(...)` all produce exactly the expected
+real values round-tripped through a real SQLite in-memory database. See **ORM_PLAN.md** for the full
+2-phase plan and the ~30 real, general interpreter gaps found and fixed along the way — none
+SQLAlchemy-specific: real `class Foo(dict/list/set/str/int): ...` subclassing, `__slots__` descriptor
+semantics, PEP 487 `__init_subclass__`, the general descriptor protocol (including on plain functions
+themselves, `func.__get__`), real name mangling, metaclass `__init__` dispatch and metaclass-level
+operator overloading, `instance.__dict__ = ...` whole-namespace replacement, and a real `abc.ABCMeta`
+base for the `type` pseudo-class hierarchy. Verified live via
+[src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/). A pure-Python Postgres dialect (`pg8000`) is
+the natural next step, mirroring Scenario 3's sqlite3/Postgres/SQL Server split — not yet attempted.
+
 ### Cross-cutting — Native libraries 🟡
 
 General rule: **a native library is invoked from C#**, so it is exposed to Python either (a) via

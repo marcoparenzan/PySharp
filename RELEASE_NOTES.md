@@ -229,6 +229,35 @@ of NUMPY_PLAN.md's 12-phase plan against real, known numpy semantics.
 
 ---
 
+## ORM support (SQLAlchemy) — scenario 13 — 2026-08-13
+
+The real, unmodified **SQLAlchemy 2.0.51** now runs live against this project's own real `sqlite3`
+module: `declarative_base()`, a mapped class, `Base.metadata.create_all(engine)` (real `CREATE TABLE`
+DDL), `Session.add()`/`.commit()` (a full real INSERT flush, including the `insertmanyvalues`/
+RETURNING-clause machinery), and `session.execute(select(...)).scalars().all()`/`session.get(...)` —
+verified end to end with a full insert-then-query round trip against a real SQLite in-memory
+database.
+
+- **New, substantial language capabilities landed along the way** (general-purpose, not
+  SQLAlchemy-specific): real `class Foo(dict/list/set/str/int): ...` subclassing (instances behave as
+  the real builtin — arithmetic, `[]`, iteration, real methods, value-based hashing/equality with the
+  plain builtin); real `__slots__` descriptor semantics (per-class data descriptors that shadow
+  inherited attributes); PEP 487 `__init_subclass__`; the general descriptor protocol (`__get__`/
+  `__set__` on arbitrary user classes, and on plain functions/builtins themselves — `func.__get__` is
+  the real mechanism behind "a function becomes a bound method through a class"); real Python name
+  mangling (`__name` → `_ClassName__name`); metaclass `__init__` dispatch and metaclass-level
+  binary/comparison operator overloading; `instance.__dict__ = newdict` whole-namespace replacement.
+- **~30 real, general interpreter/stdlib gaps** found and fixed round by round (full blow-by-blow in
+  `ORM_PLAN.md`) — none SQLAlchemy-specific, each independently reachable by other real packages too.
+  Notably: `co_varnames`'s ordering now matches real CPython's actual layout (kwonly names before
+  `*args`, not after); a function's `__code__` is now a stable, identity-cached object; `abc.ABCMeta`
+  now has a real `type` base, so custom metaclasses built on it (a common real pattern — pydantic's
+  own `ModelMetaclass` uses the exact same shape) are correctly recognized.
+- Verified live via [src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/) against the real,
+  unmodified package. A pure-Python Postgres dialect (`pg8000`) is the natural next step.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

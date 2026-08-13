@@ -84,7 +84,9 @@ public class IntrospectionTests
             print(c.co_varnames)
             print(c.co_argcount, c.co_kwonlyargcount)
             """;
-        Assert.Equal("('a', 'rest', 'key', 'extra')\n1 1\n", Py.Run(src));
+        // Real CPython co_varnames layout: positional, then keyword-only, then *args, then **kwargs
+        // (kwonly names come before *args, not after).
+        Assert.Equal("('a', 'key', 'rest', 'extra')\n1 1\n", Py.Run(src));
     }
 
     [Fact]

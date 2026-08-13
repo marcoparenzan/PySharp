@@ -622,6 +622,17 @@ public sealed class Interp
     private static readonly PyBuiltinFunction ObjectInitFallback =
         new("object.__init__", (_, _, _) => PyNone.Instance);
 
+    /// <summary>Real CPython descriptor protocol on a plain function/builtin (`func.__get__(obj,
+    /// type)`): binds `func` to `obj` as a bound method, or — when `obj` is `None` (class-level
+    /// access) — returns `func` unchanged, since Python 3 has no separate "unbound method" wrapper.
+    /// Shared by the `PyFunction` and `PyBuiltinFunction` cases in TryGetAttr.</summary>
+    private static PyBuiltinFunction MakeFunctionGetDescriptor(object fn) =>
+        new("function.__get__", (_, a, _) =>
+        {
+            object instance = a.Length > 0 ? a[0] : PyNone.Instance;
+            return instance is PyNone ? fn : new PyBoundMethod(instance, fn);
+        });
+
     /// <summary>Real CPython: `obj.__dict__ = newdict` (equivalently `object.__setattr__(obj,
     /// '__dict__', newdict)`) replaces the instance's whole namespace — pydantic's real
     /// `BaseModel.__init__` uses exactly this (`object_setattr(self, '__dict__', values)`) to set
@@ -655,8 +666,17 @@ public sealed class Interp
         // calling `super().__new__(...)` or a stub base's `.__new__` directly (e.g. typing_extensions'
         // real `_ProtocolMeta.__new__` calls `abc.ABCMeta.__new__(mcls, name, bases, namespace,
         // **kwargs)` directly rather than via super()) bottoms out here: build the real class,
-        // exactly like real CPython's type.__new__ does.
-        a.Length >= 3 && a[0] is PyClass && a[1] is string clsName && a[2] is PyTuple
+        // exactly like real CPython's type.__new__ does. Gated on `cls` itself actually being a
+        // metaclass (derived from the "type" pseudo-base) — matching the same guard
+        // `Interp.Instantiate` uses for calling a metaclass directly — not just "first two args
+        // after cls happen to look like (str, tuple)". Found via real sqlalchemy's own
+        // `sql/compiler.py` `class _InsertManyValuesBatch(NamedTuple): replaced_statement: str;
+        // replaced_parameters: ...` — constructing a real instance with a SQL-string first field and
+        // a tuple second field was silently misdetected as `type.__new__(name, bases, namespace)`
+        // and built a brand new *class* (named after the SQL text) instead of a real namedtuple
+        // instance.
+        a.Length >= 3 && a[0] is PyClass mcs && mcs.IsSubclassOf(GetPseudoBaseClass("type"))
+            && a[1] is string clsName && a[2] is PyTuple
             ? TypeConstructorMethods.BuildClass(clsName, a[2], a.Length > 3 ? a[3] : PyNone.Instance)
             // object.__new__(cls, ...): a blank instance — the shape used when nothing overrides
             // __new__ for a regular (non-metaclass) class.
@@ -3231,6 +3251,11 @@ public sealed class Interp
                     case "__init__":
                         value = ObjectInitFallback;
                         return true;
+                    // See the same case for PyFunction below for the full doc comment (descriptor
+                    // protocol on the function object itself).
+                    case "__get__":
+                        value = MakeFunctionGetDescriptor(obj);
+                        return true;
                 }
                 return false;
 
@@ -3337,6 +3362,18 @@ public sealed class Interp
                     // `util/langhelpers.py`) tripping over a plain function standing in for `cls`.
                     case "__init__":
                         value = ObjectInitFallback;
+                        return true;
+                    // Real CPython: functions are themselves descriptors — `func.__get__(obj, type)`
+                    // is what actually implements "accessing a function through a class turns it into
+                    // a bound method" (the machinery behind every ordinary method call). `obj is None`
+                    // means class-level access (`SomeClass.__dict__['f'].__get__(None, SomeClass)`),
+                    // which in real Python 3 returns the plain function unchanged (no more "unbound
+                    // method" wrapper) rather than binding it. Found via real sqlalchemy's own
+                    // `util/langhelpers.py` `hybridmethod.__get__`: `self.clslevel.__get__(owner,
+                    // owner.__class__)` — explicitly re-invoking the descriptor protocol on a plain
+                    // function to bind it to the class itself as if it were an instance.
+                    case "__get__":
+                        value = MakeFunctionGetDescriptor(obj);
                         return true;
                     default:
                         if (fn.Attributes.TryGet(name, out value!))
@@ -3600,6 +3637,22 @@ public sealed class Interp
                 if (inst.Class.HasSlot(name))
                 {
                     inst.EnsureSlots()[name] = value;
+                    return;
+                }
+                // Real CPython: `instance.__dict__ = new_dict` (a plain attribute-assignment
+                // statement, not just the explicit `object.__setattr__(obj, '__dict__', ...)` unbound
+                // form ObjectSetAttrImpl already handled) replaces the instance's *whole* namespace —
+                // it must not fall through to the generic key-store below, which would literally
+                // store `new_dict` under the key "__dict__" instead of replacing the real contents
+                // (masked because reading `instance.__dict__` back would "coincidentally" show the
+                // right value, while every *other* attribute silently stayed missing). Found via real
+                // sqlalchemy's own `sql/base.py` `Generative._generate`: `s = cls.__new__(cls);
+                // s.__dict__ = self.__dict__.copy()` — the real mechanism behind every `@_generative`
+                // SQL-expression-building method (`.values()`, `.where()`, ...) — silently produced a
+                // clone with none of its real attributes.
+                if (name == "__dict__")
+                {
+                    ObjectSetAttrImpl(inst, name, value);
                     return;
                 }
                 inst.Dict[name] = value;
