@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using System.Numerics;
 using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
@@ -58,7 +59,84 @@ public static class ItertoolsModule
             return new PyIterator(DropWhile(interp, pred, src).GetEnumerator());
         });
 
+        // Real itertools.filterfalse: the inverse of the `filter()` builtin — yields items where the
+        // predicate is falsy, or (predicate is `None`) items that are themselves falsy. Found via
+        // real sqlalchemy's own `util/_collections.py`.
+        d["filterfalse"] = new PyBuiltinFunction("filterfalse", (interp, a, _) =>
+        {
+            object? pred = a[0] is PyNone ? null : a[0];
+            var src = PyOps.Iterate(interp, a[1]);
+            return new PyIterator(FilterFalse(interp, pred, src).GetEnumerator());
+        });
+
+        // Real itertools.groupby(iterable, key=None): groups *consecutive* equal-key items. Each
+        // group here is eagerly collected into its own buffer rather than staying lazily coupled to
+        // outer-iterator advancement (real CPython invalidates a not-fully-consumed group once you
+        // advance past it) — a simplification that matches every real call site seen so far
+        // (`for key, group in groupby(...): ... list(group) ...`, consuming each group immediately).
+        // Found via real sqlalchemy's own `orm/persistence.py`.
+        d["groupby"] = new PyBuiltinFunction("groupby", (interp, a, kwargs) =>
+        {
+            object? keyFn = a.Length > 1 && a[1] is not PyNone ? a[1]
+                : kwargs is not null && kwargs.TryGetValue("key", out var k) && k is not PyNone ? k : null;
+            var src = PyOps.Iterate(interp, a[0]);
+            return new PyIterator(GroupBy(interp, keyFn, src).GetEnumerator());
+        });
+
+        // Real itertools.count(start=0, step=1): an infinite arithmetic sequence. Found via real
+        // sqlalchemy's own `util/langhelpers.py` `counter()` (a threadsafe counter built on
+        // `itertools.count(1)`).
+        d["count"] = new PyBuiltinFunction("count", (_, a, kwargs) =>
+        {
+            BigInteger start = a.Length > 0 ? PyOps.AsBigInt(a[0], "start")
+                : kwargs is not null && kwargs.TryGetValue("start", out var s) ? PyOps.AsBigInt(s, "start")
+                : BigInteger.Zero;
+            BigInteger step = a.Length > 1 ? PyOps.AsBigInt(a[1], "step")
+                : kwargs is not null && kwargs.TryGetValue("step", out var st) ? PyOps.AsBigInt(st, "step")
+                : BigInteger.One;
+            return new PyIterator(Count(start, step).GetEnumerator());
+        });
+
         return m;
+    }
+
+    private static IEnumerable<object> Count(BigInteger start, BigInteger step)
+    {
+        for (var i = start; ; i += step)
+            yield return i;
+    }
+
+    private static IEnumerable<object> GroupBy(Interp interp, object? keyFn, IEnumerable<object> src)
+    {
+        object? currentKey = null;
+        List<object>? currentGroup = null;
+        bool have = false;
+        foreach (var item in src)
+        {
+            object k = keyFn is null ? item : interp.Call(keyFn, new[] { item });
+            if (have && interp.RichEquals(k, currentKey!))
+            {
+                currentGroup!.Add(item);
+                continue;
+            }
+            if (have)
+                yield return new PyTuple(new object[] { currentKey!, new PyIterator(currentGroup!.GetEnumerator()) });
+            currentKey = k;
+            currentGroup = new List<object> { item };
+            have = true;
+        }
+        if (have)
+            yield return new PyTuple(new object[] { currentKey!, new PyIterator(currentGroup!.GetEnumerator()) });
+    }
+
+    private static IEnumerable<object> FilterFalse(Interp interp, object? pred, IEnumerable<object> src)
+    {
+        foreach (var item in src)
+        {
+            bool truthy = pred is null ? PyOps.Truthy(interp, item) : PyOps.Truthy(interp, interp.Call(pred, new[] { item }));
+            if (!truthy)
+                yield return item;
+        }
     }
 
     private static IEnumerable<object> TakeWhile(Interp interp, object pred, IEnumerable<object> src)

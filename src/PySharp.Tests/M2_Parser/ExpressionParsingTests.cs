@@ -105,6 +105,12 @@ public class ExpressionParsingTests
     [InlineData("f'{{literal}}'", "(fstr '{literal}')")]
     [InlineData("f'{d[\"k\"]}'", "(fstr {([] d 'k')})")]
     [InlineData("f'a{1 + 2}b'", "(fstr 'a' {(+ 1 2)} 'b')")]
+    // Real CPython 3.12+ (PEP 701): a triple-quoted f-string's `{...}` expression may itself span
+    // multiple physical lines with no enclosing parens of its own (found via real sqlalchemy's own
+    // `engine/base.py`) — the embedded newlines inside `{}` never end the expression, same as being
+    // inside a real bracket pair.
+    [InlineData("f\"\"\"a{\n1 + 2\n}b\"\"\"", "(fstr 'a' {(+ 1 2)} 'b')")]
+    [InlineData("f\"\"\"{\n'x'\nif y\nelse 'z'\n}\"\"\"", "(fstr {(ifexp y 'x' 'z')})")]
     public void FStrings(string src, string expected)
         => Assert.Equal(expected, P.Expr(src));
 }

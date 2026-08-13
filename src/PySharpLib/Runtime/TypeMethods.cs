@@ -56,6 +56,7 @@ public static class TypeMethods
             PyDict => DictMethods.Table,
             PyTuple => TupleMethods.Table,
             PySet => SetMethods.Table,
+            PyFrozenSet => FrozenSetMethods.Table,
             PyBytes => BytesMethods.Table,
             PyByteArray => ByteArrayMethods.Table,
             PyGenerator => GeneratorMethods.Table,
@@ -907,10 +908,51 @@ public static class ListMethods
             return PyNone.Instance;
         });
         Add("copy", (_, a, _) => new PyList(L(a).Items));
+        // The dunders below back a real `class Foo(list): ...` subclass instance (a PyInstance — see
+        // PyInstance.Sequence's own doc comment) as well as unbound `list.<dunder>` calls, the same
+        // reasoning as DictMethods' own dunders. Found via real sqlalchemy's own
+        // `orm/collections.py` `InstrumentedList(list)`.
+        Add("__init__", (interp, a, _) =>
+        {
+            var list = L(a);
+            list.Items.Clear();
+            if (a.Length > 1)
+                list.Items.AddRange(PyOps.Iterate(interp, a[1]));
+            return PyNone.Instance;
+        });
+        Add("__new__", (_, a, _) => a.Length > 0 && a[0] is PyClass cls ? new PyInstance(cls) : (object)new PyList());
+        Add("__getitem__", (interp, a, _) => interp.GetItem(L(a), a[1]));
+        Add("__setitem__", (interp, a, _) =>
+        {
+            interp.SetItem(L(a), a[1], a[2]);
+            return PyNone.Instance;
+        });
+        Add("__delitem__", (interp, a, _) =>
+        {
+            interp.DelItem(L(a), a[1]);
+            return PyNone.Instance;
+        });
+        Add("__len__", (_, a, _) => new BigInteger(L(a).Items.Count));
+        Add("__iter__", (_, a, _) => new PyIterator(new List<object>(L(a).Items).GetEnumerator()));
+        Add("__contains__", (interp, a, _) => PyOps.Contains(interp, L(a), a[1]));
+        Add("__repr__", (interp, a, _) => PyOps.Repr(interp, L(a)));
+        Add("__eq__", (interp, a, _) => a[1] switch
+        {
+            PyList ol => interp.RichEquals(L(a), ol),
+            PyInstance oi when oi.Sequence is not null => interp.RichEquals(L(a), oi.Sequence),
+            _ => (object)PyNotImplemented.Instance,
+        });
         return t;
     }
 
-    private static PyList L(object[] args) => (PyList)args[0];
+    // Accepts either a raw PyList or a PyInstance whose class derives from the "list" pseudo-base —
+    // see PyInstance.Sequence's own doc comment.
+    private static PyList L(object[] args) => args[0] switch
+    {
+        PyList l => l,
+        PyInstance inst => inst.EnsureSequence(),
+        _ => (PyList)args[0],
+    };
 
     /// <summary>Stable sort with key= and reverse= (shared with sorted()).</summary>
     public static void SortInPlace(Interp interp, List<object> items, Dictionary<string, object>? kwargs)
@@ -1017,6 +1059,65 @@ public static class DictMethods
             return PyNone.Instance;
         });
         Add("copy", (_, a, _) => D(a).Copy());
+        // The dunders below back a real `class Foo(dict): ...` subclass instance (a PyInstance, not
+        // a raw PyDict — see PyInstance.Mapping's own doc comment) as well as unbound `dict.<dunder>`
+        // calls (e.g. real sqlalchemy's own `util/_py_collections.py`: `dict.__init__(new, *args)`,
+        // `dict.update(new, __d)` on an `ImmutableDictBase.__new__(cls)`-built instance). D(a) accepts
+        // either shape, so the same implementation serves both the "dict" pseudo-base class's own
+        // Dict (installed by Interp.GetPseudoBaseClass) and this Table.
+        Add("__init__", (interp, a, kw) =>
+        {
+            var d = D(a);
+            if (a.Length > 1)
+            {
+                if (a[1] is PyDict other)
+                    d.Update(other);
+                else if (PyOps.TryGetMappingItems(interp, a[1], out var mapItems))
+                {
+                    foreach (var (k, v) in mapItems)
+                        d[k] = v;
+                }
+                else
+                    foreach (var pair in PyOps.Iterate(interp, a[1]))
+                    {
+                        var kv = PyOps.Iterate(interp, pair).ToList();
+                        if (kv.Count != 2)
+                            throw PyErr.ValueError("dictionary update sequence element is not a pair");
+                        d[kv[0]] = kv[1];
+                    }
+            }
+            if (kw is not null)
+                foreach (var pair in kw)
+                    d[pair.Key] = pair.Value;
+            return PyNone.Instance;
+        });
+        // dict.__new__(cls): a blank instance of the real (sub)class — unlike object.__new__'s own
+        // generic blank-PyInstance path, this specifically exists so `SomeClass.__new__` resolved
+        // through a dict-subclass MRO (nothing more specific overriding it) lands here rather than
+        // needing its own separate fallback.
+        Add("__new__", (_, a, _) => a.Length > 0 && a[0] is PyClass cls ? new PyInstance(cls) : (object)new PyDict());
+        Add("__setitem__", (_, a, _) =>
+        {
+            D(a)[a[1]] = a[2];
+            return PyNone.Instance;
+        });
+        Add("__getitem__", (_, a, _) => D(a).TryGet(a[1], out var v) ? v : throw PyErr.KeyError(a[1]));
+        Add("__delitem__", (_, a, _) =>
+        {
+            if (!D(a).Remove(a[1]))
+                throw PyErr.KeyError(a[1]);
+            return PyNone.Instance;
+        });
+        Add("__len__", (_, a, _) => new BigInteger(D(a).Count));
+        Add("__iter__", (_, a, _) => new PyIterator(D(a).Keys.ToList().GetEnumerator()));
+        Add("__contains__", (_, a, _) => D(a).ContainsKey(a[1]));
+        Add("__repr__", (interp, a, _) => PyOps.Repr(interp, D(a)));
+        Add("__eq__", (interp, a, _) => a[1] switch
+        {
+            PyDict od => interp.RichEquals(D(a), od),
+            PyInstance oi when oi.Mapping is not null => interp.RichEquals(D(a), oi.Mapping),
+            _ => (object)PyNotImplemented.Instance,
+        });
         // Real CPython: dict.fromkeys(iterable, value=None) is a classmethod — called unbound off
         // the `dict` type itself (`dict.fromkeys(items, ...)`, not `some_dict.fromkeys(...)`), so
         // the args here are (iterable, value), not (self, ...). Found via real pydantic v1's own
@@ -1035,7 +1136,15 @@ public static class DictMethods
         return t;
     }
 
-    private static PyDict D(object[] args) => (PyDict)args[0];
+    // Accepts either a raw PyDict (the literal-dict-method-call shape) or a PyInstance whose class
+    // derives from the "dict" pseudo-base (a real `class Foo(dict): ...` subclass instance — see
+    // PyInstance.Mapping's own doc comment), so the exact same method bodies serve both shapes.
+    private static PyDict D(object[] args) => args[0] switch
+    {
+        PyDict d => d,
+        PyInstance inst => inst.EnsureMapping(),
+        _ => (PyDict)args[0], // triggers the usual InvalidCastException -> TypeError wrapping
+    };
 }
 
 public static class TupleMethods
@@ -1130,10 +1239,89 @@ public static class SetMethods
         Add("issubset", (interp, a, _) => S(a).Items.IsSubsetOf(PyOps.Iterate(interp, a[1])));
         Add("issuperset", (interp, a, _) => S(a).Items.IsSupersetOf(PyOps.Iterate(interp, a[1])));
         Add("copy", (_, a, _) => new PySet(S(a).Items));
+        // The dunders below back a real `class Foo(set): ...` subclass instance (a PyInstance — see
+        // PyInstance.SetItems' own doc comment) as well as unbound `set.<dunder>` calls, the same
+        // reasoning as DictMethods'/ListMethods' own dunders. Found via real sqlalchemy's own
+        // `orm/collections.py` `InstrumentedSet(set)`.
+        Add("__init__", (interp, a, _) =>
+        {
+            var set = S(a);
+            set.Items.Clear();
+            if (a.Length > 1)
+                set.Items.UnionWith(PyOps.Iterate(interp, a[1]));
+            return PyNone.Instance;
+        });
+        Add("__new__", (_, a, _) => a.Length > 0 && a[0] is PyClass cls ? new PyInstance(cls) : (object)new PySet());
+        Add("__len__", (_, a, _) => new BigInteger(S(a).Items.Count));
+        Add("__iter__", (_, a, _) => new PyIterator(new List<object>(S(a).Items).GetEnumerator()));
+        Add("__contains__", (_, a, _) => S(a).Items.Contains(a[1]));
+        Add("__repr__", (interp, a, _) => PyOps.Repr(interp, S(a)));
+        Add("__eq__", (interp, a, _) => a[1] switch
+        {
+            PySet os => interp.RichEquals(S(a), os),
+            PyInstance oi when oi.SetItems is not null => interp.RichEquals(S(a), oi.SetItems),
+            _ => (object)PyNotImplemented.Instance,
+        });
         return t;
     }
 
-    private static PySet S(object[] args) => (PySet)args[0];
+    // Accepts either a raw PySet or a PyInstance whose class derives from the "set" pseudo-base —
+    // see PyInstance.SetItems' own doc comment.
+    private static PySet S(object[] args) => args[0] switch
+    {
+        PySet s => s,
+        PyInstance inst => inst.EnsureSetItems(),
+        _ => (PySet)args[0],
+    };
+}
+
+/// <summary>frozenset's own (immutable-only) method surface — deliberately separate from
+/// SetMethods rather than sharing its Table, since a real frozenset has no `add`/`remove`/`discard`/
+/// `pop`/`clear`/`update` at all. Found via real sqlalchemy's own `orm/util.py` calling
+/// `.difference()` on a real frozenset, reachable from `import sqlalchemy.orm`.</summary>
+public static class FrozenSetMethods
+{
+    public static readonly Dictionary<string, PyBuiltinFunction> Table = Build();
+
+    private static Dictionary<string, PyBuiltinFunction> Build()
+    {
+        var t = new Dictionary<string, PyBuiltinFunction>();
+        void Add(string name, BuiltinFn fn) => t[name] = new PyBuiltinFunction($"frozenset.{name}", fn);
+
+        Add("union", (interp, a, _) =>
+        {
+            var result = new PyFrozenSet(F(a));
+            for (int i = 1; i < a.Length; i++)
+                result.Items.UnionWith(PyOps.Iterate(interp, a[i]));
+            return result;
+        });
+        Add("intersection", (interp, a, _) =>
+        {
+            var result = new PyFrozenSet(F(a));
+            for (int i = 1; i < a.Length; i++)
+                result.Items.IntersectWith(PyOps.Iterate(interp, a[i]));
+            return result;
+        });
+        Add("difference", (interp, a, _) =>
+        {
+            var result = new PyFrozenSet(F(a));
+            for (int i = 1; i < a.Length; i++)
+                result.Items.ExceptWith(PyOps.Iterate(interp, a[i]));
+            return result;
+        });
+        Add("symmetric_difference", (interp, a, _) =>
+        {
+            var result = new PyFrozenSet(F(a));
+            result.Items.SymmetricExceptWith(PyOps.Iterate(interp, a[1]));
+            return result;
+        });
+        Add("issubset", (interp, a, _) => F(a).IsSubsetOf(PyOps.Iterate(interp, a[1])));
+        Add("issuperset", (interp, a, _) => F(a).IsSupersetOf(PyOps.Iterate(interp, a[1])));
+        Add("copy", (_, a, _) => new PyFrozenSet(F(a)));
+        return t;
+    }
+
+    private static HashSet<object> F(object[] args) => ((PyFrozenSet)args[0]).Items;
 }
 
 public static class BytesMethods

@@ -33,11 +33,20 @@ public sealed class PyClass
     public void RegisterVirtualSubclass(PyClass subclass)
         => (VirtualSubclasses ??= new HashSet<PyClass>()).Add(subclass);
 
+    /// <summary>Real CPython's `cls.__subclasses__()`: the classes that directly (not transitively)
+    /// derive from this one — real code walks it recursively for a full-tree traversal (see e.g.
+    /// real sqlalchemy's own `util/langhelpers.py` `walk_subclasses`). Real CPython only keeps *weak*
+    /// references here (a subclass can be garbage-collected and drop out of the list); PySharp's
+    /// classes are never collected mid-run, so a plain list is equivalent in practice.</summary>
+    public List<PyClass> DirectSubclasses { get; } = new();
+
     public PyClass(string name, List<PyClass> bases)
     {
         Name = name;
         Bases = bases;
         Mro = ComputeMro();
+        foreach (var b in bases)
+            b.DirectSubclasses.Add(this);
     }
 
     private List<PyClass> ComputeMro()
@@ -139,6 +148,31 @@ public sealed class PyInstance
     public PyDict? Slots { get; private set; }
 
     public PyDict EnsureSlots() => Slots ??= new PyDict();
+
+    /// <summary>Backing key/value storage for an instance of a real `class Foo(dict): ...` — real
+    /// CPython lays a dict subclass instance out as a genuine dict struct plus extra slots; here a
+    /// `PyInstance` (needed for normal attribute/method dispatch through the subclass's own MRO)
+    /// instead carries this lazily-allocated store, which the "dict" pseudo-base's own
+    /// `__getitem__`/`__setitem__`/`__len__`/`__iter__`/etc. (see DictMethods in TypeMethods.cs)
+    /// read and write through <see cref="EnsureMapping"/>. Found via real sqlalchemy's own
+    /// `util/_py_collections.py` `immutabledict(dict)`.</summary>
+    public PyDict? Mapping { get; private set; }
+
+    public PyDict EnsureMapping() => Mapping ??= new PyDict();
+
+    /// <summary>Same idea as <see cref="Mapping"/>, for a real `class Foo(list): ...` instance — see
+    /// ListMethods in TypeMethods.cs. Found via real sqlalchemy's own `orm/collections.py`
+    /// `InstrumentedList(list)`.</summary>
+    public PyList? Sequence { get; private set; }
+
+    public PyList EnsureSequence() => Sequence ??= new PyList();
+
+    /// <summary>Same idea as <see cref="Mapping"/>, for a real `class Foo(set): ...` instance — see
+    /// SetMethods in TypeMethods.cs. Found via real sqlalchemy's own `orm/collections.py`
+    /// `InstrumentedSet(set)`.</summary>
+    public PySet? SetItems { get; private set; }
+
+    public PySet EnsureSetItems() => SetItems ??= new PySet();
 
     public PyInstance(PyClass cls) => Class = cls;
 

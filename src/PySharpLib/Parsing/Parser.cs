@@ -1486,12 +1486,46 @@ public sealed class Parser
                 spec = ParseFormatSpec(specText, token);
             }
 
-            var expr = ParseExpression(exprText, _fileName);
+            var expr = ParseExpression(NormalizeFStringExprNewlines(exprText), _fileName);
             parts.Add(new FStringValue(expr, conversion, spec));
             i++; // consuma '}'
         }
         FlushLiteral();
         return parts;
+    }
+
+    /// <summary>Real CPython 3.12+ (PEP 701): the content inside an f-string's `{...}` is tokenized
+    /// as if it were already inside a bracket pair, so embedded physical newlines never end the
+    /// logical line (found via real sqlalchemy's own `engine/base.py`: a multi-line f-string with a
+    /// ternary expression split across several lines inside `{}`, no enclosing parens of its own).
+    /// `exprText` gets re-lexed from scratch as its own standalone snippet (see `ParseExpression`),
+    /// so it doesn't inherit the outer bracket depth that suppressed the newline the first time
+    /// around — replacing each such newline with a space before re-parsing reproduces the same
+    /// "logical line never ends" effect PEP 701's own tokenizer rule achieves, without needing to
+    /// thread an initial bracket-depth into `Lexer.Tokenize` just for this one caller. Newlines
+    /// *inside a nested string literal* are left alone (`inString` tracks that, mirroring the same
+    /// tracking `ParseFStringParts`'s own brace-matching scan above already does) — replacing those
+    /// would corrupt real multi-line string content inside the expression.</summary>
+    private static string NormalizeFStringExprNewlines(string exprText)
+    {
+        if (!exprText.Contains('\n'))
+            return exprText;
+        var sb = new System.Text.StringBuilder(exprText.Length);
+        char inString = '\0';
+        for (int i = 0; i < exprText.Length; i++)
+        {
+            char c = exprText[i];
+            if (inString != '\0')
+            {
+                sb.Append(c);
+                if (c == '\\' && i + 1 < exprText.Length) { sb.Append(exprText[++i]); continue; }
+                if (c == inString) inString = '\0';
+                continue;
+            }
+            if (c is '\'' or '"') { inString = c; sb.Append(c); continue; }
+            sb.Append(c == '\n' ? ' ' : c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>f-string format spec, which may itself contain {expr} (one level).</summary>

@@ -88,6 +88,24 @@ public static class ContextlibModule
             return inst;
         });
 
+        // Real CPython `contextlib.nullcontext(enter_result=None)`: a real do-nothing context
+        // manager (sync *and* async, since Python 3.10) — `__enter__`/`__aenter__` just hand back
+        // `enter_result`. Found via real sqlalchemy's own async-engine plumbing, which uses it as a
+        // placeholder context when no real lock/transaction is needed.
+        var nullContextClass = new PyClass("nullcontext", new List<PyClass>());
+        nullContextClass.Dict["__init__"] = new PyBuiltinFunction("nullcontext.__init__", (_, a, _) =>
+        {
+            ((PyInstance)a[0]).Dict["enter_result"] = a.Length > 1 ? a[1] : PyNone.Instance;
+            return PyNone.Instance;
+        });
+        nullContextClass.Dict["__enter__"] = new PyBuiltinFunction("nullcontext.__enter__",
+            (_, a, _) => ((PyInstance)a[0]).Dict["enter_result"]);
+        nullContextClass.Dict["__exit__"] = new PyBuiltinFunction("nullcontext.__exit__", (_, _, _) => false);
+        nullContextClass.Dict["__aenter__"] = new PyBuiltinFunction("nullcontext.__aenter__",
+            (_, a, _) => ((PyInstance)a[0]).Dict["enter_result"]);
+        nullContextClass.Dict["__aexit__"] = new PyBuiltinFunction("nullcontext.__aexit__", (_, _, _) => false);
+        d["nullcontext"] = nullContextClass;
+
         return m;
     }
 

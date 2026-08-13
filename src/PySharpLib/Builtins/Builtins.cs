@@ -368,6 +368,14 @@ public static class BuiltinsFactory
             : args[0] switch
             {
                 PyInstance inst => inst.Class,
+                // Real CPython: `type(SomeClass)` is SomeClass's own metaclass (`type` itself,
+                // absent a custom one) — not the generic builtin-pseudo-type lookup every other
+                // value goes through. Found via real sqlalchemy's own `inspection.py` `inspect()`
+                // walking `type(subject).__mro__` to recognize a class whose *metaclass* was
+                // registered (e.g. any class built via `DeclarativeMeta`) — `type(SomeMappedClass)`
+                // silently downgrading to the plain `type` builtin function (no `__mro__` at all)
+                // broke that check entirely.
+                PyClass pc => (object?)pc.Metaclass ?? Interp.GetPseudoBaseClass("type"),
                 _ => TypeNamePseudoClass(interp, args[0]),
             });
 
@@ -445,6 +453,24 @@ public static class BuiltinsFactory
             if (args.Length > 1)
                 return args[1];
             throw PyErr.StopIteration(args[0] is PyGenerator gen ? gen.ReturnValue : null);
+        });
+
+        // Real CPython: `aiter(x)` is a synchronous call to `type(x).__aiter__(x)` (no await —
+        // `__aiter__` itself isn't async in the real protocol); `anext(x)` (1-arg) is likewise
+        // synchronous, just forwarding to `type(x).__anext__(x)` and handing back whatever that
+        // returns (typically a real coroutine object, since `__anext__` methods are usually `async
+        // def`) — the *caller*'s own `await` does the actual suspension, exactly like calling any
+        // other `async def` function without awaiting it yields an unstarted coroutine. Found via
+        // real sqlalchemy's own `util/compat.py` (`anext_ = anext` on Python 3.10+). The 2-arg
+        // `anext(x, default)` form is itself async in real CPython (needs to await and catch
+        // `StopAsyncIteration`) — not implemented yet, a documented gap until something reachable
+        // actually calls it.
+        Add("aiter", (interp, args, _) => interp.CallMethod(args[0], "__aiter__", Array.Empty<object>()));
+        Add("anext", (interp, args, _) =>
+        {
+            if (args.Length > 1)
+                throw PyErr.TypeError("anext() with a default value is not yet supported by this interpreter");
+            return interp.CallMethod(args[0], "__anext__", Array.Empty<object>());
         });
 
         Add("sum", (interp, args, _) =>
@@ -695,6 +721,56 @@ public static class BuiltinsFactory
                 if (kv.Key is string k)
                     localEnv.Set(k, kv.Value);
             return interp.Eval(expr, localEnv);
+        });
+
+        // Real CPython `exec(source, globals=None, locals=None)`: compiles `source` as real
+        // statements (not just an expression, unlike `eval()` above) and runs them in the given
+        // namespace(s), returning `None`. Mirrors `eval()`'s own three call shapes exactly (no-args
+        // uses the caller's current scope; a single `globals` dict runs like real module-level code,
+        // writing directly into it; a separate `locals` dict gets new/updated bindings written back
+        // into it afterward, matching real CPython). Found via real sqlalchemy's own
+        // `util/langhelpers.py` (`_exec_code_in_env`: `exec(code, env); return env[fn_name]`) —
+        // dynamically generating a wrapper function's source to preserve the original's real
+        // signature for introspection, a common real-world metaprogramming idiom well beyond just
+        // this one package.
+        Add("exec", (interp, args, kwargs) =>
+        {
+            if (args.Length == 0 || args[0] is not string source)
+                throw PyErr.TypeError("exec() arg 1 must be a string");
+            var moduleAst = Parsing.Parser.Parse(source, "<string>");
+
+            object? globalsArg = args.Length > 1 ? args[1]
+                : kwargs is not null && kwargs.TryGetValue("globals", out var g) ? g : null;
+            if (globalsArg is null or PyNone)
+            {
+                var callerEnv = Interp.InnermostFrame?.Env
+                                 ?? throw PyErr.RuntimeError("exec(): no current frame");
+                foreach (var stmt in moduleAst.Body)
+                    interp.Exec(stmt, callerEnv);
+                return PyNone.Instance;
+            }
+
+            var globalsDict = globalsArg as PyDict ?? throw PyErr.TypeError("exec() globals must be a dict");
+            var execModule = new PyModule("<string>", globalsDict) { Builtins = interp.BuiltinsModule };
+
+            object? localsArg = args.Length > 2 ? args[2]
+                : kwargs is not null && kwargs.TryGetValue("locals", out var l) ? l : null;
+            if (localsArg is null or PyNone || ReferenceEquals(localsArg, globalsDict))
+            {
+                interp.RunModule(moduleAst, execModule);
+                return PyNone.Instance;
+            }
+
+            var localsDict = localsArg as PyDict ?? throw PyErr.TypeError("exec() locals must be a dict");
+            var localEnv = new Env(execModule);
+            foreach (var kv in localsDict.Entries)
+                if (kv.Key is string k)
+                    localEnv.Set(k, kv.Value);
+            foreach (var stmt in moduleAst.Body)
+                interp.Exec(stmt, localEnv);
+            foreach (var kv in localEnv.Locals)
+                localsDict[kv.Key] = kv.Value;
+            return PyNone.Instance;
         });
 
         Add("open", (interp, args, kwargs) => FileObject.Open(interp, args, kwargs));
@@ -1030,10 +1106,13 @@ public static class BuiltinsFactory
         "str" => obj is string,
         "bytes" => obj is PyBytes,
         "bytearray" => obj is PyByteArray,
-        "list" => obj is PyList,
+        // A real `class Foo(list/dict/set): ...` instance is a PyInstance (not a raw PyList/PyDict/
+        // PySet — see PyInstance.Sequence/Mapping/SetItems' own doc comments), so
+        // `isinstance(Foo(), list)` etc. needs this extra check alongside the literal case.
+        "list" => obj is PyList || (obj is PyInstance li && li.Class.IsSubclassOf(Interp.GetPseudoBaseClass("list"))),
         "tuple" => obj is PyTuple,
-        "dict" => obj is PyDict,
-        "set" => obj is PySet,
+        "dict" => obj is PyDict || (obj is PyInstance di && di.Class.IsSubclassOf(Interp.GetPseudoBaseClass("dict"))),
+        "set" => obj is PySet || (obj is PyInstance si && si.Class.IsSubclassOf(Interp.GetPseudoBaseClass("set"))),
         "frozenset" => obj is PyFrozenSet,
         "range" => obj is PyRange,
         "slice" => obj is PySlice,

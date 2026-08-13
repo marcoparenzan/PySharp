@@ -355,6 +355,26 @@ public static class DateTimeModule
         Add("now", (_, _, _) => MakeDateTime(DateTime.Now));
         Add("utcnow", (_, _, _) => MakeDateTime(DateTime.UtcNow));
         Add("today", (_, _, _) => MakeDateTime(DateTime.Now));
+        // Real CPython: fromtimestamp(ts, tz=None) — naive local time when tz is omitted, or an
+        // aware datetime shifted by tz's own utcoffset when given. Found via real sqlalchemy's
+        // `sql/sqltypes.py` computing its epoch constant as
+        // `dt.datetime.fromtimestamp(0, dt.timezone.utc).replace(tzinfo=None)`.
+        Add("fromtimestamp", (_, a, kwargs) =>
+        {
+            double ts = PyOps.AsDouble(a[0]);
+            var utc = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(ts);
+            object? tz = a.Length > 1 ? a[1] : kwargs is not null && kwargs.TryGetValue("tz", out var t) ? t : null;
+            DateTime local = tz is PyInstance tzi && tzi.Class == TimeZoneClass
+                ? utc.Add((TimeSpan)Field(tzi, "__offset__"))
+                : utc.ToLocalTime();
+            var inst = MakeDateTime(DateTime.SpecifyKind(local, DateTimeKind.Unspecified));
+            inst.Dict["tzinfo"] = (object?)tz ?? PyNone.Instance;
+            return inst;
+        });
+        Add("utcfromtimestamp", (_, a, _) =>
+            MakeDateTime(DateTime.SpecifyKind(
+                new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(PyOps.AsDouble(a[0])),
+                DateTimeKind.Unspecified)));
 
         Add("date", (_, a, _) => MakeDate(Value(a[0])));
         Add("time", (_, a, _) => MakeTime(Value(a[0]).TimeOfDay));

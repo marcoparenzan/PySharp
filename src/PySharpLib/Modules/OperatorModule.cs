@@ -42,6 +42,10 @@ public static class OperatorModule
         Un("neg", "-"); Un("__neg__", "-");
         Un("pos", "+"); Un("__pos__", "+");
         Un("invert", "~"); Un("__invert__", "~");
+        // Real CPython: `inv`/`__inv__` are the older (pre-2.0) names for `invert`/`__invert__`,
+        // still present in the real `operator` module for backward compat — found via real
+        // sqlalchemy's own `sql/operators.py` importing `inv` directly.
+        Un("inv", "~"); Un("__inv__", "~");
         Un("not_", "not");
 
         d["is_"] = new PyBuiltinFunction("is_", (_, a, _) => ReferenceEquals(a[0], a[1]) || Equals(a[0], a[1]));

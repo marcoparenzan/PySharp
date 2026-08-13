@@ -37,6 +37,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("uuid", _ => MiscModules.CreateUuid());
         importer.RegisterBuiltin("warnings", _ => MiscModules.CreateWarnings());
         importer.RegisterBuiltin("keyword", _ => MiscModules.CreateKeyword());
+        importer.RegisterBuiltin("sysconfig", _ => MiscModules.CreateSysconfig());
         importer.RegisterBuiltin("typing", interp => MiscModules.CreateTyping(interp));
         importer.RegisterBuiltin("types", _ => MiscModules.CreateTypes());
         importer.RegisterBuiltin("dataclasses", _ => MiscModules.CreateDataclasses());

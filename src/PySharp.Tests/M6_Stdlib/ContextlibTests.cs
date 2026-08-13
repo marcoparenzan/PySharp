@@ -112,4 +112,31 @@ public class ContextlibTests
             except ValueError:
                 print('propagated')
             """));
+
+    // contextlib.nullcontext: found while probing real sqlalchemy (see ORM_PLAN.md Phase 0), used
+    // as a real placeholder context manager where no real lock/transaction is needed.
+    [Fact]
+    public void Nullcontext_enter_returns_the_given_value_and_exit_does_nothing()
+        => Assert.Equal("42\ndone", Run("""
+            import contextlib
+
+            with contextlib.nullcontext(42) as v:
+                print(v)
+            print('done')
+            """));
+
+    [Fact]
+    public void Nullcontext_defaults_to_None_and_propagates_an_exception_from_the_body()
+        => Assert.Equal("None\ncaught", Run("""
+            import contextlib
+
+            with contextlib.nullcontext() as v:
+                print(v)
+            try:
+                with contextlib.nullcontext():
+                    raise ValueError('boom')
+            except ValueError:
+                print('caught')
+            """));
+
 }

@@ -192,7 +192,7 @@ public sealed class Importer
 
     private PyModule ExecuteFile(Interp interp, string absolute, string filePath, bool isPackage)
     {
-        var module = new PyModule(absolute) { Builtins = BuiltinsModule };
+        var module = new PyModule(absolute) { Builtins = BuiltinsModule, FileName = filePath };
         module.Dict["__file__"] = filePath;
         module.Dict["__package__"] = isPackage
             ? absolute

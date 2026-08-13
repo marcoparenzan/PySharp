@@ -407,8 +407,11 @@ public static class PyOps
                 throw PyErr.TypeError($"'{TypeName(o)}' object is not iterable");
             }
             case PyClass cls when cls.Dict.TryGet("__members__", out var membersObj) && membersObj is PyDict members:
-                // iteration over an enum class → its members
-                return new PyIterator(members.Values.ToList().GetEnumerator());
+                // iteration over an enum class → its canonical members, in declaration order, each
+                // listed once — aliases (two names sharing one member object, see ConvertToEnum) map
+                // to the same PyInstance reference, so a reference-identity Distinct() here collapses
+                // them back down to one entry per real member, matching real CPython's `list(Enum)`.
+                return new PyIterator(members.Values.Distinct().ToList().GetEnumerator());
             case ClrObject clr when ClrBinder.TryEnumerate(clr) is { } items:
                 return new PyIterator(items.GetEnumerator());
             default:

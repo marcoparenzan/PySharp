@@ -354,4 +354,27 @@ public class ImportTests : IDisposable
             print(hasdict.__dict__['VALUE'])
             """));
     }
+
+    [Fact]
+    public void Imported_module_frames_report_the_real_file_path_not_string()
+    {
+        // Regression: Importer.ExecuteFile built each module's PyModule with only its dotted name,
+        // never setting PyModule.FileName (default "<string>") — every traceback frame for code
+        // running inside an imported module showed "<string>" instead of the real file, regardless
+        // of how deep the import chain was. Found while root-causing a real sqlalchemy import
+        // failure, where every frame in a 12-deep traceback said "<string>", making it impossible to
+        // tell which real file actually raised. Fixed by setting `module.FileName = filePath` in
+        // ExecuteFile, matching what top-level script execution (PyEngine.Run) already did.
+        WriteModule("boom.py", "def trigger():\n    raise ValueError('x')\n");
+        string output = Run("""
+            import traceback
+            import boom
+            try:
+                boom.trigger()
+            except ValueError:
+                print(traceback.format_exc())
+            """);
+        Assert.Contains(Path.Combine(_root, "boom.py"), output);
+        Assert.DoesNotContain("\"<string>\"", output);
+    }
 }

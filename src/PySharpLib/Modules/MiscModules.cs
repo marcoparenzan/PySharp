@@ -142,6 +142,18 @@ public static class MiscModules
         return m;
     }
 
+    /// <summary>Minimal `sysconfig`: just `get_config_var`, real CPython's own build/platform
+    /// config-variable lookup. Real sqlalchemy's own `util/compat.py` reads exactly one variable
+    /// (`Py_GIL_DISABLED`, real CPython 3.13+'s free-threading flag) — `None` for anything unknown
+    /// matches real CPython's own `get_config_var` return for a variable that isn't set, which is
+    /// correct here since this interpreter has no such build-time flag at all.</summary>
+    public static PyModule CreateSysconfig()
+    {
+        var m = new PyModule("sysconfig");
+        m.Dict["get_config_var"] = new PyBuiltinFunction("get_config_var", (_, _, _) => PyNone.Instance);
+        return m;
+    }
+
     /// <summary>typing stub: generic names that accept subscription and calling.</summary>
     public static PyModule CreateTyping(Interp interp)
     {
@@ -160,7 +172,7 @@ public static class MiscModules
             "SupportsComplex", "SupportsBytes", "SupportsIndex",
             "ByteString", "AnyStr", "NoReturn", "Never", "Text", "Concatenate", "Self", "TypeAlias",
             "TypeGuard", "Unpack", "Annotated",
-            "Match", "Pattern",
+            "Match", "Pattern", "ValuesView", "KeysView", "ItemsView", "MappingView",
             "_Final", "_BaseGenericAlias",
             "_SpecialGenericAlias", "_AnnotatedAlias", "_UnionGenericAlias",
             "_ConcatenateGenericAlias", "_ProtocolMeta", "_TypedDictMeta",

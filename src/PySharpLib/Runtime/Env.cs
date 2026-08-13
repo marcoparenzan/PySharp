@@ -24,6 +24,18 @@ public sealed class Env
     /// <summary>True for a class body's scope: excluded from the closure chain.</summary>
     public bool IsClassScope { get; init; }
 
+    /// <summary>Non-null only for an `enum`/`Flag`/etc. class body's own scope — real CPython
+    /// resolves each `NAME = auto()` to its actual int value *immediately* at class-body assignment
+    /// time (via `_EnumDict.__setitem__`), not in a later pass once the whole body has executed, so
+    /// that a later same-body expression referencing an earlier member by name (e.g. real
+    /// sqlalchemy's own `engine/reflection.py`: `ANY_VIEW = VIEW | MATERIALIZED_VIEW`, combining two
+    /// already-assigned `auto()` members with `|`) sees a plain resolved int, not the raw `auto()`
+    /// sentinel. See the `AssignStmt` case in Interp.Exec and Interp.ConvertToEnum (which still does
+    /// its own final pass, now mostly a no-op for already-resolved values, but still needed for
+    /// non-eager assignments and the class-decorator-driven `IntEnum`/functional-syntax paths).
+    /// </summary>
+    public EnumAutoState? EnumAuto { get; init; }
+
     /// <summary>The first scope usable as a closure (skips class scopes).</summary>
     public Env EffectiveClosure
     {
@@ -113,6 +125,41 @@ public sealed class Env
 
     /// <summary>The local variables of this scope (to build the class dict).</summary>
     public IEnumerable<KeyValuePair<string, object>> Locals => _vars;
+}
+
+/// <summary>Mutable per-enum-class-body `auto()` sequence counter — see <see cref="Env.EnumAuto"/>.
+/// Plain `Enum`/`IntEnum` bodies generate successive integers (1, 2, 3, ...); `Flag`/`IntFlag`
+/// bodies generate successive powers of two (1, 2, 4, 8, ...) instead, matching real CPython's
+/// distinct `_generate_next_value_` for each family.</summary>
+public sealed class EnumAutoState
+{
+    public bool IsFlag { get; init; }
+    private System.Numerics.BigInteger _nextSequential = System.Numerics.BigInteger.One;
+    private System.Numerics.BigInteger _nextFlagBit = System.Numerics.BigInteger.One;
+
+    public System.Numerics.BigInteger ConsumeAuto()
+    {
+        if (IsFlag)
+        {
+            var v = _nextFlagBit;
+            _nextFlagBit *= 2;
+            return v;
+        }
+        var seq = _nextSequential;
+        _nextSequential += 1;
+        return seq;
+    }
+
+    /// <summary>Real CPython: a plain Enum's `auto()` continues from one past the highest explicit
+    /// int the body has assigned so far. Not attempted for Flag's own power-of-two sequence — nothing
+    /// reachable so far mixes an explicit non-power-of-two value with a later auto() call in a Flag
+    /// body, and doing so correctly needs real CPython's "next unused single bit" search, not a
+    /// simple increment.</summary>
+    public void ObserveExplicit(System.Numerics.BigInteger v)
+    {
+        if (!IsFlag)
+            _nextSequential = v + 1;
+    }
 }
 
 /// <summary>A Python module: namespace + reference to the builtins.</summary>

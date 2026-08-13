@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using System.Numerics;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -71,6 +72,28 @@ public static class InspectModule
         d["isclass"] = new PyBuiltinFunction("isclass", (_, a, _) => a[0] is PyClass);
         d["ismodule"] = new PyBuiltinFunction("ismodule", (_, a, _) => a[0] is PyModule);
         d["isbuiltin"] = new PyBuiltinFunction("isbuiltin", (_, a, _) => a[0] is PyBuiltinFunction);
+        // Real CPython: `inspect.iscode(x)` — `x` is a real code object (`fn.__code__`, this
+        // shim's own `PyCode`). Found via real sqlalchemy's own `util/langhelpers.py`
+        // (`inspect_getfullargspec`, ported from CPython's own `inspect.py`, checks
+        // `iscode(func)` to special-case being handed a bare code object directly).
+        d["iscode"] = new PyBuiltinFunction("iscode", (_, a, _) => a[0] is PyCode);
+        // Real CPython `inspect.CO_*` constants (mirroring `co_flags`'s own bits) — same real
+        // sqlalchemy `inspect_getfullargspec` port needs these by name, not just the raw bit value.
+        d["CO_OPTIMIZED"] = new BigInteger(0x01);
+        d["CO_NEWLOCALS"] = new BigInteger(0x02);
+        d["CO_VARARGS"] = new BigInteger(0x04);
+        d["CO_VARKEYWORDS"] = new BigInteger(0x08);
+        // Real CPython 3.10+ `inspect.get_annotations(obj)`: a real *copy* of `obj.__annotations__`
+        // (or an empty dict if there are none) — `eval_str=`/`globals=`/`locals=` (string-annotation
+        // evaluation) not implemented yet, since nothing reachable so far passes `eval_str=True`.
+        d["get_annotations"] = new PyBuiltinFunction("get_annotations", (interp, a, _) =>
+        {
+            var result = new PyDict();
+            if (interp.TryGetAttr(a[0], "__annotations__", out var ann) && ann is PyDict src)
+                foreach (var e in src.Entries)
+                    result[e.Key] = e.Value;
+            return result;
+        });
         // Real CPython: isroutine = isbuiltin or isfunction or ismethod or ismethoddescriptor or
         // ismethodwrapper — the last two are rare C-level slot-wrapper concepts nothing in the
         // reachable path produces, so this covers the practically relevant cases. Found via real

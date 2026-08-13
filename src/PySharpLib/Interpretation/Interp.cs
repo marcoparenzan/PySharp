@@ -150,6 +150,15 @@ public sealed class Interp
             case AssignStmt a:
             {
                 var value = Eval(a.Value, env);
+                // Eager auto()-resolution for an enum class body — see Env.EnumAuto's own doc
+                // comment for why this can't wait for ConvertToEnum's later pass.
+                if (env.EnumAuto is { } autoState)
+                {
+                    if (value is PyInstance ai && ai.Class.Name == "auto")
+                        value = autoState.ConsumeAuto();
+                    else if (value is BigInteger bi)
+                        autoState.ObserveExplicit(bi);
+                }
                 foreach (var target in a.Targets)
                     AssignTo(target, value, env);
                 break;
@@ -452,6 +461,7 @@ public sealed class Interp
         // working: none of those objects were ever meant to end up in the MRO themselves.
         var rawBases = new List<object>();
         object? explicitMetaclass = null;
+        var initSubclassKwargs = new Dictionary<string, object>();
         foreach (var b in c.Bases)
         {
             if (b.Name == "metaclass")
@@ -459,8 +469,15 @@ public sealed class Interp
                 explicitMetaclass = Eval(b.Value, env);
                 continue;
             }
-            if (b.Name is not null || b.IsStar || b.IsDoubleStar)
-                continue; // other class keywords (__init_subclass__ kwargs and the like): ignored in v1
+            if (b.IsStar || b.IsDoubleStar)
+                continue;
+            // Real CPython: any other `class Foo(Base, some_kwarg=1): ...` class keyword is passed
+            // straight through to `__init_subclass__(cls, **kwargs)` — see the call below.
+            if (b.Name is not null)
+            {
+                initSubclassKwargs[b.Name] = Eval(b.Value, env);
+                continue;
+            }
             rawBases.Add(Eval(b.Value, env));
         }
         var rawBasesTuple = new PyTuple(rawBases.ToArray());
@@ -504,7 +521,13 @@ public sealed class Interp
         // means "no custom metaclass"), else the first base that itself carries one.
         var metaclass = explicitMetaclass as PyClass ?? bases.Select(b => b.Metaclass).FirstOrDefault(m => m is not null);
 
-        var classEnv = new Env(env.Module, env) { IsClassScope = true };
+        var classEnv = new Env(env.Module, env)
+        {
+            IsClassScope = true,
+            EnumAuto = bases.Any(b => b.TryLookup("__is_enum__", out _))
+                ? new EnumAutoState { IsFlag = bases.Any(b => b.TryLookup("__is_flag__", out _)) }
+                : null,
+        };
         ExecStmts(c.Body, classEnv);
 
         PyClass cls;
@@ -517,8 +540,6 @@ public sealed class Interp
             // ModelMetaclass.__new__ building __config__/__fields__/validators) instead of just
             // allocating a plain PyClass — the metaclass's `super().__new__(...)` chain bottoms out
             // at the real class-building fallback in the `case PySuper sup:` __new__ handling below.
-            // Metaclass __init__ is deliberately not dispatched: no metaclass in scope so far
-            // defines one (ModelMetaclass/ABCMeta don't) — a real gap if that ever changes.
             var namespaceDict = new PyDict();
             foreach (var kv in classEnv.Locals)
                 namespaceDict[kv.Key] = kv.Value;
@@ -534,6 +555,17 @@ public sealed class Interp
             foreach (var kv in namespaceDict.Entries)
                 foreach (var inner in InnerFunctions(kv.Value))
                     inner.DefiningClass = cls;
+            // Real `type.__call__(mcs, name, bases, ns, **kwds)`: the metaclass's own __init__ runs
+            // too, after __new__ — not just a `type`-default no-op in general. Found via real
+            // sqlalchemy's own `util/langhelpers.py` `_IntFlagMeta.__init__` (a `FastIntFlag`
+            // stand-in avoiding real `enum.IntFlag`'s overhead), which computes `cls._items`/
+            // `cls.__members__` from the completed class namespace — never ran at all before, so any
+            // `FastIntFlag` subclass silently ended up without a real `__members__`.
+            if (metaclass.TryLookup("__init__", out var metaInit) && metaInit is PyFunction)
+            {
+                Call(new PyBoundMethod(cls, metaInit), new object[] { c.Name, basesTuple, namespaceDict },
+                    initSubclassKwargs.Count > 0 ? initSubclassKwargs : null);
+            }
         }
         else
         {
@@ -548,6 +580,11 @@ public sealed class Interp
             cls.Dict["__qualname__"] = c.Name;
         }
 
+        // Real CPython: a bare string-literal expression as the very first statement in a class body
+        // is captured as `__doc__`, same reasoning as MakeFunction's own docstring capture.
+        if (c.Body is [{ } firstStmt, ..] && firstStmt is ExprStmt { Value: StrLit clsDoc })
+            cls.Dict["__doc__"] = clsDoc.Value;
+
         // Enum transformation: plain attributes become members (PyInstance with name/value).
         if (bases.Any(b => b.TryLookup("__is_enum__", out _)))
             ConvertToEnum(cls);
@@ -555,6 +592,22 @@ public sealed class Interp
         // typing.NamedTuple: genera __init__ e i protocolli tuple dai campi annotati.
         if (bases.Any(b => b.Name == "NamedTuple"))
             ConvertToNamedTuple(cls);
+
+        // PEP 487: `__init_subclass__(cls, **kwargs)` — called automatically whenever a new
+        // subclass is created, on the nearest base that defines it (implicitly a classmethod, no
+        // `@classmethod` needed), with the new class itself as `cls`. Found via real sqlalchemy's
+        // own event system (`event/base.py`'s `Events.__init_subclass__`), which populates a
+        // global event-name registry this way — without it, `event.listen(...)` can never find a
+        // real target class for any Events subclass, since the registry stays empty.
+        foreach (var m in cls.Mro.Skip(1))
+        {
+            if (m.Dict.TryGet("__init_subclass__", out var initSub) && initSub is PyFunction or PyBuiltinFunction)
+            {
+                Call(new PyBoundMethod(cls, initSub), Array.Empty<object>(),
+                    initSubclassKwargs.Count > 0 ? initSubclassKwargs : null);
+                break;
+            }
+        }
 
         object result = cls;
         for (int i = c.Decorators.Count - 1; i >= 0; i--)
@@ -620,6 +673,25 @@ public sealed class Interp
             if (!PseudoBases.TryGetValue(name, out var cls))
             {
                 cls = new PyClass(name, new List<PyClass>());
+                // Real `class Foo(dict/list/set): ...`: unlike int/str (immutable — a subclass
+                // instance never needs real scalar storage of its own), a mutable-container subclass
+                // instance genuinely needs to behave as that container (`f[k]`, `len(f)`, iteration,
+                // `.update()`/`.append()`/`.add()`, ...). Installing the matching *Methods.Table's
+                // dunders/methods here — the same ones `dict.<name>`/`list.<name>`/`set.<name>`
+                // resolve to when accessed on the builtin object itself — makes normal PyInstance
+                // attribute/`__getitem__`-etc. dispatch (already generic for any PyInstance) work for
+                // free. Found via real sqlalchemy's own `util/_py_collections.py`
+                // `immutabledict(ImmutableDictBase[_KT, _VT])` and `orm/collections.py`
+                // `InstrumentedList(list)`/`InstrumentedSet(set)`.
+                if (name == "dict")
+                    foreach (var (methodName, fn) in Runtime.DictMethods.Table)
+                        cls.Dict[methodName] = fn;
+                else if (name == "list")
+                    foreach (var (methodName, fn) in Runtime.ListMethods.Table)
+                        cls.Dict[methodName] = fn;
+                else if (name == "set")
+                    foreach (var (methodName, fn) in Runtime.SetMethods.Table)
+                        cls.Dict[methodName] = fn;
                 PseudoBases[name] = cls;
             }
             return cls;
@@ -678,6 +750,18 @@ public sealed class Interp
         cls.Dict["__getitem__"] = new PyBuiltinFunction($"{cls.Name}.__getitem__", (_, a, _) =>
         {
             var inst = (PyInstance)a[0];
+            // Real CPython: a NamedTuple is a real `tuple` subclass, so slicing it (`spec[1:]`) is
+            // real tuple slicing — returns a plain `tuple`, not another NamedTuple instance. Found
+            // via real sqlalchemy's own `inspect_getfullargspec` (a port of CPython's own
+            // `inspect.py`) slicing its own `FullArgSpec` NamedTuple result.
+            if (a[1] is PySlice slice)
+            {
+                var (start, _, step, count) = slice.Indices(fields.Count);
+                var items = new object[count];
+                for (int k = 0; k < count; k++)
+                    items[k] = inst.Dict[fields[start + k * step]];
+                return new PyTuple(items);
+            }
             int i = PyOps.SeqIndex(a[1], fields.Count, cls.Name);
             return inst.Dict[fields[i]];
         });
@@ -724,6 +808,9 @@ public sealed class Interp
     private void ConvertToEnum(PyClass cls)
     {
         var members = new PyDict();
+        // Canonical (non-alias) members in declaration order, by resolved value — see the alias
+        // handling below.
+        var canonical = new List<(object Value, PyInstance Member)>();
         var nextAuto = BigInteger.One;
         // Real CPython: `NAME = value_tuple` + a class-defined `__new__(cls, *args)` unpacks the
         // tuple as that __new__'s positional args (e.g. httpx's real `codes(IntEnum)`:
@@ -741,26 +828,43 @@ public sealed class Interp
             if (value is PyInstance autoInst && autoInst.Class.Name == "auto")
                 value = nextAuto;
 
-            PyInstance member;
+            PyInstance? freshMember = null;
             object resolvedValue;
             if (hasCustomNew && value is PyTuple tup)
             {
-                member = (PyInstance)Call(customNew!, new object[] { cls }.Concat(tup.Items).ToArray());
-                resolvedValue = member.Dict.TryGet("_value_", out var v) ? v : value;
+                freshMember = (PyInstance)Call(customNew!, new object[] { cls }.Concat(tup.Items).ToArray());
+                resolvedValue = freshMember.Dict.TryGet("_value_", out var v) ? v : value;
             }
             else
             {
-                member = new PyInstance(cls);
                 resolvedValue = value;
             }
 
             if (resolvedValue is BigInteger bi)
                 nextAuto = bi + 1;
 
-            member.Dict["name"] = key;
-            member.Dict["_name_"] = key;
-            member.Dict["value"] = resolvedValue;
-            member.Dict["_value_"] = resolvedValue;
+            // Real CPython: a later name assigned a value equal to an earlier member's own value
+            // becomes an *alias* — the very same member object (not a distinct one), excluded from
+            // `list(EnumClass)`/iteration but still reachable by its own name and listed in
+            // `__members__`. Found via real sqlalchemy's `sql/selectable.py` `SelectLabelStyle`
+            // (`LABEL_STYLE_DEFAULT = LABEL_STYLE_DISAMBIGUATE_ONLY`), whose `list(SelectLabelStyle)`
+            // a later `(a, b, c, _) = list(...)` unpacking expects to yield exactly its 4 real
+            // canonical members, not one extra for the alias.
+            var existing = canonical.FirstOrDefault(e => PyOps.PyEquals(e.Value, resolvedValue));
+            PyInstance member;
+            if (existing.Member is not null)
+            {
+                member = existing.Member;
+            }
+            else
+            {
+                member = freshMember ?? new PyInstance(cls);
+                member.Dict["name"] = key;
+                member.Dict["_name_"] = key;
+                member.Dict["value"] = resolvedValue;
+                member.Dict["_value_"] = resolvedValue;
+                canonical.Add((resolvedValue, member));
+            }
             cls.Dict[key] = member;
             members[key] = member;
         }
@@ -1875,6 +1979,28 @@ public sealed class Interp
 
     private object Instantiate(PyClass cls, object[] args, Dictionary<string, object>? kwargs)
     {
+        // Real CPython: calling a *metaclass* directly (`SomeMetaclass(name, bases, ns)` — real
+        // code's own hand-rolled equivalent of a `class X(..., metaclass=SomeMetaclass): ...`
+        // statement) builds a real new class via `type.__new__`/`__init__`, not a blank instance of
+        // the metaclass — `cls` here derives from `type` (the "type" pseudo-base), so it genuinely
+        // is a metaclass. Found via real sqlalchemy's own `orm/decl_api.py` `generate_base`:
+        // `return metaclass(name, bases, class_dict)`.
+        if (args.Length == 3 && args[0] is string dynName && args[1] is PyTuple dynBases && args[2] is PyDict dynNs
+            && cls.IsSubclassOf(GetPseudoBaseClass("type")))
+        {
+            object builtCls = cls.TryLookup("__new__", out var metaNew) && metaNew is PyFunction or PyBuiltinFunction
+                ? Call(metaNew, new object[] { cls, dynName, dynBases, dynNs })
+                : TypeConstructorMethods.BuildClass(dynName, dynBases, dynNs);
+            if (builtCls is PyClass newCls)
+            {
+                newCls.Metaclass = cls;
+                if (cls.TryLookup("__init__", out var metaInit) && metaInit is PyFunction)
+                    Call(new PyBoundMethod(newCls, metaInit), new object[] { dynName, dynBases, dynNs }, kwargs);
+                return newCls;
+            }
+            return builtCls;
+        }
+
         // Call to an enum class: member lookup by value
         if (cls.Dict.TryGet("__members__", out var membersObj) && membersObj is PyDict members)
         {
@@ -1946,8 +2072,17 @@ public sealed class Interp
                 defaults[param.Name] = Eval(param.Default, env);
         }
         // The class scope is not part of the closure chain (Python semantics).
-        return new PyFunction(name, parameters, body, lambdaBody, env.EffectiveClosure, env.Module,
+        var fn = new PyFunction(name, parameters, body, lambdaBody, env.EffectiveClosure, env.Module,
             isGenerator, defaults) { Returns = returns, IsAsync = isAsync };
+        // Real CPython: a bare string-literal expression as the very first statement in a function
+        // body is captured as `__doc__` (not executed as a no-op statement) — previously not
+        // captured at all here, so `fn.__doc__` always fell back to the generic PyBuiltinFunction-
+        // style "always None" default even for a real docstring. Found via real sqlalchemy's own
+        // `event/legacy.py` `_augment_fn_docs`, which `assert`s a real listener method's `__doc__` is
+        // non-empty for methods marked `_omit_standard_example`.
+        if (body is [{ } first, ..] && first is ExprStmt { Value: StrLit doc })
+            fn.Attributes["__doc__"] = doc.Value;
+        return fn;
     }
 
     // ================================================================ metodi helper
@@ -2325,6 +2460,16 @@ public sealed class Interp
             if (b is PyInstance ib && TryCallMethod(ib, dunders.Reflected, new[] { a }, out var r2)
                 && r2 is not PyNotImplemented)
                 return r2;
+            // Real CPython: a binary op on a *class itself* (not an instance) dispatches to the
+            // class's own metaclass — e.g. `SomeClass + other` looks up `type(SomeClass).__add__`.
+            // Found via real sqlalchemy's own `sql/base.py` `_MetaOptions.__add__` (a
+            // `class Options(metaclass=_MetaOptions)` whose own subclasses combine via class-level
+            // `+`, e.g. `QueryContext.default_load_options + {...}`), reachable from
+            // `import sqlalchemy.orm`.
+            if (a is PyClass mca && mca.Metaclass is { } ma && ma.TryLookup(dunders.Dunder, out var mfn)
+                && mfn is PyFunction or PyBuiltinFunction
+                && Call(new PyBoundMethod(mca, mfn), new[] { b }) is var mr && mr is not PyNotImplemented)
+                return mr;
         }
 
         throw PyErr.TypeError(
@@ -2703,6 +2848,40 @@ public sealed class Interp
                     value = inst.Dict;
                     return true;
                 }
+                // Real CPython: every instance's class implicitly derives from `object`, so
+                // `obj.__init__`/`__new__`/`__setattr__`/`__hash__` are always reachable even when
+                // nothing in the class's own MRO defines them — the same fallback `SomeClass.__init__`
+                // (accessed on the class itself) already had, extended here to a real *instance* of a
+                // class with no explicit `__init__` anywhere in its bases. Found via real sqlalchemy's
+                // own singleton-construction idiom (`obj = object.__new__(cls); obj.__init__()`) on a
+                // class with no `__init__` of its own — `obj.__init__` raised `AttributeError` instead
+                // of resolving to a real no-op, since this interpreter's classes don't carry a real
+                // `object` PyClass in their own `Bases`/`Mro` chain to inherit these from.
+                //
+                // MUST run before the `__getattr__` fallback below, not after: in real CPython these
+                // four names always resolve via the type's own MRO (which genuinely includes `object`),
+                // so `__getattr__` — a last-resort hook only called once *normal* lookup has failed —
+                // never even gets a chance to intercept them. Found via real sqlalchemy's
+                // `ColumnElement.__getattr__` (`sql/elements.py`, `getattr(self.comparator, key)`)
+                // incorrectly intercepting a `Null` instance's `__init__` lookup and cascading into an
+                // unrelated `memoized_attribute` descriptor's own constructor, when checked in the
+                // wrong order.
+                switch (name)
+                {
+                    case "__new__":
+                        value = ObjectNewFallback;
+                        return true;
+                    case "__init__":
+                        value = ObjectInitFallback;
+                        return true;
+                    case "__setattr__":
+                        value = ObjectSetattrFallback;
+                        return true;
+                    case "__hash__":
+                        value = new PyBuiltinFunction("object.__hash__", (_, _, _) =>
+                            new System.Numerics.BigInteger(PyOps.PyHash(inst)));
+                        return true;
+                }
                 if (inst.Class.TryLookup("__getattr__", out var getattr))
                 {
                     // Real CPython contract: __getattr__ is the final fallback, and is itself
@@ -2753,6 +2932,15 @@ public sealed class Interp
                     {
                         PyStaticMethod s => s.Function,
                         PyClassMethod c => new PyBoundMethod(cls, c.Function),
+                        // Real CPython descriptor protocol, class-level access (`Class.attr`, no
+                        // instance — `__get__(None, cls)`): same reasoning as BindClassAttr's own
+                        // instance-level case. Found via real sqlalchemy's own event system, accessing
+                        // a `dispatcher(...)` descriptor directly on a target *class* (not instance),
+                        // e.g. `event.listen(PrimaryKeyConstraint, ...)` reading `PrimaryKeyConstraint
+                        // .dispatch`.
+                        PyInstance descInst when descInst.Class.TryLookup("__get__", out var getMethod)
+                            && getMethod is PyFunction or PyBuiltinFunction
+                            => Call(new PyBoundMethod(descInst, getMethod), new object[] { PyNone.Instance, cls }),
                         _ => attr,
                     };
                     return true;
@@ -2805,6 +2993,23 @@ public sealed class Interp
                     case "__setattr__":
                         value = ObjectSetattrFallback;
                         return true;
+                    // Real CPython: every class is itself a real, hashable object (by identity, since
+                    // classes are `type` instances and `type` doesn't override `__hash__`) — same
+                    // reasoning as the `PyFunction`/`PyBuiltinFunction` cases' own `__hash__` fallback
+                    // elsewhere in this switch. Found via real sqlalchemy's own operator-overloading
+                    // machinery reaching for `SomeClass.__hash__` directly.
+                    case "__hash__":
+                        value = new PyBuiltinFunction("type.__hash__", (_, _, _) =>
+                            new System.Numerics.BigInteger(PyOps.PyHash(cls)));
+                        return true;
+                    // Real CPython: `cls.__subclasses__()` — the direct (non-transitive) subclasses
+                    // still alive. Found via real sqlalchemy's own `util/langhelpers.py`
+                    // `walk_subclasses` (a real recursive-tree walk over it), reachable from `import
+                    // sqlalchemy`.
+                    case "__subclasses__":
+                        value = new PyBuiltinFunction("type.__subclasses__", (_, _, _) =>
+                            new PyList(cls.DirectSubclasses.Cast<object>()));
+                        return true;
                 }
                 value = PyNone.Instance;
                 return false;
@@ -2838,6 +3043,16 @@ public sealed class Interp
                     case "__module__":
                         value = "builtins";
                         return true;
+                    // Real CPython: every builtin function/method has a real `__doc__` (often a long
+                    // real docstring; here, same "always-present None default" simplification already
+                    // accepted for class __doc__ elsewhere in this project — no docstring text is
+                    // captured for a builtin here). Found via real sqlalchemy's own
+                    // `orm/collections.py` `_tidy` helper: `fn.__doc__ = getattr(list,
+                    // fn.__name__).__doc__` (copying `list.append`'s own docstring onto its own
+                    // instrumented wrapper), reachable from `import sqlalchemy.orm`.
+                    case "__doc__":
+                        value = PyNone.Instance;
+                        return true;
                     // Real CPython: any callable's `.__call__` is itself callable (a bound
                     // method-wrapper around the same underlying call). Found via starlette's real
                     // `is_async_callable`'s fallback branch `iscoroutinefunction(obj.__call__)`
@@ -2864,15 +3079,31 @@ public sealed class Interp
                             return inst;
                         });
                         return true;
+                }
+                // other attributes (e.g. builtin type methods like str.upper): normal path — must run
+                // before the object-fallback cases below, since a builtin "type" name (e.g. `dict`)
+                // can have its own real `__init__`/`__new__`/etc. in its Table (see DictMethods in
+                // TypeMethods.cs) that must win over the generic no-op fallback. Found via real
+                // sqlalchemy's own `dict.__init__(new, *args)` (`util/_py_collections.py`), previously
+                // always resolving to the inert ObjectInitFallback instead of real dict.__init__.
+                if (TypeMethods.TryGetBuiltinAttr(this, obj, name, out value))
+                    return true;
+                switch (name)
+                {
                     // Real CPython: every function/builtin is hashable by identity — see the same
                     // case for PyFunction below for the full doc comment.
                     case "__hash__":
                         value = new PyBuiltinFunction("builtin_function_or_method.__hash__", (_, _, _) =>
                             new BigInteger(PyOps.PyHash(obj)));
                         return true;
+                    // Real CPython: every object (including a plain function/builtin) inherits
+                    // `object.__init__` — accessible directly, not just through a class statement.
+                    // See the same case for PyFunction below for the full doc comment.
+                    case "__init__":
+                        value = ObjectInitFallback;
+                        return true;
                 }
-                // other attributes (e.g. builtin type methods like str.upper): normal path
-                return TypeMethods.TryGetBuiltinAttr(this, obj, name, out value);
+                return false;
 
             case PyFunction fn:
                 switch (name)
@@ -2969,6 +3200,15 @@ public sealed class Interp
                         value = new PyBuiltinFunction("function.__hash__", (_, _, _) =>
                             new BigInteger(PyOps.PyHash(obj)));
                         return true;
+                    // Real CPython: every object inherits `object.__init__`, accessible directly on
+                    // an instance (a function is an instance of `function`, itself a subclass of
+                    // `object`) — not just reachable through a class statement's own `__init__`
+                    // lookup. Found via real sqlalchemy's own generic "is __init__ overridden"
+                    // idiom (`cls.__init__ is not object.__init__`-shaped checks in
+                    // `util/langhelpers.py`) tripping over a plain function standing in for `cls`.
+                    case "__init__":
+                        value = ObjectInitFallback;
+                        return true;
                     default:
                         if (fn.Attributes.TryGet(name, out value!))
                             return true;
@@ -2993,6 +3233,9 @@ public sealed class Interp
                         return true;
                     case "co_name":
                         value = code.Name;
+                        return true;
+                    case "co_flags":
+                        value = new BigInteger(code.Flags);
                         return true;
                 }
                 value = PyNone.Instance;
@@ -3074,6 +3317,16 @@ public sealed class Interp
                     value = ObjectNewFallback;
                     return true;
                 }
+                // Real CPython: `object.__init_subclass__` is a real no-op classmethod — the base
+                // case every `__init_subclass__` override's own `super().__init_subclass__(...)` call
+                // bottoms out at. Found via real typing_extensions' own `Protocol.__init_subclass__`
+                // (`super().__init_subclass__(*args, **kwargs)`), reachable once ExecClassDef started
+                // actually invoking `__init_subclass__` (see PEP 487 support there).
+                if (name == "__init_subclass__")
+                {
+                    value = new PyBuiltinFunction("object.__init_subclass__", (_, _, _) => PyNone.Instance);
+                    return true;
+                }
                 value = PyNone.Instance;
                 return false;
 
@@ -3147,6 +3400,14 @@ public sealed class Interp
             PyProperty prop => prop.Getter is not null
                 ? Call(new PyBoundMethod(inst, prop.Getter), Array.Empty<object>())
                 : throw PyErr.AttributeError("unreadable attribute"),
+            // Real CPython descriptor protocol: any other class-dict value whose own class defines
+            // `__get__` (a general user-defined descriptor — e.g. real sqlalchemy's own
+            // `dispatcher`/event-dispatch descriptors) gets that `__get__(instance, owner)` called
+            // automatically instead of being returned raw. Found via real sqlalchemy's own event
+            // system (`SchemaEventTarget.dispatch`, a `dispatcher(DDLEvents)` descriptor).
+            PyInstance descInst when descInst.Class.TryLookup("__get__", out var getMethod)
+                && getMethod is PyFunction or PyBuiltinFunction
+                => Call(new PyBoundMethod(descInst, getMethod), new object[] { inst, inst.Class }),
             _ => classAttr,
         };
 
@@ -3161,6 +3422,17 @@ public sealed class Interp
                     if (prop.Setter is null)
                         throw PyErr.AttributeError($"can't set attribute '{name}'");
                     Call(new PyBoundMethod(inst, prop.Setter), new[] { value });
+                    return;
+                }
+                // Real CPython descriptor protocol: a class-dict value whose own class defines
+                // `__set__` (a general user-defined data descriptor) gets that called instead of the
+                // assignment landing in the instance's own __dict__ — same reasoning as the parallel
+                // `__get__` dispatch in BindClassAttr/the `case PyClass cls:` read path.
+                if (inst.Class.TryLookup(name, out var descAttr) && descAttr is PyInstance descInst
+                    && descInst.Class.TryLookup("__set__", out var setMethod)
+                    && setMethod is PyFunction or PyBuiltinFunction)
+                {
+                    Call(new PyBoundMethod(descInst, setMethod), new object[] { inst, value });
                     return;
                 }
                 if (inst.Class.TryLookup("__setattr__", out var setattr)

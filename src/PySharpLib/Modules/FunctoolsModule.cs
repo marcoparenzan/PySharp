@@ -90,16 +90,20 @@ public static class FunctoolsModule
         });
         d["partialmethod"] = partialMethodClass;
 
+        // Real CPython: `wraps(wrapped)` returns `partial(update_wrapper, wrapped=wrapped)` — both
+        // exposed here (found via real sqlalchemy's own `import functools` reaching for
+        // `update_wrapper` directly, not just the `@wraps` decorator form).
+        d["update_wrapper"] = new PyBuiltinFunction("update_wrapper", (_, a, _) =>
+        {
+            UpdateWrapper(a[0], a[1]);
+            return a[0];
+        });
         d["wraps"] = new PyBuiltinFunction("wraps", (interp, a, _) =>
         {
             var wrapped = a[0];
             return new PyBuiltinFunction("wraps_decorator", (interp2, b, _) =>
             {
-                if (b[0] is PyFunction wrapper && wrapped is PyFunction original)
-                {
-                    wrapper.Attributes["__name__"] = original.Name;
-                    wrapper.Attributes["__wrapped__"] = original;
-                }
+                UpdateWrapper(b[0], wrapped);
                 return b[0];
             });
         });
@@ -136,5 +140,32 @@ public static class FunctoolsModule
         });
 
         return m;
+    }
+
+    /// <summary>Real CPython `functools.update_wrapper`: copies `__module__`/`__name__`/
+    /// `__qualname__`/`__doc__` from `wrapped` onto `wrapper` and sets `wrapper.__wrapped__ =
+    /// wrapped` — works for both a real `PyFunction` and a `PyBuiltinFunction` on either side (real
+    /// CPython copies `__dict__` too via `updated=`; not needed by anything reachable so far).</summary>
+    private static void UpdateWrapper(object wrapper, object wrapped)
+    {
+        string? name = wrapped switch { PyFunction f => f.Name, PyBuiltinFunction b => b.Name, _ => null };
+        PyDict? wrappedAttrs = wrapped switch { PyFunction f => f.Attributes, PyBuiltinFunction b => b.Attributes, _ => null };
+        PyDict? wrapperAttrs = wrapper switch { PyFunction f => f.Attributes, PyBuiltinFunction b => b.Attributes, _ => null };
+        if (wrapperAttrs is null)
+            return;
+        if (name is not null)
+        {
+            wrapperAttrs["__name__"] = name;
+            wrapperAttrs["__qualname__"] = name;
+        }
+        wrapperAttrs["__wrapped__"] = wrapped;
+        if (wrappedAttrs is null)
+            return;
+        if (wrappedAttrs.TryGet("__doc__", out var doc))
+            wrapperAttrs["__doc__"] = doc;
+        if (wrappedAttrs.TryGet("__module__", out var mod))
+            wrapperAttrs["__module__"] = mod;
+        if (wrappedAttrs.TryGet("__qualname__", out var qn))
+            wrapperAttrs["__qualname__"] = qn;
     }
 }

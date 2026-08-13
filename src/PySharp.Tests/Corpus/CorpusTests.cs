@@ -93,7 +93,6 @@ public class CorpusTests
         ["syntax_fstring.py"] = "stdlib-depth: advanced f-strings",
         ["syntax_short_circuit_bool.py"] = "semantics: no double evaluation of __bool__ in if/while (compiler optimization)",
         ["name.py"] = "ext-file: import_name module not included",
-        ["syntax_comprehension.py"] = "ext-file: itertools module not included",
     };
 
     public static IEnumerable<object[]> Supported()

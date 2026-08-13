@@ -86,6 +86,16 @@ public sealed class PyCode
     /// <summary>Number of keyword-only parameters (co_kwonlyargcount).</summary>
     public int KwOnlyArgCount { get; }
 
+    /// <summary>Real CPython `co_flags` — only the two bits anything reachable has needed so far:
+    /// `CO_VARARGS` (0x04, real `*args`) and `CO_VARKEYWORDS` (0x08, real `**kwargs`), plus the two
+    /// every real function always has (`CO_OPTIMIZED` 0x01, `CO_NEWLOCALS` 0x02). Found via real
+    /// sqlalchemy's own `inspect_getfullargspec` (a port of CPython's own `inspect.py`), which reads
+    /// exactly those two variable-arity bits to decide whether a function accepts `*args`/`**kwargs`.
+    /// Generator/coroutine/async-generator bits are not tracked here (nothing reachable has needed
+    /// them off `co_flags` specifically — `inspect.isgeneratorfunction`/etc. already work a different
+    /// way, off the `PyFunction`/`PyGenerator` object shape directly, not `co_flags`).</summary>
+    public int Flags { get; }
+
     public PyCode(PyFunction fn)
     {
         Name = fn.Name;
@@ -93,14 +103,17 @@ public sealed class PyCode
         foreach (var p in fn.Params.Positional)
             names.Add(p.Name);
         ArgCount = fn.Params.Positional.Count;
-        if (!string.IsNullOrEmpty(fn.Params.StarArgs))
+        bool hasVarArgs = !string.IsNullOrEmpty(fn.Params.StarArgs);
+        if (hasVarArgs)
             names.Add(fn.Params.StarArgs!);
         foreach (var p in fn.Params.KwOnly)
             names.Add(p.Name);
         KwOnlyArgCount = fn.Params.KwOnly.Count;
-        if (!string.IsNullOrEmpty(fn.Params.KwArgs))
+        bool hasVarKeywords = !string.IsNullOrEmpty(fn.Params.KwArgs);
+        if (hasVarKeywords)
             names.Add(fn.Params.KwArgs!);
         VarNames = names.ToArray();
+        Flags = 0x01 | 0x02 | (hasVarArgs ? 0x04 : 0) | (hasVarKeywords ? 0x08 : 0);
     }
 
     public override string ToString() => $"<code object {Name}>";

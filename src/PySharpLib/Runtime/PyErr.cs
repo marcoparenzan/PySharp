@@ -64,6 +64,17 @@ public static class PyErr
     public static readonly PyClass DeprecationWarningClass = Derive("DeprecationWarning", Warning);
     public static readonly PyClass UserWarningClass = Derive("UserWarning", Warning);
     public static readonly PyClass RuntimeWarningClass = Derive("RuntimeWarning", Warning);
+    // Real CPython's remaining stdlib Warning subclasses — added together (found via real
+    // sqlalchemy needing `PendingDeprecationWarning`; the rest are one-line-cheap and equally likely
+    // to be the next gap for any other real package).
+    public static readonly PyClass PendingDeprecationWarningClass = Derive("PendingDeprecationWarning", Warning);
+    public static readonly PyClass SyntaxWarningClass = Derive("SyntaxWarning", Warning);
+    public static readonly PyClass FutureWarningClass = Derive("FutureWarning", Warning);
+    public static readonly PyClass ImportWarningClass = Derive("ImportWarning", Warning);
+    public static readonly PyClass UnicodeWarningClass = Derive("UnicodeWarning", Warning);
+    public static readonly PyClass BytesWarningClass = Derive("BytesWarning", Warning);
+    public static readonly PyClass ResourceWarningClass = Derive("ResourceWarning", Warning);
+    public static readonly PyClass EncodingWarningClass = Derive("EncodingWarning", Warning);
 
     // PEP 654 (real CPython 3.11+, matching this project's declared 3.12 compatibility):
     // BaseExceptionGroup(BaseException), ExceptionGroup(BaseExceptionGroup, Exception). Found via
@@ -256,6 +267,14 @@ public static class PyErr
         yield return DeprecationWarningClass;
         yield return UserWarningClass;
         yield return RuntimeWarningClass;
+        yield return PendingDeprecationWarningClass;
+        yield return SyntaxWarningClass;
+        yield return FutureWarningClass;
+        yield return ImportWarningClass;
+        yield return UnicodeWarningClass;
+        yield return BytesWarningClass;
+        yield return ResourceWarningClass;
+        yield return EncodingWarningClass;
         yield return BaseExceptionGroupClass;
         yield return ExceptionGroupClass;
     }
