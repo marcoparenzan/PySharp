@@ -8,12 +8,47 @@ namespace PySharp.Tests.M6_Stdlib;
 /// <summary>Real, general interpreter/stdlib gaps found while probing real SQLAlchemy's own
 /// `postgresql+psycopg2://` dialect against a live Azure Postgres server (ORM_PLAN.md's Postgres
 /// phase) — each independently reachable by other real packages too, not SQLAlchemy/Postgres-
-/// specific. The round trip itself hit a further, unresolved wall deep in SQLAlchemy 2.0's own
-/// `insertmanyvalues` sentinel/batching machinery (a `ZeroDivisionError` inside `sql/compiler.py`'s
-/// batch-size computation, not yet root-caused) — these are the real fixes made getting there.</summary>
+/// specific. The full round trip (connect, real DDL, `session.add()`/`.commit()` — a real INSERT
+/// flush including the `insertmanyvalues` machinery — and `session.execute(select(...))`) is now
+/// verified end to end against the live server; these are the real fixes made getting there.
+/// </summary>
 public class OrmPostgresGapsTests
 {
     private static string Run(string body) => Py.Run(body).TrimEnd('\n');
+
+    // Real, general, and severe interpreter bug: `SomeClass.__hash__` (unbound, class-level
+    // attribute access) returned a closure permanently bound to hash `SomeClass` itself, ignoring
+    // whatever argument it was actually called with. This is *correct* for `hash(SomeClass)` (which
+    // really does call `type(SomeClass).__hash__(SomeClass)`, landing here with `SomeClass` as the
+    // argument) but silently wrong for the equally real `__hash__ = SomeBase.__hash__` class-body
+    // idiom (reusing a base's hash implementation on a *different*, unrelated class) — every
+    // instance of the class doing the reassignment hashed identically (to the value of the class
+    // where the lookup first happened), corrupting anything relying on real per-instance hash
+    // identity: set/dict membership, and any `x in some_collection` check backed by `__eq__`
+    // returning a non-bool object whose own `__bool__` falls back to hash comparison (a real,
+    // documented CPython idiom precisely so such objects can be membership-checked without an
+    // ambient boolean-context error). Found live via real SQLAlchemy's own `sql/operators.py`
+    // `__hash__ = Operators.__hash__` (reused by every `ColumnOperators` subclass, including
+    // `Column`) — every real `Column` instance hashed identically, so `col not in
+    // some_tuple_of_other_columns` always silently reported "found", corrupting the sentinel-column
+    // filtering deep inside `insertmanyvalues` batch compilation and manifesting five call frames
+    // away as a `ZeroDivisionError` (an empty parameter list divided a batch-size computation) —
+    // this was the wall that finally blocked a real end-to-end `session.commit()` against Postgres.
+    [Fact]
+    public void A_class_hash_reassigned_from_a_base_class_hashes_each_instance_independently()
+        => Assert.Equal("True\nTrue\nFalse", Run("""
+            class Base:
+                pass
+
+            class Derived:
+                __hash__ = Base.__hash__
+
+            a = Derived()
+            b = Derived()
+            print(hash(a) == hash(a))
+            print(hash(a) != hash(b))
+            print(a in (b,))
+            """));
 
     // Real, general concurrency bug: `threading.Condition` wrapped .NET's `Monitor` directly — a
     // genuinely OS-thread-affine construct (the same real thread must Enter/Exit/Wait/Pulse it).

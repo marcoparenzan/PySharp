@@ -3144,14 +3144,27 @@ public sealed class Interp
                     case "__setattr__":
                         value = ObjectSetattrFallback;
                         return true;
-                    // Real CPython: every class is itself a real, hashable object (by identity, since
-                    // classes are `type` instances and `type` doesn't override `__hash__`) — same
-                    // reasoning as the `PyFunction`/`PyBuiltinFunction` cases' own `__hash__` fallback
-                    // elsewhere in this switch. Found via real sqlalchemy's own operator-overloading
-                    // machinery reaching for `SomeClass.__hash__` directly.
+                    // Real CPython: `SomeClass.__hash__` (unbound, class-level access) is a real
+                    // *unbound method* — a plain callable expecting an explicit first argument,
+                    // whose hash it computes — not a closure permanently bound to `cls`. The two
+                    // real call shapes this needs to serve are actually the same thing: `hash
+                    // (SomeClass)` itself dispatches to `type(SomeClass).__hash__(SomeClass)`
+                    // (`SomeClass` passed explicitly as the argument, landing here since `type`
+                    // doesn't override `__hash__`) — and `__hash__ = SomeBase.__hash__` (a real
+                    // class-body statement reusing a base's hash implementation on a *different*
+                    // class, later invoked as `some_instance.__hash__()`, auto-binding `some_
+                    // instance`, not `cls`, as the argument) needs the exact same "hash whatever
+                    // you're given" behavior. A previous, narrower version of this fix ignored the
+                    // call's own argument and always hashed the closed-over `cls` — correct only for
+                    // the first shape, and silently wrong for the second: found live via real
+                    // sqlalchemy's own `sql/operators.py` `__hash__ = Operators.__hash__` (reused by
+                    // every `ColumnOperators` subclass, e.g. `Column`) — every real `Column` instance
+                    // hashed identically (to `Operators` the class itself), so `col not in
+                    // some_tuple_of_other_columns` silently always reported "found", corrupting the
+                    // `insertmanyvalues` sentinel-column filtering deep in `sql/compiler.py`.
                     case "__hash__":
-                        value = new PyBuiltinFunction("type.__hash__", (_, _, _) =>
-                            new System.Numerics.BigInteger(PyOps.PyHash(cls)));
+                        value = new PyBuiltinFunction("type.__hash__", (_, a, _) =>
+                            new System.Numerics.BigInteger(PyOps.PyHash(a.Length > 0 ? a[0] : cls)));
                         return true;
                     // Real CPython: `cls.__subclasses__()` — the direct (non-transitive) subclasses
                     // still alive. Found via real sqlalchemy's own `util/langhelpers.py`

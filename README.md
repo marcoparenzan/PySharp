@@ -483,15 +483,17 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`),
   `np.random`, and a two-way .NET array interop bridge. See [NUMPY_PLAN.md](NUMPY_PLAN.md)'s full
   12-phase plan (all phases done) and ROADMAP.md scenario 12.
-- **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live against this project's own
-  real `sqlite3` module — `declarative_base()`, a mapped class, `create_all()` DDL, `Session.add()`/
-  `.commit()` (a full real INSERT flush), and `session.execute(select(...))`/`session.get(...)`
-  verified end to end with a real insert-then-query round trip. See [ORM_PLAN.md](ORM_PLAN.md) (both
-  phases done) and ROADMAP.md scenario 13.
+- **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
+  mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
+  `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both
+  this project's own real `sqlite3` module and a real Azure Database for PostgreSQL instance (via the
+  `psycopg2` shim below). See [ORM_PLAN.md](ORM_PLAN.md) (all three phases done) and ROADMAP.md
+  scenario 13.
 - **Postgres**: a real `psycopg2`-shaped shim over `Npgsql` — `connect`/`Connection`/`Cursor`, real
-  `%s` placeholder rewriting, psycopg2's own autocommit=False transaction model (Postgres has fully
-  transactional DDL), and the PEP 249 exception hierarchy, verified live against a real Azure
-  Database for PostgreSQL instance. See [SQL_PLAN.md](SQL_PLAN.md) Phase 2 and ROADMAP.md scenario 3.
+  `%s`/`%(name)s` placeholder rewriting, psycopg2's own autocommit=False transaction model (Postgres
+  has fully transactional DDL), and the PEP 249 exception hierarchy, verified live against a real
+  Azure Database for PostgreSQL instance. See [SQL_PLAN.md](SQL_PLAN.md) Phase 2 and ROADMAP.md
+  scenario 3.
 
 ### Does not work (yet)
 

@@ -408,7 +408,7 @@ real SQLite in-memory database — verified end-to-end in `M22_Orm/OrmSmokeTests
 ROADMAP.md scenario 13, a RELEASE_NOTES.md entry, and README.md's "Verified scenarios" section all
 updated to reflect Phase 1's completion.
 
-## Phase 3 — Postgres (in progress — real, substantial progress; one deep wall remaining)
+## Phase 3 — Postgres (done)
 
 **Unblocked 2026-08-15**: the author provided real credentials for a live **Azure Database for
 PostgreSQL flexible server** instance. Credentials were never committed to this repo — read only
@@ -521,22 +521,35 @@ regression test in `OrmPostgresGapsTests.cs` unless noted):
   templates — were removed once checked against real psycopg2 itself (`dir(psycopg2.extensions.
   connection)` confirms no such methods exist there).
 
-**Real, verified progress**: connection + `on_connect()` handshake, `Base.metadata.create_all()`/
-`drop_all()` (real DDL, including a real `has_table()` reflection round trip), `session.add()` ×2,
-and `session.commit()` reaching real INSERT-statement SQL compilation (cache-key generation, bind
-parameter naming, `insertmanyvalues` VALUES-list assembly) all run correctly against the live Azure
-server.
+- [x] **A real, severe, and general interpreter bug — the wall that finally blocked
+  `session.commit()`: `SomeClass.__hash__` (unbound, class-level attribute access) returned a
+  closure permanently bound to hash `SomeClass` itself, ignoring whatever argument it was actually
+  called with.** This is *correct* for `hash(SomeClass)` (which really does dispatch to
+  `type(SomeClass).__hash__(SomeClass)`, landing here with `SomeClass` as the explicit argument —
+  the narrow case an earlier fix targeted) but silently wrong for the equally real `__hash__ =
+  SomeBase.__hash__` class-body idiom (reusing a base's hash implementation on a *different* class,
+  later invoked as `instance.__hash__()`) — every instance of the class doing the reassignment
+  hashed identically, to the value of whichever class the lookup first happened on. Fixed to behave
+  as a genuine unbound method: hash the explicit call-time argument when given, falling back to the
+  closed-over class only when called with none. Found live via real SQLAlchemy's own
+  `sql/operators.py` `__hash__ = Operators.__hash__` (reused by every `ColumnOperators` subclass,
+  including `Column`) — every real `Column` instance hashed identically, so `col not in
+  some_tuple_of_other_columns` (a real, documented CPython idiom: `BinaryExpression.__bool__`
+  deliberately falls back to comparing `hash(left)`/`hash(right)` so `ColumnElement`s stay usable in
+  sets/containment checks despite `==` building a SQL expression rather than a bool) always silently
+  reported "found", corrupting `insertmanyvalues`' own sentinel-column filtering deep inside SQL
+  compilation and manifesting five call frames away as a `ZeroDivisionError` in an unrelated
+  batch-size computation. Root-caused via a minimal repro comparing real CPython's own `hash()`
+  output for distinct `Column` objects (all identical in PySharp, all correctly distinct in real
+  CPython) after tracing the `ZeroDivisionError` back through `crud_params_single`/
+  `add_sentinel_cols`/`BinaryExpression.__bool__`/`_orig` one real frame at a time. Test:
+  `OrmPostgresGapsTests.cs`.
 
-**Current wall (not yet root-caused): `ZeroDivisionError` inside `sql/compiler.py`'s own
-`insertmanyvalues` batch-size computation** (`num_params_per_batch = len(imv.insert_crud_params)`
-comes back `0` — confirmed via a temporary diagnostic print showing `bind_names` correctly populated
-with both real columns, `insert_crud_params` empty regardless). This is deep inside SQLAlchemy 2.0's
-own "implicit sentinel" machinery (an optional `INSERT ... SELECT ... ORDER BY` rendering used by
-Postgres/SQL Server to correlate multi-row `RETURNING` results back to their original Python-side
-objects) — not yet traced to its root cause. Not a blocker for SQL_PLAN.md Phase 2 (the raw
-`psycopg2` DB-API shim, fully verified independently of SQLAlchemy) or for ORM_PLAN.md Phase 1 (the
-SQLite round trip, complete and unaffected). Next step if resumed: trace `crud_params_single`'s own
-construction (`sql/crud.py`) to find why it ends up empty specifically under the sentinel-enabled
-`INSERT ... SELECT` rendering path, or check whether disabling the implicit-sentinel behavior
-(`use_insertmanyvalues=False` on the mapped table, or an older/pinned SQLAlchemy version) routes
-around it entirely as a pragmatic workaround.
+**Phase 3 is done.** The full insert + query round trip now runs end-to-end against a real,
+unmodified sqlalchemy 2.0.51 driven through this project's own real `psycopg2` shim, against the
+live Azure Postgres server: connection + `on_connect()` handshake, `Base.metadata.create_all()`/
+`drop_all()` (real DDL, including a real `has_table()` reflection round trip), `session.add()` ×2,
+`session.commit()` (a full real INSERT flush through the `insertmanyvalues` sentinel/batching
+machinery), `session.execute(select(User).order_by(User.name)).scalars().all()`, and
+`session.get(User, 1)` all produce exactly the expected real values — verified end-to-end in
+`M22_Orm/OrmPostgresSmokeTests.cs`.

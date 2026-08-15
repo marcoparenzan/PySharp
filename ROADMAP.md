@@ -39,7 +39,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 1 | **Azure IoT Hub device** (MQTT on paho-mqtt) | [samples/iothub_device_mqtt.py](samples/iothub_device_mqtt.py) | ✅ **Done** | `socket`, `ssl`, `select`, `threading`, `struct`, `hashlib`/`hmac`/`base64`, generators, classes |
 | 1b | **Azure IoT Hub device, async** (aiomqtt) | [samples/iothub_device_aiomqtt.py](samples/iothub_device_aiomqtt.py) | ✅ **Done** (verified end-to-end against a real Azure IoT Hub) | `contextlib`, `asyncio.Queue`/`Lock`/`Event`/`Semaphore`, `asyncio.wait`, event-loop `add_reader`/`add_writer`/`run_in_executor`, real `dataclasses` field generation |
 | 2 | **FastAPI API** (no SQL) | [http_api.py](samples/http_api.py) · [async_api.py](samples/async_api.py) · [fastapi_demo.py](samples/fastapi_demo.py) | ✅ **Done** (2.0/2.0+/2a/2b/2c/2d/2e all ✅ — a real, unmodified FastAPI app, full CRUD + WebSockets + graceful shutdown, served live over real HTTP entirely by PySharp) | ~~`async`/`await` (core)~~ ✅, ~~`asyncio`~~ ✅, ~~`re`/`datetime`/`inspect`/real `typing`~~ ✅, ~~`contextlib`~~ ✅, ~~`abc`~~ ✅, pydantic (import + BaseModel + real `__slots__` + validators/constraints/Config ✅, 30-pattern robustness sweep ✅, not full API parity by design), ~~ASGI~~ ✅ (real FastAPI app, full CRUD, WebSockets, graceful shutdown, live over curl) |
-| 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | 🟡 In progress (3a ✅ sqlite3, 3c ✅ SQL Server, 3b ⚪ blocked — no Postgres server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅; Postgres (`Npgsql`) blocked on server availability — see SQL_PLAN.md |
+| 3 | **SQL access** (SQLite, Postgres, SQL Server) | [samples/sqlite_demo.py](samples/sqlite_demo.py) · [samples/postgres_demo.py](samples/postgres_demo.py) · [samples/pyodbc_demo.py](samples/pyodbc_demo.py) | ✅ **Done** (3a ✅ sqlite3, 3b ✅ Postgres, 3c ✅ SQL Server) | `sqlite3` (C# shim on `Microsoft.Data.Sqlite`) ✅; `psycopg2` (C# shim on `Npgsql`, verified against a real Azure Database for PostgreSQL instance) ✅; `pyodbc` (C# shim on `Microsoft.Data.SqlClient`, verified against a real SQL Server LocalDB) ✅ — see SQL_PLAN.md |
 | 4 | **HTTP client** (requests-like) | [samples/requests_demo.py](samples/requests_demo.py) | ✅ **Done** | real `http.client` (subclassable HTTPConnection/HTTPSConnection/HTTPResponse) ✅ — the real, unmodified `requests` package runs live over real HTTPS (GET/POST/redirects/sessions/cookies), see HTTP_PLAN.md |
 | 5 | **MQTT subscribe on a broker** (client) | [mqtt_subscribe.py](samples/mqtt_subscribe.py) | ✅ **Done** | *none* — paho's subscribe side already ran; real round-trip on test.mosquitto.org |
 | 6 | **MQTT broker** (server) | [samples/mqtt_broker_demo.py](samples/mqtt_broker_demo.py) | ✅ **Done** | a real, hand-rolled MQTT 3.1.1 broker on this project's own `socket`/`asyncio`/`struct`/`threading` — no interpreter changes needed, every primitive it exercises was already solid |
@@ -459,17 +459,23 @@ semantics, PEP 487 `__init_subclass__`, the general descriptor protocol (includi
 themselves, `func.__get__`), real name mangling, metaclass `__init__` dispatch and metaclass-level
 operator overloading, `instance.__dict__ = ...` whole-namespace replacement, and a real `abc.ABCMeta`
 base for the `type` pseudo-class hierarchy. Verified live via
-[src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/). **Postgres 🟡**: driven against a real Azure
-Database for PostgreSQL instance via SQLAlchemy's `postgresql+psycopg2://` dialect (reusing this
-project's own real `psycopg2` shim, Scenario 3's 3b) — connection, real DDL (`create_all`/`drop_all`,
-including a real `has_table()` round trip), and `session.add()`/`.commit()` reaching real INSERT SQL
-compilation all verified live; one deep wall remains inside SQLAlchemy 2.0's own `insertmanyvalues`
-sentinel/batch-size machinery (a `ZeroDivisionError`, not yet root-caused). The originally-planned
-pure-Python `pg8000` dialect was tried first and abandoned — it needs a real module system unification
-(constructing a native module object from Python-level `types.ModuleType(...)`) this interpreter
-doesn't have yet. See ORM_PLAN.md Phase 3 for the full list of real gaps found and fixed getting this
-far (including a genuine concurrency bug in `threading.Condition` and a general zero-arg `super()`
-fix).
+[src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/). **Postgres ✅**: the same full round trip
+(connection, real DDL via `create_all`/`drop_all` including a real `has_table()` round trip,
+`session.add()`/`.commit()` — a real INSERT flush through SQLAlchemy 2.0's own `insertmanyvalues`
+sentinel/batching machinery — and `session.execute(select(...))`/`session.get(...)`) verified live
+against a real Azure Database for PostgreSQL instance via SQLAlchemy's `postgresql+psycopg2://`
+dialect (reusing this project's own real `psycopg2` shim, Scenario 3's 3b). The originally-planned
+pure-Python `pg8000` dialect was tried first and abandoned — it needs a real module system
+unification (constructing a native module object from Python-level `types.ModuleType(...)`) this
+interpreter doesn't have yet. Getting the `psycopg2`-dialect round trip working end to end surfaced a
+real, severe interpreter bug along the way: `SomeClass.__hash__` (unbound, class-level access) always
+hashed the class where the lookup happened instead of whatever it was actually called on, silently
+breaking the real `__hash__ = Operators.__hash__` idiom every SQLAlchemy `Column` relies on — every
+`Column` instance hashed identically, corrupting `insertmanyvalues`' own sentinel-column filtering
+and surfacing five frames away as an unrelated `ZeroDivisionError`. See ORM_PLAN.md Phase 3 for the
+full list of real gaps found and fixed getting here (also including a genuine concurrency bug in
+`threading.Condition` and a general zero-arg `super()` fix, neither Postgres-specific). Verified live
+via [src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs](src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs).
 
 ### Cross-cutting — Native libraries 🟡
 
@@ -568,11 +574,10 @@ decoration time), `inspect` (incl. a real `isfunction` fix — async/generator f
 previously misclassified — and real coroutine-state constants/`getcoroutinestate`), `shlex`, `contextvars`, `importlib`, `importlib.metadata`, `textwrap`, `signal`,
 `concurrent.futures`, `stat`, `subprocess`, `tempfile`, `http`, `http.client`, `http.cookies`,
 `http.cookiejar`, `email.utils`, `email.message`, `email.errors`, `encodings` (`.aliases`/`.idna`),
-`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `zipfile`, `calendar`,
-`random`, `pyodbc`, `ast` (`literal_eval`), `numbers`, `heapq`; real (not stub) `typing` (incl.
-`Protocol`/`@runtime_checkable` structural `isinstance()`) and `dataclasses`; stub `__future__`.
-
-**High-priority missing**: a Postgres DB-API module (scenario 3b, blocked on server availability).
+`html`, `traceback`, `mimetypes`, `secrets`, `array`, `queue`, `sqlite3`, `psycopg2`, `zipfile`,
+`calendar`, `random`, `pyodbc`, `ast` (`literal_eval`), `numbers`, `heapq`; real (not stub) `typing`
+(incl. `Protocol`/`@runtime_checkable` structural `isinstance()`) and `dataclasses`; the real full
+`__future__` feature list.
 
 ### Axis C — Native extensions (C/Rust)
 

@@ -258,7 +258,7 @@ database.
 
 ---
 
-## Postgres (real DB-API + SQLAlchemy investigation) — 2026-08-15
+## Postgres (real DB-API + real SQLAlchemy round trip) — 2026-08-15
 
 A real, unmodified **`psycopg2`-shaped shim over Npgsql** (SQL_PLAN.md Phase 2) — `connect`/
 `Connection`/`Cursor`, real `%s`/`%(name)s` placeholder rewriting, psycopg2's own autocommit=False
@@ -267,18 +267,22 @@ and the PEP 249 exception hierarchy — verified live against a real Azure Datab
 instance ([samples/postgres_demo.py](samples/postgres_demo.py), 11 tests in
 [Psycopg2Tests.cs](src/PySharp.Tests/M6_Stdlib/Psycopg2Tests.cs)).
 
-Driving real SQLAlchemy against the same server (via `postgresql+psycopg2://`, reusing the shim
-above) got substantially further than expected before hitting a real wall: connection setup, real
-DDL (`create_all`/`drop_all`, including a real `has_table()` reflection round trip), and
-`session.commit()` reaching real INSERT SQL compilation all work — a `ZeroDivisionError` remains
-inside SQLAlchemy 2.0's own `insertmanyvalues` sentinel/batch-size machinery, not yet root-caused.
-Getting this far surfaced several more general, non-Postgres-specific interpreter fixes — most
-notably a genuine concurrency bug (`threading.Condition` wrapped .NET's thread-affine `Monitor`
-directly, breaking under this interpreter's own thread-per-generator execution model — rewritten to
-the same semaphore-based algorithm real CPython's own `Condition` uses) and a general zero-arg
-`super()` fix (the implicit `__class__` cell is now recorded at function-definition time, so it
-survives being wrapped by *any* decorator, not just this project's own known `staticmethod`/
-`classmethod`/`property` shapes). Full list in ORM_PLAN.md Phase 3.
+Real, unmodified SQLAlchemy 2.0.51 now round-trips against the same server too (ORM_PLAN.md's
+Postgres phase), driven through the shim above via `postgresql+psycopg2://`: connection setup, real
+DDL (`create_all`/`drop_all`, including a real `has_table()` reflection round trip), a full
+`session.add()`/`.commit()` INSERT flush through SQLAlchemy 2.0's own `insertmanyvalues` sentinel/
+batching machinery, and `session.execute(select(...))`/`session.get(...)` all produce exactly the
+expected real values ([OrmPostgresSmokeTests.cs](src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs)).
+Getting there surfaced several more general, non-Postgres-specific interpreter fixes: a genuine
+concurrency bug (`threading.Condition` wrapped .NET's thread-affine `Monitor` directly, breaking
+under this interpreter's own thread-per-generator execution model — rewritten to the same
+semaphore-based algorithm real CPython's own `Condition` uses), a general zero-arg `super()` fix (the
+implicit `__class__` cell is now recorded at function-definition time, so it survives being wrapped
+by *any* decorator, not just this project's own known `staticmethod`/`classmethod`/`property`
+shapes), and — the wall that finally blocked a real `session.commit()` — a severe bug where
+`SomeClass.__hash__` (unbound, class-level access) always hashed the class where the lookup happened
+instead of whatever it was actually called on, silently breaking the real `__hash__ = Operators.
+__hash__` idiom every SQLAlchemy `Column` relies on. Full list in ORM_PLAN.md Phase 3.
 
 ---
 
