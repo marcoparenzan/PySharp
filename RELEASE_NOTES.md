@@ -286,6 +286,29 @@ __hash__` idiom every SQLAlchemy `Column` relies on. Full list in ORM_PLAN.md Ph
 
 ---
 
+## ctypes: real CFUNCTYPE/WINFUNCTYPE callbacks (CTYPES_PLAN.md Phase 2) — 2026-08-15
+
+Native code can now call back into a real Python function through `ctypes.CFUNCTYPE`/`WINFUNCTYPE` —
+the last item the native-libraries cross-cutting scenario was missing. Scoped to scalar/pointer-sized
+argument and return types, the same practical-subset choice already made for structs/pointers
+(Phase 1) — covers every common real Windows callback shape (`EnumWindows`, `qsort` comparators,
+`WNDPROC`, …). Verified against a real Windows API needing a real callback, not just "doesn't
+crash": `user32!EnumWindows` calls the Python callback once per real top-level window (a positive,
+observable count), and returning `False` from the very first call is confirmed to stop enumeration
+at exactly one call — both directions of the marshalling round trip independently verified.
+
+Two real, general bugs found and fixed along the way, neither ctypes-specific: `Marshal.
+GetFunctionPointerForDelegate` rejects any delegate type constructed from a generic definition (even
+a fully closed `Func<IntPtr, IntPtr, int>`) — fixed by building a genuinely new, non-generic delegate
+type at runtime via `System.Reflection.Emit.TypeBuilder` instead (the standard native-callback
+recipe), cached per signature; and a switch *expression* mixing several distinct numeric-typed arms
+silently widens every arm to a common type (here `double`) before the method's own `object` return
+type ever applies — a real, general C# footgun that boxed an `"i4"`-coded value as `System.Double`
+instead of `System.Int32` and crashed the generated trampoline's own unboxing, fixed by casting each
+arm to `(object)` explicitly.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

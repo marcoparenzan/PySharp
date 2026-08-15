@@ -73,8 +73,44 @@ lifetime (unlike the current scalar `c_*.__init__`, which just stores a raw Pyth
       clean full-suite runs (1233/1233).
 - [x] 1.7 Docs: ROADMAP.md scenario T status update, `Modules/CtypesModule.cs`'s own doc comment.
 
-## Phase 2 — callbacks (optional, only if a real scenario needs it)
+## Phase 2 — callbacks ✅ (2026-08-15)
 
-- [ ] 2.1 `ctypes.CFUNCTYPE`/`WINFUNCTYPE`: wrap a Python callable as a native function pointer
-  (`Marshal.GetFunctionPointerForDelegate` on a dynamically-built delegate; the delegate must be kept
-  alive — GC-rooted — for as long as native code might call it).
+- [x] 2.1 `ctypes.CFUNCTYPE`/`WINFUNCTYPE`: wrap a Python callable as a real native function pointer.
+  Scoped to scalar/pointer-sized argument and return types (no by-value struct arguments — same
+  practical-subset choice Phase 1 already made), which covers every common real Windows callback
+  shape (`EnumWindows`, `qsort` comparators, `WNDPROC`, …). `CFUNCTYPE`/`WINFUNCTYPE` are aliases of
+  each other (both use the same calling convention here — real CPython distinguishes cdecl from
+  stdcall only on 32-bit Windows; this project's only target, x64, has a single unified calling
+  convention, so the distinction is moot).
+      — *Real .NET requirement found live, not assumed*: `Marshal.GetFunctionPointerForDelegate`
+      rejects **any** delegate type constructed from a generic definition — confirmed via a direct
+      repro: even a fully *closed* `Func<IntPtr, IntPtr, int>` raises `ArgumentException: "The
+      specified Type must not be a generic type"`, not just an open one. The original design (reusing
+      `Func<>`/`Action<>` picked by arity) had to be replaced with the standard real-world recipe: a
+      genuinely new, non-generic delegate type built at runtime via `System.Reflection.Emit.
+      TypeBuilder` (`MulticastDelegate`-derived, a `.ctor(object, IntPtr)` and an `Invoke(...)` method
+      both marked `Runtime | Managed` so the CLR supplies their real implementations, decorated with
+      `[UnmanagedFunctionPointer]`) — cached per unique signature, the same pattern the existing
+      forward-call thunk cache already uses.
+      — *A second real, general C# bug found and fixed along the way, independent of ctypes itself*:
+      the native-argument-to-Python-return-value marshalling helper (`PyToNativeScalar`) used a
+      switch *expression* whose arms were different numeric types (`sbyte`, `int`, `double`, …) — C#
+      infers a *common* type across all such arms via the standard implicit numeric conversion
+      hierarchy (here, `double`) and silently converts every arm to it before the method's own
+      `object` return type ever applies, so an `"i4"`-coded return value of Python `1` got boxed as
+      `System.Double` (value `1.0`), not the intended `System.Int32` — and the generated native
+      trampoline's own `Unbox_Any` back to `int` then threw `InvalidCastException` on every call.
+      Fixed by explicitly casting every arm to `(object)`, which prevents the arm-to-arm widening (the
+      value that gets boxed is each arm's own real type). The existing, previously-verified
+      `MarshalOut`/`MarshalIn` helpers don't have this bug — their arms are either uniformly
+      reference types (`BigInteger`/`PyNone`/`string`, with no implicit numeric conversion between
+      them, so C# never unifies them) or a real switch *statement* with a `return` per case (which
+      converts to the method's return type independently at each `return`, never unifying case types
+      against each other) — this is a real, general lesson: switch **expressions** mixing several
+      distinct numeric-typed arms are a live footgun this codebase hadn't hit before.
+  Verified against a real Windows API needing a real callback — `user32!EnumWindows` — not just
+  "doesn't crash": the callback's own real call count is checked against real observable system state
+  (a positive number of actual top-level windows on this machine), and returning `False` from the
+  very first call is confirmed to stop enumeration at exactly one call (both directions of the
+  marshalling round trip, argument-in and return-out, independently verified). Tests in
+  `CtypesCallbackTests.cs`.

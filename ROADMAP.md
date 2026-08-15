@@ -49,7 +49,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 10 | **Django** | _to be created_ | ⚪ Planned | a real, unmodified Django app (Django itself is pure Python — no C extensions in its core, unlike pydantic-core/numpy). Much heavier than scenario 2's FastAPI: WSGI (Django's default; ASGI is opt-in), the ORM (real SQL generation + migrations, heavy metaclass use on `Model`), the template engine, `django.contrib.admin`, class-based views, forms/sessions, `django-admin` management commands, the `settings.py` module-level config pattern |
 | 11 | **ASP.NET Core hosting PySharp** | _to be created_ | ⚪ Planned | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into Python scripts/plugins from C# request handlers — Python as a scripting/plugin layer inside a real production .NET service. Ties directly into the standing TODO ("Extract PySharpLib as a standalone NuGet library") |
 | 12 | **Array computing** (numpy shim) | [samples/numpy_demo.py](samples/numpy_demo.py) | ✅ **Done** | a real C# **`numpy`**-shaped shim (not real numpy — a compiled CPython C extension a from-scratch interpreter can't load): `float64`/`int64`/`bool` dtypes with real arithmetic promotion, construction, indexing/slicing as real strided views (Phase 12.1), broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`, `trace`/`diagonal`), `np.random`, a two-way .NET array interop bridge — see NUMPY_PLAN.md's full 12-phase plan |
-| T | **Native libraries** (cross-cutting) | _per-case_ | 🟡 Partial | `ctypes` now supports scalars, strings, real `Structure`/`byref`/`POINTER`/buffers (verified against real `kernel32` structs/output-pointer APIs — see CTYPES_PLAN.md); `CFUNCTYPE`/callbacks still out of scope; for very rich APIs a dedicated **C# wrapper/shim** is still the fallback |
+| T | **Native libraries** (cross-cutting) | _per-case_ | ✅ **Done** | `ctypes` supports scalars, strings, real `Structure`/`byref`/`POINTER`/buffers, and real `CFUNCTYPE`/`WINFUNCTYPE` callbacks (verified against real `kernel32` structs/output-pointer APIs and a real `user32!EnumWindows` callback — see CTYPES_PLAN.md); for very rich APIs a dedicated **C# wrapper/shim** is still the fallback |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
 
@@ -477,7 +477,7 @@ full list of real gaps found and fixed getting here (also including a genuine co
 `threading.Condition` and a general zero-arg `super()` fix, neither Postgres-specific). Verified live
 via [src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs](src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs).
 
-### Cross-cutting — Native libraries 🟡
+### Cross-cutting — Native libraries ✅
 
 General rule: **a native library is invoked from C#**, so it is exposed to Python either (a) via
 `ctypes`, or (b) by creating a dedicated **C# wrapper/shim** that presents an idiomatic Python API
@@ -487,21 +487,26 @@ driver).
 **`ctypes` (see CTYPES_PLAN.md)**: beyond scalar arguments/returns and `char*`/`wchar*` strings
 (verified against real `kernel32`/`msvcrt` DLLs), `ctypes` now has real `Structure` (real per-field
 storage, real natural-alignment layout — computed automatically, not hand-specified), `byref`,
-`POINTER`, and `create_string_buffer`/`create_unicode_buffer`. Every value (scalar or struct) is
+`POINTER`, `create_string_buffer`/`create_unicode_buffer`, and real `CFUNCTYPE`/`WINFUNCTYPE`
+callbacks (Phase 2, scalar/pointer-sized argument and return types). Every scalar/struct value is
 backed by a real C# `byte[]`, not `Marshal.AllocHGlobal` — `byref()` pins that same managed array for
 one native call, so a native function's writes land directly in it with no separate marshal-back
-step. Verified against two real Windows APIs that need structs/output pointers: `GetSystemInfo`
+step. Verified against real Windows APIs needing structs/output pointers/callbacks: `GetSystemInfo`
 (struct fields checked against well-known fixed OS constants — page size 4096, allocation
-granularity 65536, `PROCESSOR_ARCHITECTURE_AMD64` == 9 — not just "didn't crash") and
-`GetComputerNameW` (a `byref` `DWORD` + a `create_unicode_buffer` round-trip). Found and fixed a
-real static-mutable-`PyClass`-field race along the way: xUnit runs tests in parallel, and a shared
-static field reassigned on every `import ctypes` let one test's concurrent module creation silently
-overwrite another test's in-flight class identity — fixed by making every ctypes-specific class a
-real local variable threaded through as a parameter, never a static field (the same class of bug
-`FASTAPI_PLAN.md`'s `GenericAliasModule` races were). **Still out of scope**: `CFUNCTYPE`/callbacks
-(native code calling back into Python — a separate, larger chunk needing careful delegate-lifetime
-management), by-value struct passing (real x64 ABI register-vs-stack rules), generic `ctype * N`
-array syntax.
+granularity 65536, `PROCESSOR_ARCHITECTURE_AMD64` == 9 — not just "didn't crash"), `GetComputerNameW`
+(a `byref` `DWORD` + a `create_unicode_buffer` round-trip), and `EnumWindows` (a real callback called
+once per real top-level window, with early-stop-on-`False` verified to fire at exactly one call).
+Two real, general bugs found and fixed along the way: a static-mutable-`PyClass`-field race (xUnit
+runs tests in parallel, and a shared static field reassigned on every `import ctypes` let one test's
+concurrent module creation silently overwrite another test's in-flight class identity — fixed by
+making every ctypes-specific class a real local variable threaded through as a parameter, never a
+static field, the same class of bug `FASTAPI_PLAN.md`'s `GenericAliasModule` races were); and, while
+building the callback trampoline, a genuinely general C# footgun (a switch *expression* mixing
+several distinct numeric-typed arms silently widens every arm to a common type — here `double` —
+before the method's own `object` return type ever applies, so an `"i4"`-coded value got boxed as
+`System.Double` instead of `System.Int32` and crashed the native trampoline's own unboxing; fixed by
+casting each arm to `(object)` explicitly). **Still out of scope**: by-value struct passing (real x64
+ABI register-vs-stack rules — no real scenario has needed it), generic `ctype * N` array syntax.
 
 ### Cross-cutting — .NET object injection (embedding interop) ✅
 

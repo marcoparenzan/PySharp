@@ -4,18 +4,20 @@
 // root for full license information.
 
 using System.Numerics;
+using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using System.Text;
+using PySharpLib.Interpretation;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
 
 /// <summary>
 /// ctypes-lite: loading native DLLs via NativeLibrary and calling functions with a DynamicMethod +
-/// calli-based thunk. Supports scalar types, real `Structure`/`byref`/`POINTER` (see CTYPES_PLAN.md),
-/// and `char*`/`wchar*` strings. Callbacks (`CFUNCTYPE`) remain out of scope for now — a separate,
-/// larger chunk (native code calling back into Python needs careful delegate-lifetime management).
+/// calli-based thunk. Supports scalar types, real `Structure`/`byref`/`POINTER` (see CTYPES_PLAN.md
+/// Phase 1), `char*`/`wchar*` strings, and real `CFUNCTYPE`/`WINFUNCTYPE` callbacks (Phase 2) — native
+/// code calling back into a Python function via a dynamically-built native trampoline.
 ///
 /// Design: every non-string ctypes value (`c_int`, `c_ulong`, a `Structure` subclass, ...) is backed
 /// by a real C# `byte[]` buffer, not `Marshal.AllocHGlobal` — reading/writing a field decodes/encodes
@@ -33,6 +35,7 @@ public static class CtypesModule
     private const string WideKey = "__wide__";
     private const string ByRefTargetKey = "__byreftarget__";
     private const string LayoutCacheKey = "__layout_cache__";
+    private const string CallbackDelegateKey = "__callback_delegate__";
 
     /// <summary>Cache of calli thunks per signature.</summary>
     private static readonly Dictionary<string, Func<IntPtr, object?[], object?>> ThunkCache = new();
@@ -92,6 +95,16 @@ public static class CtypesModule
         d["cdll"] = MakeLoaderNamespace(dllClass);
 
         d["sizeof"] = new PyBuiltinFunction("sizeof", (_, a, _) => new BigInteger(SizeOfArg(a[0], structureClass)));
+
+        // Real ctypes: CFUNCTYPE(restype, *argtypes)/WINFUNCTYPE(restype, *argtypes) both return a
+        // callable "prototype" type; calling *that* with a Python callable wraps it as a real native
+        // function pointer callbacks can be passed through. Real CPython distinguishes cdecl
+        // (CFUNCTYPE) from stdcall (WINFUNCTYPE) on 32-bit Windows; on x64 (this project's only
+        // target) there is a single unified calling convention, so both are aliases here — same
+        // practical-subset choice this module's forward-call path already makes (always `Winapi`).
+        var callbackFn = new PyBuiltinFunction("CFUNCTYPE", (_, a, _) => MakeCallbackType(a));
+        d["CFUNCTYPE"] = callbackFn;
+        d["WINFUNCTYPE"] = callbackFn;
 
         d["get_last_error"] = new PyBuiltinFunction("get_last_error", (_, _, _) =>
             new BigInteger(Marshal.GetLastWin32Error()));
@@ -253,6 +266,204 @@ public static class CtypesModule
         var cls = new PyClass($"LP_{pointeeName}", new List<PyClass>());
         cls.Dict[CTypeKey] = "p";
         return cls;
+    }
+
+    // ---------------------------------------------------------------- CFUNCTYPE / WINFUNCTYPE callbacks
+
+    /// <summary>Per-callback-instance context a generated native trampoline looks up by an integer
+    /// key embedded directly in its own IL (a `DynamicMethod` can't close over C# objects the way an
+    /// ordinary lambda can) — the interpreter to call back into, the wrapped Python callable, and the
+    /// type codes needed to marshal native args in / the Python return value out.</summary>
+    private sealed record CallbackContext(Interp Interp, object Callable, string[] ArgCodes, string RetCode);
+
+    private static readonly Dictionary<int, CallbackContext> CallbackContexts = new();
+    private static int _nextCallbackKey = 1;
+
+    private static readonly MethodInfo InvokeCallbackTrampolineMethod =
+        typeof(CtypesModule).GetMethod(nameof(InvokeCallbackTrampoline), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    /// <summary>`CFUNCTYPE(restype, *argtypes)`: returns a real "prototype" class — calling *that*
+    /// with a Python callable (`CMPFUNC(py_func)`) is what actually builds the native trampoline
+    /// (see `BuildCallbackThunk`). Scoped to scalar/pointer-sized argument and return types (matching
+    /// this module's existing scope decisions elsewhere — no by-value struct arguments), which covers
+    /// every common real Windows callback shape (`EnumWindows`, `qsort` comparators, `WNDPROC`, …).
+    /// </summary>
+    private static PyClass MakeCallbackType(object[] a)
+    {
+        string retCode = a.Length > 0 ? (CTypeCode(a[0]) ?? "v") : "v";
+        var argCodes = a.Skip(1)
+            .Select(t => CTypeCode(t) ?? throw PyErr.TypeError("CFUNCTYPE/WINFUNCTYPE argtypes must be ctypes types"))
+            .ToArray();
+
+        var cls = new PyClass("CFunctionType", new List<PyClass>());
+        // Real ctypes: an instance of a CFUNCTYPE-built prototype is itself pointer-shaped (it can be
+        // passed anywhere a `c_void_p`-like argument is expected) — reuse the "p" ctype code so
+        // `InferCode`'s existing fallback already does the right thing when no explicit `argtypes` is
+        // declared on the call site.
+        cls.Dict[CTypeKey] = "p";
+        cls.Dict["__init__"] = new PyBuiltinFunction("CFunctionType.__init__", (interp, ia, _) =>
+        {
+            var inst = (PyInstance)ia[0];
+            object callable = ia[1];
+            var (ptr, del) = BuildCallbackThunk(interp, callable, argCodes, retCode);
+            inst.Dict[FnPtrKey] = ptr;
+            // Kept alive for as long as this wrapper instance is: the delegate object is what
+            // actually roots the JIT-generated native trampoline in memory — once it's collectible,
+            // native code calling through `ptr` would crash. Real ctypes has the identical real
+            // constraint ("the callback must be kept alive as long as it may be called").
+            inst.Dict[CallbackDelegateKey] = del;
+            return PyNone.Instance;
+        });
+        return cls;
+    }
+
+    /// <summary>Builds a real native function pointer that, when called from native code, marshals
+    /// its arguments to Python values, calls `callable`, marshals the Python return value back to a
+    /// native value, and returns it — the reverse direction of the existing calli-based forward-call
+    /// thunk. Uses a generic `Func&lt;...&gt;`/`Action&lt;...&gt;` delegate type (rather than
+    /// `System.Reflection.Emit.TypeBuilder`-defining a brand-new delegate type per signature) since
+    /// every supported argument/return type here is a blittable value type (ints, floats, `IntPtr`) —
+    /// .NET can generate a native-callable P/Invoke stub for those generic delegates directly.</summary>
+    private static (IntPtr Ptr, Delegate Del) BuildCallbackThunk(Interp interp, object callable, string[] argCodes, string retCode)
+    {
+        var argNetTypes = argCodes.Select(NativeType).ToArray();
+        var retNetType = NativeType(retCode);
+        bool isVoid = retNetType == typeof(void);
+        // Real .NET requirement: `Marshal.GetFunctionPointerForDelegate` rejects any delegate type
+        // constructed from a generic definition (confirmed live: "The specified Type must not be a
+        // generic type" — even a fully *closed* `Func<IntPtr, IntPtr, int>` counts, not just an open
+        // one) — the delegate type must be a real, non-generic type with `UnmanagedFunctionPointer`
+        // semantics. `GetOrBuildDelegateType` builds (and caches) exactly that per unique signature.
+        Type delegateType = GetOrBuildDelegateType(argNetTypes, isVoid ? typeof(void) : retNetType);
+
+        int key;
+        lock (CallbackContexts)
+        {
+            key = _nextCallbackKey++;
+            CallbackContexts[key] = new CallbackContext(interp, callable, argCodes, retCode);
+        }
+
+        var dm = new DynamicMethod(
+            "ctypes_callback_" + key,
+            isVoid ? typeof(void) : retNetType,
+            argNetTypes,
+            typeof(CtypesModule).Module,
+            skipVisibility: true);
+        var il = dm.GetILGenerator();
+
+        var argsLocal = il.DeclareLocal(typeof(object[]));
+        il.Emit(OpCodes.Ldc_I4, argNetTypes.Length);
+        il.Emit(OpCodes.Newarr, typeof(object));
+        il.Emit(OpCodes.Stloc, argsLocal);
+        for (int i = 0; i < argNetTypes.Length; i++)
+        {
+            il.Emit(OpCodes.Ldloc, argsLocal);
+            il.Emit(OpCodes.Ldc_I4, i);
+            il.Emit(OpCodes.Ldarg, i);
+            il.Emit(OpCodes.Box, argNetTypes[i]);
+            il.Emit(OpCodes.Stelem_Ref);
+        }
+        il.Emit(OpCodes.Ldc_I4, key);
+        il.Emit(OpCodes.Ldloc, argsLocal);
+        il.Emit(OpCodes.Call, InvokeCallbackTrampolineMethod);
+        if (isVoid)
+            il.Emit(OpCodes.Pop);
+        else
+            il.Emit(OpCodes.Unbox_Any, retNetType);
+        il.Emit(OpCodes.Ret);
+
+        var del = dm.CreateDelegate(delegateType);
+        var ptr = Marshal.GetFunctionPointerForDelegate(del);
+        return (ptr, del);
+    }
+
+    /// <summary>Called from generated native-callback trampolines only (see `BuildCallbackThunk`) —
+    /// looks up the real interpreter/callable/type-codes context by key, marshals each native
+    /// argument to a Python value the same way a function's own return value is marshalled
+    /// (`MarshalOut`), calls the wrapped Python callable, and marshals its return value back to a
+    /// boxed native value.</summary>
+    private static object? InvokeCallbackTrampoline(int key, object[] nativeArgs)
+    {
+        CallbackContext ctx;
+        lock (CallbackContexts)
+            ctx = CallbackContexts[key];
+
+        var pyArgs = new object[nativeArgs.Length];
+        for (int i = 0; i < nativeArgs.Length; i++)
+            pyArgs[i] = MarshalOut(nativeArgs[i], ctx.ArgCodes[i]);
+
+        object pyResult = ctx.Interp.Call(ctx.Callable, pyArgs);
+        return ctx.RetCode == "v" ? null : PyToNativeScalar(pyResult, ctx.RetCode);
+    }
+
+    // Real, general C# gotcha found live: a switch *expression* whose arms are different numeric
+    // types (sbyte, int, double, ...) infers a common type across ALL arms via the standard implicit
+    // numeric conversion hierarchy (here, `double`) and converts every arm to it *before* the method's
+    // own `object` return type ever comes into play — so `Unbox_Any` back in the generated trampoline
+    // saw a boxed `System.Double` for an "i4"-coded return value instead of the intended boxed
+    // `System.Int32`, and crashed. Each arm is cast to `(object)` explicitly so no such arm-to-arm
+    // widening happens; the value that gets boxed is each arm's own real type.
+    private static object PyToNativeScalar(object pyValue, string code) => code switch
+    {
+        "i1" => (object)(sbyte)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "u1" => (object)(byte)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "i2" => (object)(short)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "u2" => (object)(ushort)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "i4" => (object)(int)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "u4" => (object)(uint)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "i8" => (object)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "u8" => (object)(ulong)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        "f4" => (object)(float)PyOps.AsDouble(pyValue),
+        "f8" => (object)PyOps.AsDouble(pyValue),
+        "p" => (object)(IntPtr)(long)PyOps.AsBigInt(pyValue, "ctypes"),
+        _ => throw PyErr.TypeError($"unsupported callback return type code {code}"),
+    };
+
+    private static readonly ModuleBuilder CallbackDelegateModule = AssemblyBuilder
+        .DefineDynamicAssembly(new AssemblyName("PySharpCtypesCallbacks"), AssemblyBuilderAccess.Run)
+        .DefineDynamicModule("PySharpCtypesCallbacksModule");
+
+    private static readonly Dictionary<string, Type> DelegateTypeCache = new();
+
+    /// <summary>Builds (or reuses) a real, non-generic delegate type for the given native signature —
+    /// the standard runtime recipe for a P/Invoke-callable delegate type built dynamically:
+    /// `MulticastDelegate`-derived, a `.ctor(object, IntPtr)` and an `Invoke(...)` method both marked
+    /// `Runtime | Managed` (the CLR supplies their actual implementations), decorated with
+    /// `[UnmanagedFunctionPointer]` so `Marshal.GetFunctionPointerForDelegate` accepts it.</summary>
+    private static Type GetOrBuildDelegateType(Type[] argTypes, Type retType)
+    {
+        string key = string.Join(",", argTypes.Select(t => t.Name)) + "->" + retType.Name;
+        lock (DelegateTypeCache)
+        {
+            if (DelegateTypeCache.TryGetValue(key, out var cached))
+                return cached;
+
+            var tb = CallbackDelegateModule.DefineType(
+                "CtypesCallback_" + key.GetHashCode(),
+                TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.AnsiClass
+                    | TypeAttributes.AutoClass,
+                typeof(MulticastDelegate));
+
+            var attrCtor = typeof(UnmanagedFunctionPointerAttribute).GetConstructor(new[] { typeof(CallingConvention) })!;
+            tb.SetCustomAttribute(new CustomAttributeBuilder(attrCtor, new object[] { CallingConvention.Winapi }));
+
+            var ctor = tb.DefineConstructor(
+                MethodAttributes.RTSpecialName | MethodAttributes.HideBySig | MethodAttributes.Public,
+                CallingConventions.Standard,
+                new[] { typeof(object), typeof(IntPtr) });
+            ctor.SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+
+            var invoke = tb.DefineMethod(
+                "Invoke",
+                MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Virtual,
+                retType,
+                argTypes);
+            invoke.SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+
+            var built = tb.CreateType()!;
+            DelegateTypeCache[key] = built;
+            return built;
+        }
     }
 
     // ---------------------------------------------------------------- create_string_buffer / create_unicode_buffer
@@ -500,9 +711,11 @@ public static class CtypesModule
         // value from a c_* instance: buffer-backed types (numeric/pointer) read through ReadField;
         // string-pointer types (c_char_p/c_wchar_p) still keep their value in `.Dict["value"]`
         // directly (see BuildStringPointerClass) — not a real Python-level property, so a plain dict
-        // lookup (not attribute lookup) is correct and sufficient for both cases here.
+        // lookup (not attribute lookup) is correct and sufficient for both cases here. Excludes any
+        // instance already carrying its own native pointer (`FnPtrKey`) — a CFUNCTYPE-built callback
+        // wrapper — which the "p" case below extracts directly instead.
         if (arg is PyInstance simple && simple.Class != byRefClass && simple.Class != charBufferClass
-            && CTypeCode(simple) is { } instCode)
+            && !simple.Dict.ContainsKey(FnPtrKey) && CTypeCode(simple) is { } instCode)
         {
             arg = simple.Dict.TryGet(BufferKey, out var bufObj) ? ReadField((byte[])bufObj, 0, instCode)
                 : simple.Dict.TryGet("value", out var v) ? v : PyNone.Instance;
@@ -570,6 +783,10 @@ public static class CtypesModule
                     handlesToFree.Add(handle);
                     return handle.AddrOfPinnedObject();
                 }
+                // A CFUNCTYPE-built callback wrapper: pass its own real native function pointer
+                // directly.
+                if (arg is PyInstance cbInst && cbInst.Dict.TryGet(FnPtrKey, out var cbPtr))
+                    return (IntPtr)cbPtr;
                 return (IntPtr)(long)PyOps.AsBigInt(arg, "ctypes");
             }
             default:
