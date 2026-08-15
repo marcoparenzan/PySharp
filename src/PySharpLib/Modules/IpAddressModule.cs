@@ -53,6 +53,27 @@ public static class IpAddressModule
             var addr = ParseAddress((string)a[0]);
             return addr.AddressFamily == AddressFamily.InterNetwork ? MakeAddress(IPv4AddressClass, addr) : MakeAddress(IPv6AddressClass, addr);
         });
+        // Real CPython `ip_network(address, strict=True)`/`ip_interface(address)`: picks IPv4Network
+        // vs. IPv6Network (or the matching Interface class) the same way `ip_address` already picks
+        // between Address classes, by which family the string parses as. `strict` is accepted but
+        // not enforced (this module's `IPv4Network`/`IPv6Network` `__init__` already always masks
+        // off host bits unconditionally — real CPython's own non-strict behavior — so nothing
+        // reachable so far needs the strict=True "raise if host bits are set" case). Found via real
+        // pg8000's own `converters.py` (`ip_network(data, False) if "/" in data else ip_address
+        // (data)`, its INET/CIDR column-value parser), reachable once installed as the pure-Python
+        // SQLAlchemy Postgres dialect driver (ORM_PLAN.md).
+        m.Dict["ip_network"] = new PyBuiltinFunction("ip_network", (interp, a, _) =>
+        {
+            string s = (string)a[0];
+            bool isV6 = s.Contains(':');
+            return interp.Call(isV6 ? IPv6NetworkClass : IPv4NetworkClass, new object[] { s });
+        });
+        m.Dict["ip_interface"] = new PyBuiltinFunction("ip_interface", (interp, a, _) =>
+        {
+            string s = (string)a[0];
+            bool isV6 = s.Contains(':');
+            return interp.Call(isV6 ? IPv6InterfaceClass : IPv4InterfaceClass, new object[] { s });
+        });
         return m;
     }
 

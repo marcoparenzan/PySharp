@@ -44,6 +44,17 @@ public sealed class Env
     /// </summary>
     public EnumAutoState? EnumAuto { get; init; }
 
+    /// <summary>Non-null only for a class body's own scope: every `PyFunction` a `def` statement
+    /// creates directly in this scope, recorded *before* any decorator is applied — real CPython's
+    /// `__class__` cell (what zero-arg `super()` reads) is a property of the function object itself,
+    /// baked in at definition time, entirely independent of whatever object a decorator wraps it in
+    /// afterward. `ExecClassDef`'s own post-hoc walk of the finished class namespace (`InnerFunctions`)
+    /// only recognizes PySharp's own built-in wrapper shapes (`staticmethod`/`classmethod`/
+    /// `property`) — an arbitrary *third-party* descriptor class (e.g. a library's own `@memoized_
+    /// property`) hides the underlying function from that walk entirely. Recording every function as
+    /// it's actually defined, before decoration, fixes zero-arg `super()` under ANY decorator.</summary>
+    public List<PyFunction>? DefinedFunctions { get; set; }
+
     /// <summary>The first scope usable as a closure (skips class scopes).</summary>
     public Env EffectiveClosure
     {

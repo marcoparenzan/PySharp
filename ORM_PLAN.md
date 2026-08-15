@@ -403,7 +403,140 @@ mapped `User` class definition, `Base.metadata.create_all(engine)` (real `CREATE
 real SQLite in-memory database — verified end-to-end in `M22_Orm/OrmSmokeTests.cs`. Getting here took
 ~30 real, general interpreter fixes, none of them sqlalchemy-specific (see the itemized lists above).
 
-## Phase 2 — docs (not started)
+## Phase 2 — docs (done)
 
-ROADMAP.md scenario entry, RELEASE_NOTES.md, README.md "Verified scenarios" update, once Phase 1 is
-real and verified end to end.
+ROADMAP.md scenario 13, a RELEASE_NOTES.md entry, and README.md's "Verified scenarios" section all
+updated to reflect Phase 1's completion.
+
+## Phase 3 — Postgres (in progress — real, substantial progress; one deep wall remaining)
+
+**Unblocked 2026-08-15**: the author provided real credentials for a live **Azure Database for
+PostgreSQL flexible server** instance. Credentials were never committed to this repo — read only
+from the process environment (`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`) by every probe,
+test, and sample script.
+
+**Driver choice.** The original plan (see this doc's own goal statement) named `pg8000` (a
+pure-Python driver) as the intended SQLAlchemy Postgres dialect. That path was abandoned after real
+investigation: `pg8000` → `python-dateutil` → `six` → `six`'s own `_SixMetaPathImporter` (a real
+`sys.meta_path`-based virtual-submodule mechanism for `six.moves`) requires a from-scratch module
+system to support constructing a *new* native module object from Python-level code
+(`types.ModuleType(name)`) — currently a `PyInstance`, not this interpreter's own native `PyModule`
+representation, a real but deep unification gap out of scope for one transitive dependency. Pivoted
+to SQLAlchemy's `postgresql+psycopg2://` dialect instead, reusing this repo's own real, already-
+verified `psycopg2` shim (SQL_PLAN.md Phase 2) — the same real DB-API surface, just driven through
+SQLAlchemy's dialect layer instead of directly.
+
+**Real, general fixes made along the way** (verified against real behavior — cross-checked against
+real Python/psycopg2 running on this machine's system Python where relevant — each with its own
+regression test in `OrmPostgresGapsTests.cs` unless noted):
+
+- [x] **A real, general concurrency bug: `threading.Condition` wrapped .NET's `Monitor` directly** —
+  a genuinely OS-thread-affine construct (the same real thread must Enter/Exit/Wait/Pulse it).
+  PySharp's own execution model runs every generator/coroutine body on its own dedicated OS thread,
+  so a single *logical* Python thread's execution routinely spans several real OS threads over its
+  lifetime — `Monitor.Pulse`/`.Exit` called from a different real OS thread than the one that
+  entered it raised a real `SynchronizationLockException`. This is the exact same trap `Lock`/`RLock`
+  were already rewritten to avoid (see `LockState`'s own doc comment: "a Python Lock can be released
+  by a different thread") — `Condition` just hadn't gotten the same treatment yet. Rewritten to the
+  same algorithm real CPython's own `Condition` uses: a real reentrant lock plus an explicit
+  per-waiter list of single-token semaphores (any thread can signal any semaphore — no thread
+  affinity at all). Found live via real SQLAlchemy's own connection pool (`sqlalchemy.pool`, a real
+  `threading.Condition`-backed queue) — reached only once a dialect defaulting to `QueuePool`
+  (unlike sqlite3's own default pool) actually blocked on it.
+- [x] **A real, general interpreter bug: zero-arg `super()`'s implicit `__class__` cell was only
+  ever set by post-hoc walking the finished class namespace for PySharp's own known wrapper shapes**
+  (`staticmethod`/`classmethod`/`property`) — an arbitrary *third-party* decorator (e.g. a library's
+  own `@memoized_property`) hides the underlying function from that walk entirely, so `super()`
+  inside it raised "super(): __class__ cell not found". Fixed generally: every function is now
+  recorded (`Env.DefinedFunctions`) at the moment its `def` statement runs inside a class body,
+  *before* any decorator sees it — real CPython's own `__class__` cell is a property of the function
+  object itself, baked in at definition time, entirely independent of later decoration. Found via
+  real SQLAlchemy's own `sql/type_api.py` `_static_cache_key` (wrapped by `@util.memoized_property`,
+  a real third-party descriptor class).
+- [x] `%`-formatting (`Interp.BinaryOp`'s `"%"` case) didn't accept a real `class Foo(str): ...`
+  subclass instance as the left operand, only a literal `str` — found via real SQLAlchemy's own
+  `sql/elements.py` `_anonymous_label` (a `quoted_name`/str subclass) doing `"%%(%d %s)s" % (seed,
+  body)`-style formatting on `self`.
+- [x] `%(name)s`-style formatting (`StrModules.PercentFormat`) only accepted a literal `dict` as the
+  right operand, not any real mapping-*protocol* object — found via real SQLAlchemy's own
+  `sql/cache_key.py` `self.key % anon_map`, where `anon_map` is a custom class with its own
+  `__getitem__`, not a `dict`. Reuses the same `PyOps.TryGetMappingItems`/`Interp.GetItem` machinery
+  `**expr` unpacking already uses.
+- [x] `functools.singledispatch` didn't exist at all — added as a real (not stubbed) generic-function
+  dispatcher: `.register` supports all three real forms (`@f.register(SomeType)`, bare `@f.register`
+  reading the wrapped function's own first-parameter annotation — including a bare `None` annotation
+  meaning `NoneType`, per real `typing.get_type_hints`'s own conversion — and the direct
+  `f.register(SomeType, impl)` two-arg form). Found via real `pg8000`'s own `converters.py`.
+- [x] `ipaddress.ip_network`/`ip_interface` didn't exist (only `ip_address` did) — added, picking
+  IPv4 vs. IPv6 the same way `ip_address` already does. Found via real `pg8000`'s own
+  `converters.py` (`ip_network(data, False) if "/" in data else ip_address(data)`, its INET/CIDR
+  column-value parser).
+- [x] `calendar.monthrange` didn't exist — added, matching real CPython's `(weekday_of_first_day,
+  number_of_days)` return shape. Found via real python-dateutil's own `parser/_parser.py`.
+- [x] `__future__`'s feature list was missing `unicode_literals` (and several other always-real
+  CPython feature names) — added the real full list. Found via real python-dateutil's own
+  `parser/_parser.py` (`from __future__ import unicode_literals`).
+- [x] `importlib.util.spec_from_loader` didn't exist — added, building a real (if minimal)
+  `ModuleSpec`-shaped object from an explicit loader. Found via real `six`'s own
+  `_SixMetaPathImporter` (`if PY34: from importlib.util import spec_from_loader`, imported
+  unconditionally on any modern Python).
+- [x] `types.ModuleType` was a blank marker class with no real constructor — given a real
+  `__init__(name, doc=None)` (setting `__name__`/`__doc__`) and `__repr__`. Found via real `six`'s
+  own `_SixMetaPathImporter` helper classes, instantiated directly with a name argument relying on
+  the inherited real constructor.
+- [x] `sys.meta_path` didn't exist, and the core importer never consulted it — added as a real,
+  mutable list, plus a real PEP 302 legacy meta-path-finder fallback (`find_module`/`load_module`)
+  in `Importer.LoadModule`, tried before raising `ModuleNotFoundError`. Found via real `six`'s own
+  `_SixMetaPathImporter` cleanup code and its own `sys.meta_path.append(_importer)` registration.
+  **Known limitation** (not fixed — see the driver-choice note above): the fallback only completes
+  a load when the finder's `load_module()` returns this interpreter's own native `PyModule` — a
+  finder that builds a *new* module via `types.ModuleType(...)` (the idiomatic, and `six`'s own,
+  approach) gets a `PyInstance` back instead, which the fallback correctly declines rather than
+  silently misbehaving. This is *why* the `pg8000` path was abandoned rather than pushed through.
+- [x] `itertools.product` didn't exist — added (including `repeat=`). Found via real SQLAlchemy's
+  own `sql/compiler.py` `visit_join`.
+- [x] `collections.deque.extendleft` didn't exist — added, matching real CPython's "each element
+  prepended one at a time" (net-reversed) order. Found via real SQLAlchemy's own `sql/compiler.py`
+  `Linting.lint()`.
+- [x] **`Psycopg2Module`'s own placeholder rewriting only ever supported positional `%s`** (bound
+  from a tuple/list) — real SQLAlchemy's psycopg2 dialect always compiles statements with *named*
+  `%(name)s` placeholders bound from a dict (or any real mapping-protocol object — sqlalchemy's own
+  `immutabledict`, the actual "no params" sentinel every internal startup query like `select
+  pg_catalog.version()` is called with). `RewritePlaceholders` now recognizes both forms in the same
+  pass (a name repeated in one statement reuses the same Npgsql `$N`), and `ExecuteOne` resolves
+  each placeholder against either a positional sequence or a dict/mapping-protocol object. Test:
+  `Psycopg2Tests.cs`.
+- [x] **`Psycopg2Module`'s `ToPgValue` didn't accept a real `str`/`int` subclass instance** as a bind
+  parameter value — found via real SQLAlchemy's own `quoted_name` (identifiers) flowing into a bound
+  parameter. Test: `Psycopg2Tests.cs`.
+- [x] `psycopg2.extensions`/`psycopg2.extras` (submodules, not exposed at all) needed for real
+  SQLAlchemy's own psycopg2 dialect `on_connect()` handshake: `extensions.ISOLATION_LEVEL_*` (real
+  values, confirmed against real psycopg2), and `extras.register_uuid`/`register_default_json`/
+  `register_default_jsonb`/etc. as real, faithful no-ops (this shim's own value conversion doesn't
+  need psycopg2's opt-in adapter-registration machinery — Npgsql already round-trips the underlying
+  types natively) plus a real `HstoreAdapter.get_oids()` returning `None` (the real response for a
+  database without the hstore extension installed). `Connection.notices` (a real, always-empty
+  list) and `Connection`/`Cursor.closed` also added for the same reason. `Connection.execute()`/
+  `.executemany()` convenience methods — copied over by habit from the pyodbc/sqlite3 shim
+  templates — were removed once checked against real psycopg2 itself (`dir(psycopg2.extensions.
+  connection)` confirms no such methods exist there).
+
+**Real, verified progress**: connection + `on_connect()` handshake, `Base.metadata.create_all()`/
+`drop_all()` (real DDL, including a real `has_table()` reflection round trip), `session.add()` ×2,
+and `session.commit()` reaching real INSERT-statement SQL compilation (cache-key generation, bind
+parameter naming, `insertmanyvalues` VALUES-list assembly) all run correctly against the live Azure
+server.
+
+**Current wall (not yet root-caused): `ZeroDivisionError` inside `sql/compiler.py`'s own
+`insertmanyvalues` batch-size computation** (`num_params_per_batch = len(imv.insert_crud_params)`
+comes back `0` — confirmed via a temporary diagnostic print showing `bind_names` correctly populated
+with both real columns, `insert_crud_params` empty regardless). This is deep inside SQLAlchemy 2.0's
+own "implicit sentinel" machinery (an optional `INSERT ... SELECT ... ORDER BY` rendering used by
+Postgres/SQL Server to correlate multi-row `RETURNING` results back to their original Python-side
+objects) — not yet traced to its root cause. Not a blocker for SQL_PLAN.md Phase 2 (the raw
+`psycopg2` DB-API shim, fully verified independently of SQLAlchemy) or for ORM_PLAN.md Phase 1 (the
+SQLite round trip, complete and unaffected). Next step if resumed: trace `crud_params_single`'s own
+construction (`sql/crud.py`) to find why it ends up empty specifically under the sentinel-enabled
+`INSERT ... SELECT` rendering path, or check whether disabling the implicit-sentinel behavior
+(`use_insertmanyvalues=False` on the mapped table, or an older/pinned SQLAlchemy version) routes
+around it entirely as a pragmatic workaround.

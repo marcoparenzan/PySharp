@@ -57,6 +57,25 @@ public static class ImportlibModule
             spec.Dict["submodule_search_locations"] = PyNone.Instance;
             return spec;
         });
+        // Real CPython `spec_from_loader(name, loader, *, origin=None, is_package=None)`: builds a
+        // real (if minimal) ModuleSpec-shaped object from an explicit loader, rather than searching
+        // for one — the machinery a custom `sys.meta_path` importer's own `find_spec` typically
+        // returns. Found via real `six`'s own `_SixMetaPathImporter` (`if PY34: from importlib.util
+        // import spec_from_loader`, imported unconditionally on any modern Python even though this
+        // particular code path only calls it from `find_spec`, itself only reachable via `import
+        // six.moves.xyz`) — reachable once installed as pg8000's own transitive dependency
+        // (ORM_PLAN.md). Not wired into the real import system (nothing reachable so far actually
+        // loads a module *through* a spec built this way — only `six`'s own module-level `import`
+        // needs the name to exist).
+        m.Dict["spec_from_loader"] = new PyBuiltinFunction("spec_from_loader", (_, a, kwargs) =>
+        {
+            var spec = new PyInstance(ModuleSpecClass);
+            spec.Dict["name"] = a[0];
+            spec.Dict["loader"] = a[1];
+            spec.Dict["origin"] = kwargs is not null && kwargs.TryGetValue("origin", out var o) ? o : PyNone.Instance;
+            spec.Dict["submodule_search_locations"] = PyNone.Instance;
+            return spec;
+        });
         return m;
     }
 }

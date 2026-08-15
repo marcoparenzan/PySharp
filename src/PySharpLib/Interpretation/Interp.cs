@@ -259,6 +259,11 @@ public sealed class Interp
             case FuncDef d:
             {
                 var fn = MakeFunction(d.Name, d.Params, d.Body, null, d.IsGenerator, env, d.Returns, d.IsAsync);
+                // Record before any decorator wraps it — see Env.DefinedFunctions's own doc comment
+                // (real CPython's zero-arg super() `__class__` cell is a property of the function
+                // object itself, set at definition time, regardless of later decoration).
+                if (env.IsClassScope)
+                    (env.DefinedFunctions ??= new()).Add(fn);
                 object result = fn;
                 for (int i = d.Decorators.Count - 1; i >= 0; i--)
                     result = Call(Eval(d.Decorators[i], env), new[] { result });
@@ -556,6 +561,9 @@ public sealed class Interp
             foreach (var kv in namespaceDict.Entries)
                 foreach (var inner in InnerFunctions(kv.Value))
                     inner.DefiningClass = cls;
+            if (classEnv.DefinedFunctions is not null)
+                foreach (var fn in classEnv.DefinedFunctions)
+                    fn.DefiningClass = cls;
             // Real `type.__call__(mcs, name, bases, ns, **kwds)`: the metaclass's own __init__ runs
             // too, after __new__ — not just a `type`-default no-op in general. Found via real
             // sqlalchemy's own `util/langhelpers.py` `_IntFlagMeta.__init__` (a `FastIntFlag`
@@ -578,6 +586,9 @@ public sealed class Interp
                 foreach (var inner in InnerFunctions(kv.Value))
                     inner.DefiningClass = cls;
             }
+            if (classEnv.DefinedFunctions is not null)
+                foreach (var fn in classEnv.DefinedFunctions)
+                    fn.DefiningClass = cls;
             cls.Dict["__qualname__"] = c.Name;
         }
 
@@ -2513,8 +2524,14 @@ public sealed class Interp
             }
 
             case "%":
+                // Real CPython: `%`-formatting is inherited by any str subclass (no override needed
+                // — real code never defines its own `__mod__`). Found via real sqlalchemy's own
+                // `sql/elements.py` `_anonymous_label` (a `quoted_name`/str subclass several levels
+                // deep) doing `"%%(%d %s)s" % (seed, body)`-style formatting on `self`.
                 if (a is string fmt)
                     return StrModules.PercentFormat(this, fmt, b);
+                if (a is PyInstance strInst && strInst.StrValue is not null)
+                    return StrModules.PercentFormat(this, strInst.StrValue, b);
                 break;
 
             case "|":

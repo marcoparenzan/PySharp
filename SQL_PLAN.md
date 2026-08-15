@@ -8,8 +8,8 @@ fix, real test, repeat. See ROADMAP.md's "Method: scenario-driven development".
 planned in ROADMAP.md** ("SQLite, then Postgres"):
 
 - **3a — `sqlite3`** (file/`:memory:`, no server needed) — ✅ **done**, this document's Phase 1.
-- **3b — Postgres** (`psycopg2`-shaped or a native shim on `Npgsql`) — ⚪ planned, needs a real
-  running server to verify against (see "Postgres/SQL Server: server-availability note" below).
+- **3b — Postgres** (`psycopg2`-shaped, real shim on `Npgsql`) — ✅ **done**, this document's
+  Phase 2, verified live against a real Azure Database for PostgreSQL flexible server instance.
 - **3c — SQL Server** (`pyodbc`-shaped, real shim on `Microsoft.Data.SqlClient`) — ✅ **done**, this
   document's Phase 3, verified live against a real SQL Server LocalDB instance already provisioned
   on this machine.
@@ -108,7 +108,8 @@ listening on `127.0.0.1:1433` — but `sqllocaldb info` showed a real, already-p
 `MSSQLLocalDB` instance (SQL Server LocalDB 17.0.4025.3, owned by this machine's user,
 `Auto-create: Yes`), started on demand via `sqllocaldb start MSSQLLocalDB`. LocalDB is a real SQL
 Server engine (same T-SQL surface, wire protocol over a named pipe instead of TCP) — this gave Phase
-3 a genuine live-verification path, unlike Postgres (Phase 2, still blocked — see below).
+3 a genuine live-verification path — Postgres (Phase 2) was blocked the same way at the time this
+phase was written, later unblocked by a real Azure Postgres instance (see below).
 
 **Package**: `Microsoft.Data.SqlClient` 7.0.2, added to `PySharpLib.csproj` — `dotnet list package
 --vulnerable` reported none.
@@ -197,26 +198,90 @@ drops a real LocalDB database — confirmed no leftover `pysharp_*` databases af
 
 ---
 
-## Phase 2 — Postgres (`psycopg2`-shaped, real `Npgsql` shim) ⚪ planned — blocked
+## Phase 2 — Postgres (`psycopg2`-shaped, real `Npgsql` shim) ✅ done (2026-08-15)
 
-**Server-availability note (checked 2026-08-10).** Nothing listening on `127.0.0.1:5432`, no
-Postgres service or tooling found, no Docker (`docker` not on `PATH`) to stand one up either. Unlike
-SQL Server (Phase 3), there is **no live-verification path available in this dev environment right
-now** — this project's whole method is "run the real thing, fix the real error, verify by hand
-against real behavior," which for a network database means an actual running server, not a mock.
-Phase 2 stays blocked until one becomes available (a Docker container, a cloud instance, or a local
-install) — re-check reachability before starting rather than assuming either way.
+**Server-availability note.** Blocked since 2026-08-10 (nothing listening on `127.0.0.1:5432`, no
+Docker, no local install) — unblocked 2026-08-15 when the author provided real credentials for a
+live **Azure Database for PostgreSQL flexible server** instance (`postgres.database.azure.com`,
+TLS-required). Reachability confirmed via `Test-NetConnection` before starting; credentials were
+never committed to this repo — read only from the process environment (`PGHOST`/`PGPORT`/`PGUSER`/
+`PGPASSWORD`/`PGDATABASE`, the same names real `psql`/`libpq` use) by the live xUnit fixture, every
+embedded test script, and the sample below.
 
-Design intent once a server is confirmed reachable, following the same pattern as Phase 1/3:
+**Verification method**: same discipline as Phase 1/3, plus one extra step unique to this phase —
+a real system Python (3.11.7, already present on this machine) with real `psycopg2-binary` installed
+was used to verify exact DB-API semantics against the *real* library itself before writing the shim,
+not just the driver. Several real, non-obvious behaviors were found this way that a same-language
+comparison (C# Npgsql vs. Python psycopg2) makes uniquely checkable:
 
-- Add `Npgsql` to `PySharpLib.csproj`, check `dotnet list package --vulnerable` immediately.
-- Probe the driver's real behavior directly from a throwaway C# console project first —
-  `psycopg2`'s real paramstyle is `%s` (not `?` or `@name`), so the placeholder-rewrite logic will
-  differ again from both Phase 1 and Phase 3; don't assume it matches either without checking live,
-  the same way SQL Server's `SCOPE_IDENTITY()` scoping and mandatory `@name` placeholders turned out
-  to differ from SQLite's.
-- Reuse `Sqlite3Module.cs`/`PyodbcModule.cs`'s shape (exception hierarchy, cursor state machine,
-  row/description/rowcount/lastrowid pattern) as a template, not a shared base class — with two real
-  backends now built and already meaningfully different from each other (transaction model,
-  placeholder style, lastrowid mechanics), a shared abstraction still isn't obviously warranted; only
-  extract one if Postgres turns out to genuinely duplicate logic rather than just resembling it.
+1. **Real psycopg2's `paramstyle` is `%s` ("pyformat"), and Npgsql understands only its own native
+   `$N` positional placeholders** — a literal `%s` sent to Npgsql raises a real Postgres syntax
+   error, confirmed live. Every bare `%s` outside a quoted string literal is rewritten to `$1`,
+   `$2`, ... in source order (the same quote-aware rewrite technique as Phase 1/3's own placeholder
+   handling). `%(name)s` named substitution is deliberately out of scope for v1.
+2. **Real Postgres has fully transactional DDL** — confirmed against real psycopg2: an uncommitted
+   `CREATE TABLE` is invisible to a second connection, and an uncommitted `ALTER TABLE` is undone by
+   `rollback()` exactly like an uncommitted `INSERT` would be. This matches pyodbc's own "no
+   special-casing, everything stays in one transaction until commit/rollback" model, not sqlite3's
+   DDL-vs-DML legacy heuristic.
+3. **Real psycopg2's `cursor.lastrowid` is a permanent, do-nothing stub that always reads back `0`**
+   — confirmed live (it reads `0` immediately after a `CREATE TABLE`, before any `INSERT` at all).
+   Real code uses `INSERT ... RETURNING id` + `fetchone()` instead; the shim's own `.lastrowid`
+   faithfully always returns `0` rather than trying to "improve on" real psycopg2 with a computed
+   value.
+4. **Real psycopg2's `rowcount` for a row-returning statement (e.g. `SELECT`) is the actual number
+   of rows in the result** — confirmed live. This diverges from sqlite3's own DB-API choice of
+   always reporting `-1` for `SELECT`; the Postgres shim reports the real count to match.
+5. **`Connection.execute()`/`.executemany()` do not exist on real psycopg2** (`dir(psycopg2.
+   extensions.connection)` confirmed it) — unlike sqlite3/pyodbc's own non-standard convenience
+   extensions. An early draft of the shim copied that convenience method over by habit from the
+   pyodbc template; removed once checked against the real class.
+6. **Reassigning `.autocommit` at all while a transaction is open raises a real `ProgrammingError`**
+   (`"set_session cannot be used inside a transaction"`) — confirmed live, and true even when the
+   new value equals the old one. Found the hard way: the shim initially allowed this silently, which
+   left real orphaned tables behind in the live Azure database (a test/sample epilogue's `conn.
+   autocommit = True` attached its own cleanup `DROP TABLE` to a still-open, never-committed
+   transaction instead of raising loudly) — caught by checking `information_schema.tables` after a
+   full test run instead of trusting "all green" alone. Fixed to raise, matching real psycopg2
+   exactly; the six orphaned tables were manually dropped from the live database afterward.
+7. Column CLR types read back from Npgsql needed a driver-specific mapping pass, confirmed via a
+   throwaway probe: `date` surfaces as `System.DateOnly` (not `DateTime`, unlike SQLite/SQL Server),
+   `time` as `System.TimeOnly` (not `TimeSpan`), `numeric` as `System.Decimal`, `real`/`double
+   precision` as `Single`/`Double`, `bigint` as `Int64` — each mapped to the matching Python type
+   (`date`/`time`/`float`/`int`) the same way Phase 1/3 already do for their own drivers.
+
+**Module**: [Psycopg2Module.cs](src/PySharpLib/Modules/Psycopg2Module.cs), registered as `psycopg2`.
+Real (not stubbed) surface: `connect(...)` (both a libpq-style DSN string and real psycopg2-style
+kwargs — `host`/`port`/`dbname`/`user`/`password`/`sslmode`), `Connection`/`Cursor` (rows as plain
+tuples, matching real psycopg2's default cursor — no `Row`-wrapper opt-out needed, unlike sqlite3/
+pyodbc), `execute`/`executemany`, `fetchone`/`fetchmany`/`fetchall`, direct cursor iteration, real
+per-statement `description`/`rowcount`/`lastrowid`/`arraysize`, real transactions (autocommit=False
+by default, `commit()`/`rollback()`, `with conn:` commits on a clean exit without closing — cursor
+`with` blocks additionally close the cursor, confirmed live to differ from `Connection`'s own
+`__exit__`), and the PEP 249 exception hierarchy (SQLSTATE class `23` → `IntegrityError`, everything
+else → `OperationalError`, matching real psycopg2's own class-prefix scheme).
+
+**Deliberately out of scope for v1** (same practical-subset philosophy as Phase 1/3): `%(name)s`
+named placeholders, `cursor_factory`/`RealDictCursor`-style row shapes, server-side named cursors,
+`COPY`/`copy_expert`, connection pooling, and `DATETIMEOFFSET`-equivalent timezone-aware round-
+tripping (`timestamptz` is read back the same way as `timestamp`, matching SQL Server's own
+`DATETIMEOFFSET`-out-of-scope choice in Phase 3).
+
+**Sample**: [samples/postgres_demo.py](samples/postgres_demo.py) — a small real todo-list script
+against the live Azure server, exercising `%s` placeholders, a real `DATE` round-trip, `executemany`,
+`INSERT ... RETURNING` + `fetchone()`, a committed transaction, a rolled-back transaction (via
+`with conn:` + a raised exception — including the DDL-participates-in-the-transaction behavior), and
+a caught `IntegrityError` — run live end-to-end via `pysharp run samples/postgres_demo.py`, output
+verified against real, reasoned-through psycopg2/Postgres semantics (and directly cross-checked
+against real psycopg2 itself for the non-obvious parts, see above) before trusting it.
+
+**Tests**: [Psycopg2Tests.cs](src/PySharp.Tests/M6_Stdlib/Psycopg2Tests.cs), 9 tests, using
+[PostgresLiveFixture.cs](src/PySharp.Tests/M6_Stdlib/PostgresLiveFixture.cs) (probes real
+reachability via the process environment; each test creates and drops its own uniquely-named table).
+Unlike SQL Server LocalDB (Windows integrated auth, no secret involved), these need real credentials
+that are deliberately never committed — `[SkippableFact]`/`Skip.IfNot(...)` keyed off the fixture's
+own live-connectivity probe, so the suite stays green (skipped, not failed) on a machine/CI agent
+with no `PGHOST` set. In this session's environment they actually ran for real (confirmed: 0
+skipped, all 9 passing) against the live Azure server; a follow-up query against
+`information_schema.tables` confirmed zero orphaned tables left behind after a full run. Full suite
+green at **1310/1310**, confirmed via 3 consecutive full-suite runs with live credentials set.

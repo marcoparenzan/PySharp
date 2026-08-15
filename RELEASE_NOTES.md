@@ -258,6 +258,30 @@ database.
 
 ---
 
+## Postgres (real DB-API + SQLAlchemy investigation) — 2026-08-15
+
+A real, unmodified **`psycopg2`-shaped shim over Npgsql** (SQL_PLAN.md Phase 2) — `connect`/
+`Connection`/`Cursor`, real `%s`/`%(name)s` placeholder rewriting, psycopg2's own autocommit=False
+transaction model (Postgres has fully transactional DDL, unlike sqlite3's own DDL-vs-DML heuristic),
+and the PEP 249 exception hierarchy — verified live against a real Azure Database for PostgreSQL
+instance ([samples/postgres_demo.py](samples/postgres_demo.py), 11 tests in
+[Psycopg2Tests.cs](src/PySharp.Tests/M6_Stdlib/Psycopg2Tests.cs)).
+
+Driving real SQLAlchemy against the same server (via `postgresql+psycopg2://`, reusing the shim
+above) got substantially further than expected before hitting a real wall: connection setup, real
+DDL (`create_all`/`drop_all`, including a real `has_table()` reflection round trip), and
+`session.commit()` reaching real INSERT SQL compilation all work — a `ZeroDivisionError` remains
+inside SQLAlchemy 2.0's own `insertmanyvalues` sentinel/batch-size machinery, not yet root-caused.
+Getting this far surfaced several more general, non-Postgres-specific interpreter fixes — most
+notably a genuine concurrency bug (`threading.Condition` wrapped .NET's thread-affine `Monitor`
+directly, breaking under this interpreter's own thread-per-generator execution model — rewritten to
+the same semaphore-based algorithm real CPython's own `Condition` uses) and a general zero-arg
+`super()` fix (the implicit `__class__` cell is now recorded at function-definition time, so it
+survives being wrapped by *any* decorator, not just this project's own known `staticmethod`/
+`classmethod`/`property` shapes). Full list in ORM_PLAN.md Phase 3.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
     <!-- Microsoft.Data.Sqlite 10.0.10 pulls in SQLitePCLRaw.lib.e_sqlite3 2.1.11, which has a known
          high-severity advisory (GHSA-2m69-gcr7-jv3q); pin the transitive dependency to a patched
          version explicitly. -->

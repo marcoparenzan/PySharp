@@ -488,13 +488,16 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   `.commit()` (a full real INSERT flush), and `session.execute(select(...))`/`session.get(...)`
   verified end to end with a real insert-then-query round trip. See [ORM_PLAN.md](ORM_PLAN.md) (both
   phases done) and ROADMAP.md scenario 13.
+- **Postgres**: a real `psycopg2`-shaped shim over `Npgsql` — `connect`/`Connection`/`Cursor`, real
+  `%s` placeholder rewriting, psycopg2's own autocommit=False transaction model (Postgres has fully
+  transactional DDL), and the PEP 249 exception hierarchy, verified live against a real Azure
+  Database for PostgreSQL instance. See [SQL_PLAN.md](SQL_PLAN.md) Phase 2 and ROADMAP.md scenario 3.
 
 ### Does not work (yet)
 
 | Scenario | Verified blocker | Feasibility |
 |---|---|---|
-| **Postgres** | `Npgsql` support exists in principle (same pattern as `pyodbc`/SQL Server) but is blocked on having a real Postgres server available to verify against; a pure-Python `pg8000` SQLAlchemy dialect is the planned route instead | **Feasible, blocked on environment**: SQLite (raw `sqlite3` and now a real SQLAlchemy ORM round trip) and SQL Server (via `pyodbc`/`Microsoft.Data.SqlClient`) both already work — see [ROADMAP.md](ROADMAP.md) scenarios 3 and 13, [SQL_PLAN.md](SQL_PLAN.md) and [ORM_PLAN.md](ORM_PLAN.md) |
-| **Django** | a real, unmodified Django app needs WSGI, migrations, the template engine, `django.contrib.admin`, class-based views | **Partially de-risked**: a real ORM round trip (SQLAlchemy) now works (see above), but Django itself is much heavier than FastAPI (scenario 2, now done) and not started — see [ROADMAP.md](ROADMAP.md) scenario 10 |
+| **Django** | a real, unmodified Django app needs WSGI, migrations, the template engine, `django.contrib.admin`, class-based views | **Partially de-risked**: a real ORM round trip (SQLAlchemy, both SQLite and Postgres) now works (see above), but Django itself is much heavier than FastAPI (scenario 2, now done) and not started — see [ROADMAP.md](ROADMAP.md) scenario 10 |
 
 `sqlite3` (scenario 3), `importlib`, and `email`/`http` (scenario 2, `FASTAPI_PLAN.md`) are no longer
 missing — all three now exist, closing out gaps this section used to list.

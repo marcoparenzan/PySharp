@@ -234,13 +234,22 @@ public static class ThreadingModule
 
     // ---------------------------------------------------------------- Condition
 
+    /// <summary>threading.Condition's own lock state (a real reentrant lock, matching real
+    /// CPython's default `Condition(lock=None)` — an RLock) plus the list of currently-waiting
+    /// callers, each represented by its own single-token semaphore.</summary>
+    private sealed class ConditionState
+    {
+        public readonly LockState Lock = new();
+        public readonly List<SemaphoreSlim> Waiters = new();
+    }
+
     private static PyClass BuildConditionClass()
     {
         var cls = new PyClass("Condition", new List<PyClass>());
         const string key = "__cond__";
         void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"Condition.{name}", fn);
 
-        object M(object self)
+        ConditionState C(object self)
         {
             var inst = (PyInstance)self;
             if (!inst.Dict.TryGet(key, out var v))
@@ -249,55 +258,129 @@ public static class ThreadingModule
                 {
                     if (!inst.Dict.TryGet(key, out v))
                     {
-                        v = new object();
+                        v = new ConditionState();
                         inst.Dict[key] = v;
                     }
                 }
             }
-            return v;
+            return (ConditionState)v;
+        }
+
+        // Real CPython's default Condition lock is reentrant (RLock) — same acquire/release shape
+        // as BuildLockClass's own reentrant branch above, duplicated here (rather than shared)
+        // because it also needs to fully release/re-acquire around wait()'s blocking call below.
+        void AcquireReentrant(LockState st)
+        {
+            if (st.OwnerThread == Environment.CurrentManagedThreadId)
+            {
+                st.Depth++;
+                return;
+            }
+            st.Sem.Wait();
+            st.OwnerThread = Environment.CurrentManagedThreadId;
+            st.Depth = 1;
+        }
+
+        void ReleaseReentrant(LockState st)
+        {
+            if (st.Depth == 0 || st.OwnerThread != Environment.CurrentManagedThreadId)
+                throw PyErr.RuntimeError("cannot release un-acquired lock");
+            st.Depth--;
+            if (st.Depth == 0)
+            {
+                st.OwnerThread = -1;
+                st.Sem.Release();
+            }
         }
 
         Add("__init__", (_, a, _) =>
         {
-            ((PyInstance)a[0]).Dict[key] = new object();
+            ((PyInstance)a[0]).Dict[key] = new ConditionState();
             return PyNone.Instance;
         });
-        Add("acquire", (_, a, _) =>
-        {
-            System.Threading.Monitor.Enter(M(a[0]));
-            return true;
-        });
-        Add("release", (_, a, _) =>
-        {
-            System.Threading.Monitor.Exit(M(a[0]));
-            return PyNone.Instance;
-        });
+        Add("acquire", (_, a, _) => { AcquireReentrant(C(a[0]).Lock); return true; });
+        Add("release", (_, a, _) => { ReleaseReentrant(C(a[0]).Lock); return PyNone.Instance; });
+        // Real, general bug fixed here: this used to wrap .NET's `Monitor` directly — a genuinely
+        // OS-thread-affine construct (the exact same thread must Enter/Exit/Wait/Pulse it), the
+        // same trap `Lock`/`RLock` above were already rewritten to avoid (see `LockState`'s own
+        // doc comment: "a Python Lock can be released by a different thread"). PySharp's own
+        // execution model runs every generator/coroutine body on its own dedicated OS thread, so a
+        // single *logical* Python thread's execution routinely spans several real OS threads over
+        // its lifetime — `Monitor.Pulse`/`.Exit` called from a different real OS thread than the one
+        // that entered it raises a real `SynchronizationLockException`. Rewritten to the same
+        // algorithm real CPython's own `Condition` uses: a real reentrant lock plus an explicit
+        // per-waiter list of single-token semaphores (any thread can signal any semaphore — no
+        // thread affinity at all) that `notify()`/`notify_all()` release directly instead of relying
+        // on a shared Monitor's wait/pulse queue. Found live via real sqlalchemy's own connection
+        // pool (`sqlalchemy.pool`, a real `threading.Condition`-backed queue) — reached only once a
+        // dialect defaulting to `QueuePool` (unlike sqlite3's own default pool) actually blocked on
+        // it, e.g. `create_engine("postgresql+psycopg2://...")` (ORM_PLAN.md's Postgres phase).
         Add("wait", (_, a, _) =>
         {
-            if (a.Length > 1 && a[1] is not PyNone)
-                return System.Threading.Monitor.Wait(M(a[0]), TimeSpan.FromSeconds(PyOps.AsDouble(a[1])));
-            return System.Threading.Monitor.Wait(M(a[0]));
+            var state = C(a[0]);
+            var st = state.Lock;
+            if (st.Depth == 0 || st.OwnerThread != Environment.CurrentManagedThreadId)
+                throw PyErr.RuntimeError("cannot wait on un-acquired lock");
+
+            var waiter = new SemaphoreSlim(0, 1);
+            lock (state.Waiters)
+                state.Waiters.Add(waiter);
+
+            // Real CPython: wait() fully releases the lock (even a recursively-acquired one),
+            // saving the recursion depth to restore after re-acquiring below.
+            int savedDepth = st.Depth;
+            st.Depth = 0;
+            st.OwnerThread = -1;
+            st.Sem.Release();
+
+            bool signaled = false;
+            try
+            {
+                signaled = a.Length > 1 && a[1] is not PyNone
+                    ? waiter.Wait(TimeSpan.FromSeconds(PyOps.AsDouble(a[1])))
+                    : waiter.Wait(-1);
+            }
+            finally
+            {
+                if (!signaled)
+                    lock (state.Waiters)
+                        state.Waiters.Remove(waiter);
+                // Real CPython: wait() always re-acquires the lock before returning to the caller,
+                // whether it was notified or timed out.
+                st.Sem.Wait();
+                st.OwnerThread = Environment.CurrentManagedThreadId;
+                st.Depth = savedDepth;
+            }
+            return signaled;
         });
         Add("notify", (_, a, _) =>
         {
-            System.Threading.Monitor.Pulse(M(a[0]));
+            var state = C(a[0]);
+            int n = a.Length > 1 ? (int)PyOps.AsBigInt(a[1], "n") : 1;
+            lock (state.Waiters)
+            {
+                for (int i = 0; i < n && state.Waiters.Count > 0; i++)
+                {
+                    var w = state.Waiters[0];
+                    state.Waiters.RemoveAt(0);
+                    w.Release();
+                }
+            }
             return PyNone.Instance;
         });
         Add("notify_all", (_, a, _) =>
         {
-            System.Threading.Monitor.PulseAll(M(a[0]));
+            var state = C(a[0]);
+            lock (state.Waiters)
+            {
+                foreach (var w in state.Waiters)
+                    w.Release();
+                state.Waiters.Clear();
+            }
             return PyNone.Instance;
         });
-        Add("__enter__", (_, a, _) =>
-        {
-            System.Threading.Monitor.Enter(M(a[0]));
-            return a[0];
-        });
-        Add("__exit__", (_, a, _) =>
-        {
-            System.Threading.Monitor.Exit(M(a[0]));
-            return false;
-        });
+        Add("__enter__", (_, a, _) => { AcquireReentrant(C(a[0]).Lock); return a[0]; });
+        Add("__exit__", (_, a, _) => { ReleaseReentrant(C(a[0]).Lock); return false; });
         return cls;
     }
 

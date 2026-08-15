@@ -237,10 +237,10 @@ left open (not blocking "done"):
 `except*` syntax (PEP 654 exception groups), a nested-import `locals()`/`globals()` scoping edge
 case, hot-reload-on-file-change for `asgi_server.py` (a dev-only convenience).
 
-### Scenario 3 — SQL access 🟡
+### Scenario 3 — SQL access ✅
 
 Full blow-by-blow lives in [SQL_PLAN.md](SQL_PLAN.md) — this entry is kept in sync at each
-checkpoint but the plan doc is the live source of truth while 3b is in progress.
+checkpoint.
 
 - **3a — `sqlite3` DB-API ✅.** [Sqlite3Module.cs](src/PySharpLib/Modules/Sqlite3Module.cs) —
   `connect`/`Connection`/`Cursor`, `execute`/`executemany`/`executescript`, `fetchone`/`fetchmany`/
@@ -249,8 +249,16 @@ checkpoint but the plan doc is the live source of truth while 3b is in progress.
   by `Microsoft.Data.Sqlite`, added directly to `PySharpLib.csproj`. Verified live via
   [samples/sqlite_demo.py](samples/sqlite_demo.py); 13 tests in
   [Sqlite3Tests.cs](src/PySharp.Tests/M6_Stdlib/Sqlite3Tests.cs).
-- **3b — Postgres ⚪.** Same DB-API shape backed by `Npgsql`. Blocked: no Postgres server reachable
-  in this dev environment (checked 2026-08-10 — see SQL_PLAN.md).
+- **3b — Postgres ✅.** [Psycopg2Module.cs](src/PySharpLib/Modules/Psycopg2Module.cs), registered as
+  `psycopg2` — same DB-API shape, backed by `Npgsql`. Unblocked 2026-08-15 (a real Azure Database
+  for PostgreSQL instance); real `%s`→`$N` placeholder rewriting, psycopg2's own autocommit=False
+  transaction model (Postgres has fully transactional DDL, unlike sqlite3's DDL-vs-DML heuristic), a
+  faithful always-`0` `.lastrowid` (real psycopg2 never implements it — `RETURNING` + `fetchone()`
+  is the real idiom), and a real SQLSTATE-class-based exception mapping. Verified live via
+  [samples/postgres_demo.py](samples/postgres_demo.py); 9 tests (skippable, credential-gated) in
+  [Psycopg2Tests.cs](src/PySharp.Tests/M6_Stdlib/Psycopg2Tests.cs). See SQL_PLAN.md Phase 2 for the
+  full list of real gaps found and fixed (verified along the way against real psycopg2 itself, not
+  just the driver).
 - **3c — SQL Server ✅.** [PyodbcModule.cs](src/PySharpLib/Modules/PyodbcModule.cs), registered as
   `pyodbc` — `connect`/`Connection`/`Cursor`, real `pyodbc.Row` (tuple-*and*-attribute access),
   pyodbc's own autocommit=False transaction model (deliberately different from sqlite3's DDL-vs-DML
@@ -451,8 +459,17 @@ semantics, PEP 487 `__init_subclass__`, the general descriptor protocol (includi
 themselves, `func.__get__`), real name mangling, metaclass `__init__` dispatch and metaclass-level
 operator overloading, `instance.__dict__ = ...` whole-namespace replacement, and a real `abc.ABCMeta`
 base for the `type` pseudo-class hierarchy. Verified live via
-[src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/). A pure-Python Postgres dialect (`pg8000`) is
-the natural next step, mirroring Scenario 3's sqlite3/Postgres/SQL Server split — not yet attempted.
+[src/PySharp.Tests/M22_Orm](src/PySharp.Tests/M22_Orm/). **Postgres 🟡**: driven against a real Azure
+Database for PostgreSQL instance via SQLAlchemy's `postgresql+psycopg2://` dialect (reusing this
+project's own real `psycopg2` shim, Scenario 3's 3b) — connection, real DDL (`create_all`/`drop_all`,
+including a real `has_table()` round trip), and `session.add()`/`.commit()` reaching real INSERT SQL
+compilation all verified live; one deep wall remains inside SQLAlchemy 2.0's own `insertmanyvalues`
+sentinel/batch-size machinery (a `ZeroDivisionError`, not yet root-caused). The originally-planned
+pure-Python `pg8000` dialect was tried first and abandoned — it needs a real module system unification
+(constructing a native module object from Python-level `types.ModuleType(...)`) this interpreter
+doesn't have yet. See ORM_PLAN.md Phase 3 for the full list of real gaps found and fixed getting this
+far (including a genuine concurrency bug in `threading.Condition` and a general zero-arg `super()`
+fix).
 
 ### Cross-cutting — Native libraries 🟡
 

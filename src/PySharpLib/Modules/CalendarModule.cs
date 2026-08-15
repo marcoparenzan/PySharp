@@ -23,6 +23,19 @@ public static class CalendarModule
             var utc = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
             return (BigInteger)(long)(utc - DateTimeOffset.UnixEpoch.UtcDateTime).TotalSeconds;
         });
+        // Real CPython `monthrange(year, month) -> (weekday_of_first_day, number_of_days)`:
+        // weekday is Monday=0..Sunday=6, matching `date.weekday()`'s own convention. Found via real
+        // python-dateutil's own `parser/_parser.py` (`from calendar import monthrange`, used to
+        // clamp an end-of-month day-of-month value), reachable once installed as pg8000's own
+        // dependency (ORM_PLAN.md).
+        m.Dict["monthrange"] = new PyBuiltinFunction("monthrange", (_, a, _) =>
+        {
+            int year = (int)PyOps.AsBigInt(a[0], "year");
+            int month = (int)PyOps.AsBigInt(a[1], "month");
+            int firstWeekday = ((int)new DateTime(year, month, 1).DayOfWeek + 6) % 7;
+            int days = DateTime.DaysInMonth(year, month);
+            return new PyTuple(new object[] { new BigInteger(firstWeekday), new BigInteger(days) });
+        });
         return m;
     }
 }

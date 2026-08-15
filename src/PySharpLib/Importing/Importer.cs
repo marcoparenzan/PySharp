@@ -187,6 +187,30 @@ public sealed class Importer
                 return ExecuteFile(interp, absolute, moduleFile, isPackage: false);
         }
 
+        // 3. sys.meta_path finders (PEP 302's legacy find_module/load_module protocol) — a real,
+        // general fallback for a package that dynamically registers virtual submodules this way
+        // instead of backing them with real files (nothing here models the newer find_spec/
+        // exec_module protocol; nothing reachable so far needs it). Found via real `six`'s own
+        // `_SixMetaPathImporter` (`six.moves` and its submodules, e.g. `from six.moves import
+        // _thread`) — reachable once `pg8000`'s own `python-dateutil` dependency imports `six`
+        // (ORM_PLAN.md).
+        if (Modules.TryGet("sys", out var sysMod) && sysMod is PyModule sysModule
+            && sysModule.Dict.TryGet("meta_path", out var mp) && mp is PyList metaPath)
+        {
+            foreach (var finder in metaPath.Items)
+            {
+                if (!interp.TryCallMethod(finder, "find_module", new object[] { absolute, PyNone.Instance }, out var loader)
+                    || loader is PyNone or false)
+                    continue;
+                if (interp.CallMethod(loader, "load_module", new object[] { absolute }) is PyModule loadedModule)
+                {
+                    lock (_lock)
+                        Modules[absolute] = loadedModule;
+                    return loadedModule;
+                }
+            }
+        }
+
         throw PyErr.ModuleNotFoundError($"No module named '{absolute}'");
     }
 

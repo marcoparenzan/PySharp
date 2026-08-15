@@ -432,11 +432,29 @@ public static class MiscModules
         var d = m.Dict;
         foreach (var name in new[]
         {
-            "TracebackType", "FunctionType", "ModuleType", "GeneratorType",
+            "TracebackType", "FunctionType", "GeneratorType",
             "MethodType", "BuiltinFunctionType", "LambdaType", "CodeType",
             "FrameType", "CellType", "CoroutineType", "AsyncGeneratorType", "MappingProxyType",
         })
             d[name] = new PyClass(name, new List<PyClass>());
+        // Real CPython `types.ModuleType(name, doc=None)`: a genuine constructor (not a blank
+        // marker like the other types above) — sets `__name__`/`__doc__` on the instance. Found via
+        // real `six`'s own `_SixMetaPathImporter` helper classes (`class Module_six_moves_urllib
+        // (types.ModuleType): ...`, instantiated directly as `Module_six_moves_urllib(__name__ +
+        // ".moves.urllib")` with no `__init__` of their own — real CPython's inherited real
+        // `ModuleType.__init__` is what actually accepts that name argument), reachable once
+        // installed as pg8000's own transitive dependency (ORM_PLAN.md).
+        var moduleTypeClass = new PyClass("ModuleType", new List<PyClass>());
+        moduleTypeClass.Dict["__init__"] = new PyBuiltinFunction("ModuleType.__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            inst.Dict["__name__"] = a.Length > 1 ? a[1] : PyNone.Instance;
+            inst.Dict["__doc__"] = a.Length > 2 ? a[2] : PyNone.Instance;
+            return PyNone.Instance;
+        });
+        moduleTypeClass.Dict["__repr__"] = new PyBuiltinFunction("ModuleType.__repr__", (_, a, _) =>
+            $"<module '{((PyInstance)a[0]).Dict["__name__"]}'>");
+        d["ModuleType"] = moduleTypeClass;
         d["UnionType"] = UnionTypeClass;
         d["NoneType"] = NoneTypeClass;
         // The real class behind List[int]/Dict[str, int]/etc. (see GenericAliasModule) — not a

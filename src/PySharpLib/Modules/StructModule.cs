@@ -48,7 +48,53 @@ public static class StructModule
         d["calcsize"] = new PyBuiltinFunction("calcsize", (_, a, _) =>
             new BigInteger(CalcSize((string)a[0], structError)));
 
+        // Real CPython `struct.Struct(fmt)`: a compiled-format object exposing the same pack/
+        // unpack/unpack_from behavior as the module-level functions, plus real `.format`/`.size`
+        // attributes — reuses the exact same Pack/Unpack/CalcSize helpers the module-level
+        // functions already use. Found via real `six`'s own top-level `struct.Struct(">B").pack`
+        // (`int2byte = struct.Struct(">B").pack`), reachable once installed as pg8000's own
+        // transitive dependency (ORM_PLAN.md).
+        d["Struct"] = BuildStructClass(structError);
+
         return m;
+    }
+
+    private static PyClass BuildStructClass(PyClass structError)
+    {
+        var cls = new PyClass("Struct", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"Struct.{name}", fn);
+
+        Add("__init__", (_, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            string fmt = (string)a[1];
+            inst.Dict["format"] = fmt;
+            inst.Dict["size"] = new BigInteger(CalcSize(fmt, structError));
+            return PyNone.Instance;
+        });
+        Add("pack", (interp, a, _) =>
+            new PyBytes(Pack(interp, (string)((PyInstance)a[0]).Dict["format"], a.Skip(1).ToArray(), structError)));
+        Add("unpack", (interp, a, _) =>
+        {
+            string fmt = (string)((PyInstance)a[0]).Dict["format"];
+            var data = ToBytes(a[1]);
+            int size = CalcSize(fmt, structError);
+            if (data.Length != size)
+                throw new PyRaise(PyErr.MakeInstance(structError, $"unpack requires a buffer of {size} bytes"));
+            return new PyTuple(Unpack(fmt, data, structError).ToArray());
+        });
+        Add("unpack_from", (interp, a, _) =>
+        {
+            string fmt = (string)((PyInstance)a[0]).Dict["format"];
+            var data = ToBytes(a[1]);
+            int offset = a.Length > 2 ? (int)PyOps.AsBigInt(a[2], "offset") : 0;
+            int size = CalcSize(fmt, structError);
+            if (offset + size > data.Length)
+                throw new PyRaise(PyErr.MakeInstance(structError, "unpack_from requires a larger buffer"));
+            return new PyTuple(Unpack(fmt, data[offset..(offset + size)], structError).ToArray());
+        });
+
+        return cls;
     }
 
     private static byte[] ToBytes(object o) => o switch

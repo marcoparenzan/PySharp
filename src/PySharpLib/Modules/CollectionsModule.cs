@@ -133,6 +133,17 @@ public static class CollectionsModule
                 Q(a[0]).AddLast(x);
             return PyNone.Instance;
         });
+        // Real CPython deque.extendleft(iterable): appends each element to the *left* end, one at a
+        // time — the resulting order at the front is the reverse of `iterable` (found via real
+        // sqlalchemy's own `sql/compiler.py` `Linting.lint()`, prepending an edges deque; reachable
+        // once installed as the SQLAlchemy Postgres dialect, ORM_PLAN.md).
+        Add("extendleft", (interp, a, _) =>
+        {
+            var q = Q(a[0]);
+            foreach (var x in PyOps.Iterate(interp, a[1]))
+                q.AddFirst(x);
+            return PyNone.Instance;
+        });
         Add("remove", (interp, a, _) =>
         {
             var q = Q(a[0]);

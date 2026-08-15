@@ -139,7 +139,94 @@ public static class FunctoolsModule
             return keyClass;
         });
 
+        // Real CPython `functools.singledispatch`: a generic function that dispatches on the
+        // runtime type of its first argument. `.register` supports all three real forms —
+        // `@f.register(SomeType)` (explicit type, returns a decorator), `@f.register` bare (reads
+        // the wrapped function's own first-parameter type annotation, a bare `None` annotation
+        // meaning NoneType per real `typing.get_type_hints`'s own conversion), and the direct
+        // `f.register(SomeType, impl)` two-arg form. Found via real pg8000's own `converters.py`
+        // (`@singledispatch def array_out(val): ...` + several `@array_out.register`-decorated
+        // per-type implementations, including two stacked `.register(bytes)`/`.register(bytearray)`
+        // decorators on the same function) — reachable once installed as the pure-Python SQLAlchemy
+        // Postgres dialect driver (ORM_PLAN.md).
+        d["singledispatch"] = new PyBuiltinFunction("singledispatch", (interp, a, _) =>
+        {
+            var dispatcher = new PyInstance(SingleDispatchClass);
+            dispatcher.Dict["__default__"] = a[0];
+            dispatcher.Dict["__registry__"] = new List<(object TypeKey, object Impl)>();
+            UpdateWrapper(dispatcher, a[0]);
+            return dispatcher;
+        });
+
         return m;
+    }
+
+    private static readonly PyClass SingleDispatchClass = BuildSingleDispatchClass();
+
+    private static PyClass BuildSingleDispatchClass()
+    {
+        var cls = new PyClass("singledispatch_function", new List<PyClass>());
+        void Add(string name, BuiltinFn fn) => cls.Dict[name] = new PyBuiltinFunction($"singledispatch.{name}", fn);
+
+        Add("__call__", (interp, a, kwargs) =>
+        {
+            var self = (PyInstance)a[0];
+            var callArgs = a.Skip(1).ToArray();
+            if (callArgs.Length == 0)
+                throw PyErr.TypeError("singledispatch function requires at least 1 positional argument");
+            var registry = (List<(object TypeKey, object Impl)>)self.Dict["__registry__"];
+            object impl = self.Dict["__default__"];
+            // Real CPython walks the runtime type's full MRO to find the most specific registered
+            // implementation; this practical subset checks registrations in registration order and
+            // takes the first `isinstance`-style match, which is exact for every real caller found
+            // so far (each argument matches at most one of a set of unrelated concrete types, e.g.
+            // pg8000's own list/tuple/None/dict/bytes/bytearray/str dispatch — no diamond
+            // inheritance between the registered types themselves).
+            foreach (var (typeKey, candidateImpl) in registry)
+            {
+                if (Builtins.BuiltinsFactory.IsInstance(callArgs[0], typeKey))
+                {
+                    impl = candidateImpl;
+                    break;
+                }
+            }
+            return interp.Call(impl, callArgs, kwargs);
+        });
+
+        Add("register", (interp, a, _) =>
+        {
+            var self = (PyInstance)a[0];
+            var registry = (List<(object TypeKey, object Impl)>)self.Dict["__registry__"];
+            // Direct two-arg form: register(cls, func).
+            if (a.Length >= 3)
+            {
+                registry.Add((a[1], a[2]));
+                return a[2];
+            }
+            // Bare decorator form (`@f.register`, no call): the argument is the function itself —
+            // infer the dispatch type from its own first parameter's annotation.
+            if (a[1] is PyFunction bareFn)
+            {
+                var firstParam = bareFn.Params.Positional.FirstOrDefault();
+                if (firstParam?.Annotation is null)
+                    throw PyErr.TypeError(
+                        $"Invalid first argument to `register()`: {bareFn.Name}. Use either `@register(some_class)` or plain `@register` on an annotated function.");
+                object annValue = interp.Eval(firstParam.Annotation, bareFn.Closure);
+                object typeKey = annValue is PyNone ? MiscModules.NoneTypeClass : annValue;
+                registry.Add((typeKey, bareFn));
+                return bareFn;
+            }
+            // Explicit-type decorator form (`@f.register(SomeType)`): return a decorator that
+            // registers whatever function it's applied to next.
+            object explicitTypeKey = a[1];
+            return new PyBuiltinFunction("singledispatch.register_impl", (_, b, _) =>
+            {
+                registry.Add((explicitTypeKey, b[0]));
+                return b[0];
+            });
+        });
+
+        return cls;
     }
 
     /// <summary>Real CPython `functools.update_wrapper`: copies `__module__`/`__name__`/

@@ -17,7 +17,15 @@ public static class StdlibModules
         {
             // stub: the future features are already the default behavior
             var m = new Runtime.PyModule("__future__");
-            foreach (var feature in new[] { "annotations", "generator_stop", "division", "print_function" })
+            // Real CPython's full `__future__` feature list (all already the default behavior here,
+            // so every name is just a real, importable marker object). `unicode_literals` found via
+            // real python-dateutil's own `parser/_parser.py` (`from __future__ import
+            // unicode_literals`), reachable once installed as pg8000's own dependency (ORM_PLAN.md).
+            foreach (var feature in new[]
+            {
+                "nested_scopes", "generators", "division", "absolute_import", "with_statement",
+                "print_function", "unicode_literals", "generator_stop", "annotations", "barry_as_FLUFL",
+            })
                 m.Dict[feature] = new Runtime.PyClass(feature, new List<PyClass>());
             return m;
         });
@@ -120,6 +128,9 @@ public static class StdlibModules
         importer.RegisterBuiltin("sqlite3.dbapi2",
             interp => interp.ImportHook!(interp, "sqlite3", 0, interp.BuiltinsModule));
         importer.RegisterBuiltin("pyodbc", _ => PyodbcModule.Create());
+        importer.RegisterBuiltin("psycopg2", _ => Psycopg2Module.Create());
+        importer.RegisterBuiltin("psycopg2.extensions", _ => Psycopg2Module.CreateExtensions());
+        importer.RegisterBuiltin("psycopg2.extras", _ => Psycopg2Module.CreateExtras());
         importer.RegisterBuiltin("random", _ => RandomModule.Create());
         importer.RegisterBuiltin("ast", _ => AstModule.Create());
         importer.RegisterBuiltin("numbers", _ => NumbersModule.Create());

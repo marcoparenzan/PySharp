@@ -768,9 +768,13 @@ public static class StrModules
                     throw PyErr.ValueError("incomplete format key");
                 string key = fmt[(i + 1)..close];
                 i = close + 1;
-                if (dict is null)
+                // Real CPython: a `%(name)s`-shaped placeholder accepts any mapping-*protocol*
+                // right-hand side (anything supporting `__getitem__`), not just a literal dict —
+                // found via real sqlalchemy's own `sql/cache_key.py` `self.key % anon_map`, where
+                // `anon_map` is a custom class with its own `__getitem__`, not a `dict`.
+                if (right is PyTuple)
                     throw PyErr.TypeError("format requires a mapping");
-                value = dict[key];
+                value = dict is not null ? dict[key] : interp.GetItem(right, key);
             }
             else
             {

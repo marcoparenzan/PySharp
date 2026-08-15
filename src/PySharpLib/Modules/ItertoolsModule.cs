@@ -21,6 +21,23 @@ public static class ItertoolsModule
         d["chain"] = new PyBuiltinFunction("chain", (interp, a, _) =>
             new PyIterator(a.SelectMany(x => PyOps.Iterate(interp, x)).GetEnumerator()));
 
+        // Real CPython itertools.product(*iterables, repeat=1): the cartesian product, as if from
+        // nested for-loops (materialized eagerly here rather than lazily — nothing reachable so far
+        // needs a huge/infinite product). Found via real sqlalchemy's own `sql/compiler.py`
+        // `visit_join`'s `itertools.product(...)` (pairing every "from" object on each side of a
+        // JOIN for lint-edge tracking), reachable once installed as the SQLAlchemy Postgres dialect
+        // (ORM_PLAN.md).
+        d["product"] = new PyBuiltinFunction("product", (interp, a, kwargs) =>
+        {
+            int repeat = kwargs is not null && kwargs.TryGetValue("repeat", out var r)
+                ? (int)PyOps.AsBigInt(r, "repeat") : 1;
+            var pools = new List<List<object>>();
+            for (int i = 0; i < repeat; i++)
+                foreach (var arg in a)
+                    pools.Add(PyOps.Iterate(interp, arg).ToList());
+            return new PyIterator(CartesianProduct(pools).GetEnumerator());
+        });
+
         d["islice"] = new PyBuiltinFunction("islice", (interp, a, _) =>
         {
             var src = PyOps.Iterate(interp, a[0]);
@@ -196,5 +213,20 @@ public static class ItertoolsModule
                 yield break;
             yield return new PyTuple(row);
         }
+    }
+
+    private static IEnumerable<object> CartesianProduct(List<List<object>> pools)
+    {
+        var result = new List<List<object>> { new() };
+        foreach (var pool in pools)
+        {
+            var next = new List<List<object>>();
+            foreach (var x in result)
+                foreach (var y in pool)
+                    next.Add(new List<object>(x) { y });
+            result = next;
+        }
+        foreach (var prod in result)
+            yield return new PyTuple(prod.ToArray());
     }
 }

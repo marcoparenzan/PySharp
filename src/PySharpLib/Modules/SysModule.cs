@@ -36,6 +36,15 @@ public static class SysModule
         var sysPath = new PyList(importer.SearchPaths.Select(p => (object)p));
         importer.PythonSysPath = sysPath;
         d["path"] = sysPath;
+        // Real CPython `sys.meta_path`: a real, mutable list of "meta path finder" objects
+        // `__import__` consults before falling back to `sys.path_hooks`/path-based finders.
+        // PySharp's own `Importer` doesn't implement (or need) the meta-path-finder protocol — real
+        // scripts here have never registered one — so an always-empty real list is enough to
+        // support code that inspects/iterates it defensively. Found via real `six`'s own
+        // module-level cleanup code (`if sys.meta_path: for i, importer in enumerate(sys.meta_path):
+        // ...`, removing any other six meta-path importer left behind by a previous reload),
+        // reachable once installed as pg8000's own transitive dependency (ORM_PLAN.md).
+        d["meta_path"] = new PyList(Array.Empty<object>());
         d["byteorder"] = BitConverter.IsLittleEndian ? "little" : "big";
 
         d["exit"] = new PyBuiltinFunction("exit", (_, args, _) =>
