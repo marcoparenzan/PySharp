@@ -153,8 +153,37 @@ public static class ClrMarshal
     {
         PyNone => null,
         ClrObject co => co.Instance,
-        BigInteger bi => bi >= long.MinValue && bi <= long.MaxValue ? (long)bi : bi,
+        // Real, general C# gotcha found live (the same class of bug as a mixed-type switch
+        // *expression*, but here via a ternary conditional): `long` has an implicit conversion *to*
+        // `BigInteger`, so a bare `cond ? (long)bi : bi` ternary's inferred common type is
+        // `BigInteger` for *both* branches — the "fits in long" conversion silently never took
+        // effect, and every caller got a raw boxed `BigInteger` back regardless. Confirmed live via
+        // a real ASP.NET Core host (`samples/AspNetPySharpHost`) serializing a Python plugin's
+        // return value to JSON: a `len(...)` result serialized as `{"isPowerOfTwo":false,...}` —
+        // `System.Text.Json`'s reflection-based fallback for an unrecognized struct — instead of a
+        // plain JSON number. Each branch is cast to `(object)` explicitly so no such widening
+        // happens; the value that gets boxed is each branch's own real type.
+        BigInteger bi => bi >= long.MinValue && bi <= long.MaxValue ? (object)(long)bi : bi,
         _ => pyValue, // bool, double, string pass through as their .NET selves
+    };
+
+    /// <summary>Recursively converts a Python value (typically a function's return value) into a
+    /// plain, JSON-serializable .NET object graph: `dict`/`list`/`tuple`/`set` become `Dictionary
+    /// &lt;string, object?&gt;`/`List&lt;object?&gt;` (recursively converting their own contents too),
+    /// `None` becomes `null`, `bool`/`str`/`double` pass through, and `int` becomes a `long` when it
+    /// fits (falling back to `BigInteger`, matching `Unwrap`'s own choice, for values real .NET
+    /// integer types can't hold). Unlike `Unwrap` (a single-level, boxing-only conversion for a value
+    /// already known to be a scalar), this is for a host that doesn't know its shape ahead of time —
+    /// the common case when a real embedding host (e.g. an ASP.NET Core handler) calls into a Python
+    /// plugin function and needs to serialize whatever structured value it returns.</summary>
+    public static object? ToPlainObject(object pyValue) => pyValue switch
+    {
+        PyDict d => d.Entries.ToDictionary(e => Convert.ToString(ToPlainObject(e.Key))!, e => ToPlainObject(e.Value)),
+        PyList l => l.Items.Select(ToPlainObject).ToList(),
+        PyTuple t => t.Items.Select(ToPlainObject).ToList(),
+        PySet s => s.Items.Select(ToPlainObject).ToList(),
+        PyFrozenSet s => s.Items.Select(ToPlainObject).ToList(),
+        _ => Unwrap(pyValue),
     };
 
     private static bool TryConvertNumber(BigInteger value, Type target, out object? result)

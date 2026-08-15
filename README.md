@@ -494,6 +494,11 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   has fully transactional DDL), and the PEP 249 exception hierarchy, verified live against a real
   Azure Database for PostgreSQL instance. See [SQL_PLAN.md](SQL_PLAN.md) Phase 2 and ROADMAP.md
   scenario 3.
+- **ASP.NET Core hosting PySharp**: the reverse direction — a real ASP.NET Core (Kestrel) host
+  embedding PySharp as a .NET library, with real C# minimal-API endpoints calling into real Python
+  plugin `.py` files (cached as `PyModule`s, hot-reloadable without restarting the host). See
+  [samples/AspNetPySharpHost](samples/AspNetPySharpHost/), [ASPNET_HOSTING_PLAN.md](ASPNET_HOSTING_PLAN.md)
+  and ROADMAP.md scenario 11.
 
 ### Does not work (yet)
 

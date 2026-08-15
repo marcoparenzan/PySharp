@@ -309,6 +309,38 @@ arm to `(object)` explicitly.
 
 ---
 
+## ASP.NET Core hosting PySharp (scenario 11) — 2026-08-15
+
+The reverse direction from every other scenario: not PySharp running Python code that implements a
+server, but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into
+real Python plugin `.py` files from real C# minimal-API request handlers —
+[samples/AspNetPySharpHost](samples/AspNetPySharpHost/). A small `PythonPluginHost` loads/caches each
+plugin as a real `PyModule` and calls a named function directly per request; a `reload` endpoint drops
+the cache entry, proving real hot-reload (edit the `.py` file, no host restart, no C# recompile) — two
+plugins (string formatting/`datetime`, and a tiered-discount pricing rule) demonstrate real business
+logic living outside the compiled binary.
+
+Two more real, general bugs found along the way, neither ASP.NET-specific: `ClrMarshal.Unwrap` had the
+exact same footgun as the ctypes callback bug above, but via a ternary this time — `bi >= long.MinValue
+&& bi <= long.MaxValue ? (long)bi : bi` widened both arms to `BigInteger` (since `long` converts
+implicitly *to* `BigInteger`), so the "fits in long" branch silently never took effect; confirmed live
+as a plugin's `len(...)` result reflection-serializing as `{"isPowerOfTwo":false,...}` instead of a
+plain JSON number, fixed with an explicit `(object)` cast on each arm. Also added
+`ClrMarshal.ToPlainObject`, a new general embedding capability: recursively converts an arbitrary
+Python return value (`dict`/`list`/`tuple`/`set`, nested) into a plain, JSON-serializable .NET object
+graph — needed by any host that calls into Python without knowing the return shape ahead of time, not
+just this one.
+
+Verified live via `WebApplicationFactory`'s real in-process HTTP pipeline — 6 tests, deliberately
+isolated into their own test project/assembly
+([src/PySharp.Tests.AspNetHosting](src/PySharp.Tests.AspNetHosting/)) rather than living in
+`PySharp.Tests`, after `WebApplicationFactory`'s own thread-pool needs were found to intermittently
+hang the whole run when sharing a process with `PySharp.Tests`' 1300+ tests (many of which dedicate a
+real foreground OS thread per in-flight generator/coroutine). Full write-up in
+ASPNET_HOSTING_PLAN.md.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

@@ -47,7 +47,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 8 | **File system API** | [samples/filesystem_demo.py](samples/filesystem_demo.py) | ✅ **Done** | new C# **`glob`**/**`shutil`** modules; `os`/`os.path` fspath (`__fspath__`) coercion for every path-taking function; `pathlib.Path.glob`/`rglob`/`iterdir`/`relative_to`/ordering — see FILESYSTEM_PLAN.md |
 | 9 | **JSON + YAML (de)serialization** | [config_yaml.py](samples/config_yaml.py) | ✅ **Done** | new C# **`yaml`** module (safe_load/safe_dump, PyYAML subset); `json` already present |
 | 10 | **Django** | _to be created_ | ⚪ Planned | a real, unmodified Django app (Django itself is pure Python — no C extensions in its core, unlike pydantic-core/numpy). Much heavier than scenario 2's FastAPI: WSGI (Django's default; ASGI is opt-in), the ORM (real SQL generation + migrations, heavy metaclass use on `Model`), the template engine, `django.contrib.admin`, class-based views, forms/sessions, `django-admin` management commands, the `settings.py` module-level config pattern |
-| 11 | **ASP.NET Core hosting PySharp** | _to be created_ | ⚪ Planned | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into Python scripts/plugins from C# request handlers — Python as a scripting/plugin layer inside a real production .NET service. Ties directly into the standing TODO ("Extract PySharpLib as a standalone NuGet library") |
+| 11 | **ASP.NET Core hosting PySharp** | [samples/AspNetPySharpHost](samples/AspNetPySharpHost/) | ✅ **Done** | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into real Python plugin scripts from real C# minimal-API request handlers — see ASPNET_HOSTING_PLAN.md |
 | 12 | **Array computing** (numpy shim) | [samples/numpy_demo.py](samples/numpy_demo.py) | ✅ **Done** | a real C# **`numpy`**-shaped shim (not real numpy — a compiled CPython C extension a from-scratch interpreter can't load): `float64`/`int64`/`bool` dtypes with real arithmetic promotion, construction, indexing/slicing as real strided views (Phase 12.1), broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`, `trace`/`diagonal`), `np.random`, a two-way .NET array interop bridge — see NUMPY_PLAN.md's full 12-phase plan |
 | T | **Native libraries** (cross-cutting) | _per-case_ | ✅ **Done** | `ctypes` supports scalars, strings, real `Structure`/`byref`/`POINTER`/buffers, and real `CFUNCTYPE`/`WINFUNCTYPE` callbacks (verified against real `kernel32` structs/output-pointer APIs and a real `user32!EnumWindows` callback — see CTYPES_PLAN.md); for very rich APIs a dedicated **C# wrapper/shim** is still the fallback |
 
@@ -426,6 +426,27 @@ YAML and JSON verifying the round-trip. `json` was already present; a **C# `yaml
 a **practical PyYAML subset**: block mapping/sequence with indentation, flow style (`[..]`/`{..}`),
 typed scalars, quoting, comments, the `---` marker. Out of scope for v1: block scalars `|`/`>`,
 anchors/aliases, explicit tags, multiple documents. Covered by [YamlTests.cs](src/PySharp.Tests/M6_Stdlib/YamlTests.cs).
+
+### Scenario 11 — ASP.NET Core hosting PySharp ✅
+
+The *reverse* direction from every other scenario: not PySharp running Python code that implements a
+web server, but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling
+into real Python plugin scripts from real C# minimal-API request handlers —
+[samples/AspNetPySharpHost](samples/AspNetPySharpHost/), a real minimal-API project with a small
+`PythonPluginHost` (loads/caches each `.py` plugin as a real `PyModule`, calls a named function
+directly, marshals the return value back to JSON) fronting two real plugins (string formatting +
+`datetime`, and a tiered-discount business rule) — the actual point being that plugin logic is
+editable by anyone who can edit a `.py` file, no C# recompile, with a real observable hot-reload
+endpoint proving it. Two real, general gaps found along the way, neither ASP.NET-specific: a
+`ClrMarshal.Unwrap` bug (a bare ternary silently widened a `long` conversion back to `BigInteger`,
+since `long` has an implicit conversion *to* `BigInteger` — the exact same class of bug as the
+ctypes callback work's own switch-expression footgun, but via a ternary this time), and a new
+`ClrMarshal.ToPlainObject` helper (recursively converts an arbitrary Python return value into a
+plain, JSON-serializable .NET object graph). Verified live via `WebApplicationFactory`'s real
+in-process HTTP pipeline — deliberately isolated into its own test project/assembly
+(`src/PySharp.Tests.AspNetHosting/`), not part of `PySharp.Tests`, after a real cross-suite
+thread-pool interaction was found to intermittently hang the whole run when sharing a process with
+`PySharp.Tests`' own 1300+ tests. See ASPNET_HOSTING_PLAN.md for the full write-up.
 
 ### Scenario 12 — Array computing (numpy shim) ✅
 
