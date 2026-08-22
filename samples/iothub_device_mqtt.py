@@ -12,7 +12,8 @@
 #   - device twin: GET, reported properties, desired properties (live patch)
 #
 # Config in config.json (see config.iothub_device_mqtt.json).
-# Usage:  pysharp run iothub_device_mqtt.py [config.json]
+# Prerequisite:  pysharp install paho-mqtt==2.1.0
+# Usage:         pysharp run iothub_device_mqtt.py [config.json]
 
 import base64
 import hashlib

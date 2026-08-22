@@ -19,6 +19,7 @@
 #   pysharp install certifi
 #   pysharp install idna
 #   pysharp install charset_normalizer
+#   pysharp install charset_normalizer
 #
 # Usage:  pysharp run samples/requests_demo.py
 

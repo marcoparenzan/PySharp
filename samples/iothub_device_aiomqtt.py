@@ -21,7 +21,11 @@
 # device twin GET/reported/desired), and earlier against test.mosquitto.org. See
 # AIOMQTT_PLAN.md Phase 6 at the repo root for the full history.
 #
-# Prerequisite:  pysharp install aiomqtt
+# Prerequisite:  pysharp install paho-mqtt==2.1.0   (aiomqtt's own runtime dependency — the
+#                mini-pip does not resolve transitive dependencies, so this must be installed
+#                separately or `import aiomqtt` fails with "ModuleNotFoundError: No module
+#                named 'paho'")
+#                pysharp install aiomqtt
 # Config in config.json (see config.iothub_device_mqtt.json — shared with the sync sample).
 # Usage:         pysharp run iothub_device_aiomqtt.py [config.json]
 
