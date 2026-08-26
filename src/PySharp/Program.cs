@@ -39,6 +39,12 @@ internal static class Host
     public static PyEngine CreateEngine()
     {
         var engine = new PyEngine();
+        // sqlite3/pyodbc/psycopg2 are opt-in companion assemblies (kept out of core PySharpLib so
+        // library embedders don't have to carry their DB driver dependencies) — the CLI tool wants
+        // all three available out of the box, so register them explicitly here.
+        PySharpLib.Sqlite3.Sqlite3Registration.Register(engine.Importer);
+        PySharpLib.Pyodbc.PyodbcRegistration.Register(engine.Importer);
+        PySharpLib.Psycopg2.Psycopg2Registration.Register(engine.Importer);
         string site = SitePackagesDir();
         if (Directory.Exists(site))
             engine.Importer.SearchPaths.Add(site);

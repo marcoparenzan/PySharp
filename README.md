@@ -230,6 +230,25 @@ dependencies). If you also want to install pure PyPI packages at runtime, add **
 
 Requirement: `net10.0`.
 
+**Database modules (`sqlite3`/`pyodbc`/`psycopg2`) are opt-in, separate packages** — `PySharpLib`
+itself carries no DB driver dependency, so referencing it alone does *not* make `import sqlite3` work.
+Reference whichever of `PySharpLib.Sqlite3` (→ `Microsoft.Data.Sqlite`), `PySharpLib.Pyodbc` (→
+`Microsoft.Data.SqlClient`), `PySharpLib.Psycopg2` (→ `Npgsql`) you actually need, then call that
+package's `*Registration.Register(engine.Importer)` once against your `PyEngine` instance:
+
+```csharp
+using PySharpLib;
+using PySharpLib.Sqlite3;
+
+var engine = new PyEngine();
+Sqlite3Registration.Register(engine.Importer);   // now `import sqlite3` works
+engine.Run("import sqlite3; print(sqlite3.connect(':memory:'))");
+```
+
+The `pysharp` CLI tool registers all three out of the box (`sqlite3`/`pyodbc`/`psycopg2` all work from
+`pysharp run`/`pysharp repl` with no extra setup) — this opt-in step only applies when embedding
+`PySharpLib` directly in your own app.
+
 ### 2. Run Python code
 
 ```csharp

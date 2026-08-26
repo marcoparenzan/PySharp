@@ -5,6 +5,7 @@
 
 using PySharp.Tests.M6_Stdlib;
 using PySharpLib;
+using PySharpLib.Psycopg2;
 
 namespace PySharp.Tests.M22_Orm;
 
@@ -47,6 +48,7 @@ public class OrmPostgresSmokeTests : IClassFixture<SqlAlchemyInstallFixture>, IC
 
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
+        Psycopg2Registration.Register(engine.Importer);
         engine.Importer.SearchPaths.Add(_sqlalchemy.SitePackages);
 
         engine.Run("""

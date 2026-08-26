@@ -341,6 +341,36 @@ ASPNET_HOSTING_PLAN.md.
 
 ---
 
+## v2.0.0 — split DB driver dependencies out of `PySharp.Interpreter` — 2026-08-26
+
+**Breaking change** for embedders: `PySharpLib`/`PySharp.Interpreter` no longer carries
+`Microsoft.Data.Sqlite`, `Microsoft.Data.SqlClient`, or `Npgsql` as dependencies, so referencing it
+alone no longer makes `import sqlite3`/`import pyodbc`/`import psycopg2` work. Each DB module moved
+into its own opt-in companion package — `PySharp.Sqlite3`, `PySharp.Pyodbc`, `PySharp.Psycopg2` — that
+an embedder references only if it actually needs that database, then wires in with one explicit call
+(`XyzRegistration.Register(engine.Importer)`) instead of getting it unconditionally for free. The
+`pysharp` CLI tool itself is unaffected — it now references all three companion packages and registers
+them at startup, so `pysharp run`/`pysharp repl` keep `sqlite3`/`pyodbc`/`psycopg2` working exactly as
+before.
+
+The problem: anyone embedding the interpreter just to run plain Python — no database at all — was
+forced to drag in three heavyweight ADO.NET driver packages (including native SQLite binaries) purely
+because three optional stdlib shims happened to live in the same assembly as the core interpreter.
+Since the three modules were already cleanly 1:1 with their driver package (no cross-use), splitting
+them out was a mechanical, low-risk move: each module's `.cs` file relocated to its own project
+unchanged, with a small `*Registration` class replacing what used to be an unconditional
+`StdlibModules.RegisterAll` entry. One real, general visibility gap found along the way:
+`Interp.GetPseudoBaseClass` (used by `psycopg2`'s int-subclass bind-parameter handling) was `internal`,
+which compiled fine when the module lived inside `PySharpLib` itself but broke once it moved to a
+separate assembly — widened to `public`, a harmless surface expansion (it's a read-only lookup of
+well-known builtin pseudo-base classes).
+
+All six published packages (`PySharp`, `PySharp.Interpreter`, `PySharp.Pip`, and the three new ones)
+bump to `2.0.0` together, keeping this project's existing convention of lockstep version numbers even
+though only `PySharp.Interpreter`'s own dependency contract actually changed.
+
+---
+
 ## Compatibility
 
 - **Runtime**: .NET 10 (`net10.0`).

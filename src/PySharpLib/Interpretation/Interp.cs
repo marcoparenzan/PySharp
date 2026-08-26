@@ -698,7 +698,7 @@ public sealed class Interp
     /// <summary>The same singleton "class base for a builtin type" pseudo-class `class Foo(int):`
     /// uses for `int`/`str`/etc. — shared (not internal-only) so issubclass()'s builtin-type-as-arg-1
     /// handling compares against the identical objects, not a lookalike copy.</summary>
-    internal static PyClass GetPseudoBaseClass(string name)
+    public static PyClass GetPseudoBaseClass(string name)
     {
         lock (PseudoBases)
         {

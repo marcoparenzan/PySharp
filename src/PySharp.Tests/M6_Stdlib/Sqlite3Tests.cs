@@ -3,6 +3,9 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib;
+using PySharpLib.Sqlite3;
+
 namespace PySharp.Tests.M6_Stdlib;
 
 /// <summary>sqlite3 module (scenario 3a): a real DB-API 2.0-shaped shim over Microsoft.Data.Sqlite
@@ -11,8 +14,16 @@ namespace PySharp.Tests.M6_Stdlib;
 /// (incl. sqlite3.Row), and the PEP 249 exception hierarchy. See SQL_PLAN.md.</summary>
 public class Sqlite3Tests
 {
+    // sqlite3 is an opt-in companion module (PySharp.Sqlite3), not part of core PySharpLib, so this
+    // builds its own engine instead of using the shared Py.Run helper.
     private static string Run(string body)
-        => Py.Run("import sqlite3\n" + body).TrimEnd('\n');
+    {
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        Sqlite3Registration.Register(engine.Importer);
+        engine.Run("import sqlite3\n" + body, "<test>");
+        return writer.ToString().TrimEnd('\n');
+    }
 
     [Fact]
     public void Qmark_and_named_placeholders_insert_and_read_back_real_rows()

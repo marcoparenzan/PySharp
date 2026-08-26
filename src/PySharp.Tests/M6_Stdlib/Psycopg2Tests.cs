@@ -3,6 +3,9 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib;
+using PySharpLib.Psycopg2;
+
 namespace PySharp.Tests.M6_Stdlib;
 
 /// <summary>psycopg2 module (SQL_PLAN.md Phase 2): a real DB-API 2.0-shaped shim over Npgsql (a
@@ -44,7 +47,13 @@ public class Psycopg2Tests : IClassFixture<PostgresLiveFixture>
             conn.commit()
             conn.close()
             """;
-        return Py.Run(preamble + body + epilogue).TrimEnd('\n');
+        // psycopg2 is an opt-in companion module (PySharp.Psycopg2), not part of core PySharpLib,
+        // so this builds its own engine instead of using the shared Py.Run helper.
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        Psycopg2Registration.Register(engine.Importer);
+        engine.Run(preamble + body + epilogue, "<test>");
+        return writer.ToString().TrimEnd('\n');
     }
 
     [SkippableFact]

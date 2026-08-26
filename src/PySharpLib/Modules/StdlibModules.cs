@@ -118,19 +118,10 @@ public static class StdlibModules
         importer.RegisterBuiltin("contextlib", _ => ContextlibModule.Create());
         importer.RegisterBuiltin("abc", _ => AbcModule.Create());
         importer.RegisterBuiltin("inspect", _ => InspectModule.Create());
-        importer.RegisterBuiltin("sqlite3", _ => Sqlite3Module.Create());
-        // Real CPython: `sqlite3.dbapi2` is a real submodule (historically the DB-API 2.0 compat
-        // module) re-exporting the exact same names as `sqlite3` itself — `from sqlite3 import
-        // dbapi2 as sqlite` is a common real idiom for code written against the DB-API 2.0 spec
-        // directly. Reusing the already-imported `sqlite3` module (not a second, independent
-        // instance) keeps names like `sqlite3.Error is sqlite3.dbapi2.Error` real CPython-consistent.
-        // Found via real sqlalchemy's own `dialects/sqlite/pysqlite.py` `import_dbapi`.
-        importer.RegisterBuiltin("sqlite3.dbapi2",
-            interp => interp.ImportHook!(interp, "sqlite3", 0, interp.BuiltinsModule));
-        importer.RegisterBuiltin("pyodbc", _ => PyodbcModule.Create());
-        importer.RegisterBuiltin("psycopg2", _ => Psycopg2Module.Create());
-        importer.RegisterBuiltin("psycopg2.extensions", _ => Psycopg2Module.CreateExtensions());
-        importer.RegisterBuiltin("psycopg2.extras", _ => Psycopg2Module.CreateExtras());
+        // sqlite3/pyodbc/psycopg2 are no longer registered here: they now live in opt-in companion
+        // assemblies (PySharp.Sqlite3/PySharp.Pyodbc/PySharp.Psycopg2) so this core library doesn't
+        // force every embedder to carry Microsoft.Data.Sqlite/SqlClient/Npgsql. Call each package's
+        // `*Registration.Register(importer)` explicitly if you need that database — see README.md.
         importer.RegisterBuiltin("random", _ => RandomModule.Create());
         importer.RegisterBuiltin("ast", _ => AstModule.Create());
         importer.RegisterBuiltin("numbers", _ => NumbersModule.Create());

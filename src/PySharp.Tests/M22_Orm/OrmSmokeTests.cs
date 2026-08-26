@@ -4,6 +4,7 @@
 // root for full license information.
 
 using PySharpLib;
+using PySharpLib.Sqlite3;
 
 namespace PySharp.Tests.M22_Orm;
 
@@ -43,6 +44,7 @@ public class OrmSmokeTests : IClassFixture<SqlAlchemyInstallFixture>
     {
         var writer = new StringWriter();
         var engine = new PyEngine(writer);
+        Sqlite3Registration.Register(engine.Importer);
         engine.Importer.SearchPaths.Add(_fixture.SitePackages);
 
         engine.Run("""

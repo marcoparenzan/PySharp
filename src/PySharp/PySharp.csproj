@@ -3,6 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
     <ProjectReference Include="..\PipSharpLib\PipSharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Sqlite3\PySharpLib.Sqlite3.csproj" />
+    <ProjectReference Include="..\PySharpLib.Pyodbc\PySharpLib.Pyodbc.csproj" />
+    <ProjectReference Include="..\PySharpLib.Psycopg2\PySharpLib.Psycopg2.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,8 +22,19 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pysharp</ToolCommandName>
     <PackageId>PySharp</PackageId>
-    <Version>1.6.0</Version>
+    <Version>2.0.0</Version>
+    <Authors>Marco Parenzan</Authors>
     <Description>PySharp — interprete Python 3.x scritto in C#, come strumento da riga di comando.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;interpreter;cli;dotnet-tool</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

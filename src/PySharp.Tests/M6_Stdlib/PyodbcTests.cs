@@ -3,6 +3,9 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using PySharpLib;
+using PySharpLib.Pyodbc;
+
 namespace PySharp.Tests.M6_Stdlib;
 
 /// <summary>pyodbc module (scenario 3c): a real DB-API 2.0-shaped shim over
@@ -34,7 +37,13 @@ public class PyodbcTests : IClassFixture<SqlServerLocalDbFixture>
             conn.execute("DROP TABLE {table}")
             conn.close()
             """;
-        return Py.Run(preamble + body + epilogue).TrimEnd('\n');
+        // pyodbc is an opt-in companion module (PySharp.Pyodbc), not part of core PySharpLib, so
+        // this builds its own engine instead of using the shared Py.Run helper.
+        var writer = new StringWriter();
+        var engine = new PyEngine(writer);
+        PyodbcRegistration.Register(engine.Importer);
+        engine.Run(preamble + body + epilogue, "<test>");
+        return writer.ToString().TrimEnd('\n');
     }
 
     [SkippableFact]
