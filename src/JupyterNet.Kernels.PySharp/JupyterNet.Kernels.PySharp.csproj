@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>JupyterNet.Kernels.PySharp</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>A JupyterNet kernel plugin that runs Python cells on this repo's own PyEngine, with session state shared across cells.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The plugin contract, resolved from D:\Dev\NuGetLocalFeed (already a source in the
+         machine's NuGet.Config) — JupyterNet.Host loads this project's published output as a
+         plugin, matching its own copy of this package by identity so `is IKernelPlugin` works;
+         see JupyterNet's KernelPluginLoader for why. -->
+    <PackageReference Include="JupyterNet.Kernels.Abstractions" Version="0.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+  </ItemGroup>
+
+</Project>
