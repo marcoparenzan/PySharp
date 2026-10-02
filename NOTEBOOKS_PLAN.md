@@ -183,14 +183,19 @@ binding passed them.
 - `inv`/`solve` rounding noise (e.g. `inv(a) @ a` off-diagonals) differs from OpenBLAS (FMA, blocking).
 - `argsort` is stable (numpy's quicksort is not, only ties can differ); `float32` `exp/sin/...` ulp-level.
 
-### Phase 3 — Image output in JupyterNet
-- [ ] `IKernelOutputSink.WriteImage(string mime, byte[] data)` (abstractions + protocol message +
-      host `OutputSinks`)
-- [ ] VS Code extension: map to `NotebookCellOutputItem(data, 'image/png')`; persists in `.ipynb`
-      as base64 `image/png` like Jupyter
-- [ ] `PySharpKernel`: inject a `display_image(mime, bytes)` callback; honor `_repr_png_` /
-      `_repr_html_` on a cell's last expression
-- [ ] C# kernel `Display.Image(...)` for parity; tests on the host protocol round-trip
+### Phase 3 — Image output in JupyterNet  ✅ (2026-10-02, JupyterNet repo: not committed yet)
+- [x] `IKernelOutputSink.WriteImage(mime, bytes)` with a default implementation (inline `<img>` data-URI via
+      `WriteHtml`) so old sinks/plugins keep working; `HostEvent.OutputBinary` (`"encoding": "base64"`);
+      host `NdjsonOutputSink`, engine wrappers, CLI sink all forward real binary output
+- [x] VS Code extension: base64 output → `NotebookCellOutputItem(bytes, 'image/png')` (VS Code renders it
+      natively, no custom renderer); `.ipynb` round-trips images as nbformat base64 (`isBinaryMime`)
+- [x] `PySharpKernel`: `display_image(data, mime="image/png")` injected per cell; C# kernel `Display.Image(...)`
+- [x] JupyterNet packages 0.1.0 → 0.2.0 (packed to the local feed), `JupyterNet.Kernels.PySharp` now references
+      Abstractions 0.2.0; 3 new JupyterNet tests (29 total) + an end-to-end CLI run of a PySharp cell that
+      builds a PNG with `zlib`/`struct` and shows it (new: `zlib.crc32/adler32`)
+- [ ] not done yet: honoring `_repr_png_`/`_repr_html_` on a cell's last expression (matplotlib's `plt.show()` will
+      call `display_image` directly in Phase 5, so it is not needed for the notebooks); a real VS Code smoke test
+      of the rebuilt `.vsix` (needs the editor; the extension compiles with `tsc`)
 
 ### Phase 4 — `NDSharp.Image` + `PySharp.Cv2`, first slice
 - [ ] Codecs (D2): `imread` (BGR uint8, `IMREAD_GRAYSCALE/COLOR`), `imwrite`, `imencode`/`imdecode`

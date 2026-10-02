@@ -40,6 +40,33 @@ public static class ZlibModule
             return new PyBytes(output.ToArray());
         });
 
+        // crc32/adler32 (found via PNG writing: every chunk carries a CRC-32). Both take an optional
+        // running value so a checksum can be continued across chunks, like the real functions.
+        m.Dict["crc32"] = new PyBuiltinFunction("crc32", (_, a, _) =>
+        {
+            byte[] data = CryptoModules.AsBytes(a[0]);
+            uint crc = ~(a.Length > 1 ? (uint)(PyOps.AsBigInt(a[1], "value") & 0xFFFFFFFF) : 0u);
+            foreach (byte b in data)
+            {
+                crc ^= b;
+                for (int k = 0; k < 8; k++)
+                    crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+            }
+            return new BigInteger(~crc);
+        });
+        m.Dict["adler32"] = new PyBuiltinFunction("adler32", (_, a, _) =>
+        {
+            byte[] data = CryptoModules.AsBytes(a[0]);
+            uint start = a.Length > 1 ? (uint)(PyOps.AsBigInt(a[1], "value") & 0xFFFFFFFF) : 1u;
+            uint s1 = start & 0xFFFF, s2 = start >> 16;
+            foreach (byte b in data)
+            {
+                s1 = (s1 + b) % 65521;
+                s2 = (s2 + s1) % 65521;
+            }
+            return new BigInteger((s2 << 16) | s1);
+        });
+
         m.Dict["decompress"] = new PyBuiltinFunction("decompress", (_, a, kwargs) =>
         {
             byte[] data = CryptoModules.AsBytes(a[0]);

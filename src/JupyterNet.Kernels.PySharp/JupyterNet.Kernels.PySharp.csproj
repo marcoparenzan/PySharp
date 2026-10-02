@@ -18,7 +18,7 @@
          machine's NuGet.Config) — JupyterNet.Host loads this project's published output as a
          plugin, matching its own copy of this package by identity so `is IKernelPlugin` works;
          see JupyterNet's KernelPluginLoader for why. -->
-    <PackageReference Include="JupyterNet.Kernels.Abstractions" Version="0.1.0" />
+    <PackageReference Include="JupyterNet.Kernels.Abstractions" Version="0.2.0" />
   </ItemGroup>
 
   <ItemGroup>

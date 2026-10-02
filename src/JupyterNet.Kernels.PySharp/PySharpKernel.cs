@@ -29,6 +29,22 @@ public sealed class PySharpKernel : IKernel
     {
         // Re-injected every cell: cheap, and keeps the callback current if the sink changes.
         _engine.SetVariable("display_html", (Action<string>)sink.WriteHtml);
+        // display_image(data, mime="image/png"): data is bytes/bytearray (an encoded image). This is what
+        // matplotlib's plt.show() and image helpers call to put a picture in the cell's output.
+        _engine.SetVariable("display_image", new PyBuiltinFunction("display_image", (_, a, kw) =>
+        {
+            if (a.Length < 1) throw PyErr.TypeError("display_image() missing required argument 'data'");
+            byte[] data = a[0] switch
+            {
+                PyBytes b => b.Data,
+                PyByteArray ba => ba.Data.ToArray(),
+                _ => throw PyErr.TypeError("display_image() data must be bytes or bytearray"),
+            };
+            string mime = a.Length > 1 && a[1] is string m ? m
+                : kw is not null && kw.TryGetValue("mime", out var km) && km is string ks ? ks : "image/png";
+            sink.WriteImage(mime, data);
+            return PyNone.Instance;
+        }));
         _stdout.GetStringBuilder().Clear();
 
         try
