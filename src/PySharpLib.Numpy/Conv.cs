@@ -13,6 +13,19 @@ namespace PySharpLib.Numpy;
 /// <summary>The native payload of a numpy scalar instance (an <c>np.uint8(5)</c>, <c>np.float32(1.5)</c>
 /// ...): a 0-d <see cref="NDArray"/>. Implements <see cref="IPyNumberLike"/> so the interpreter
 /// accepts it wherever a Python int/float is needed.</summary>
+/// <summary>Implemented by another binding's array-like object (a torch tensor) so numpy and matplotlib accept it
+/// wherever they take array-likes.</summary>
+public interface INdArrayConvertible
+{
+    NDArray ToNDArray();
+}
+
+/// <summary>A tuple-like of integers owned by another binding (torch.Size), accepted as a shape / axes by numpy.</summary>
+public interface IIntSequence
+{
+    long[] Values { get; }
+}
+
 internal sealed class ScalarBox : IPyNumberLike
 {
     public NDArray Array { get; }
@@ -126,7 +139,9 @@ internal static class Conv
             case PyInstance ci when ci.Class == ComplexType.ComplexClass && ci.Dict.TryGet("__value__", out var cv) && cv is Complex cc:
                 nd = NDArray.WeakScalar(cc); return true;
             case PyList or PyTuple: nd = FromSequence(o, null); return true;
+            case PyRange rg: nd = FromSequence(new PyList(rg.Enumerate()), null); return true;
             case ClrObject { Instance: Array arr }: nd = FromClrArray(arr); return true;
+            case PyInstance { Native: INdArrayConvertible conv }: nd = conv.ToNDArray(); return true;
             default: nd = null!; return false;
         }
     }
@@ -258,6 +273,7 @@ internal static class Conv
     {
         PyTuple t => t.Items.Select(x => ToInt(x, "shape")).ToArray(),
         PyList l => l.Items.Select(x => ToInt(x, "shape")).ToArray(),
+        PyInstance { Native: IIntSequence sq } => sq.Values.Select(x => (int)x).ToArray(),
         _ when IsNdArray(o) => TryUnwrap(o)!.ToArray<long>().Select(x => (int)x).ToArray(),
         _ => new[] { ToInt(o, "shape") },
     };
@@ -267,6 +283,7 @@ internal static class Conv
         null or PyNone => null,
         PyTuple t => t.Items.Select(x => ToInt(x, "axis")).ToArray(),
         PyList l => l.Items.Select(x => ToInt(x, "axis")).ToArray(),
+        PyInstance { Native: IIntSequence sq } => sq.Values.Select(x => (int)x).ToArray(),
         _ => new[] { ToInt(o, "axis") },
     };
 
@@ -280,6 +297,9 @@ internal static class Conv
             case PyInstance { Native: DTypeBox box }: return box.Value;
             case PyClass cls when Classes.TryDTypeOfClass(cls, out var dt): return dt;
             case string s: return DTypes.TryFromName(s, out var d) ? d : throw PyErr.TypeError($"data type '{s}' not understood");
+            // a dtype name unpickled from a Python-2 file (encoding="bytes") arrives as bytes, e.g. b'u1' or b'<f4'
+            case PyBytes pb:
+                return ToDType(System.Text.Encoding.Latin1.GetString(pb.Data));
             case PyClass c when c == ComplexType.ComplexClass: return DType.Complex128;
             case PyBuiltinFunction { Name: "float" }: return DType.Float64;
             case PyBuiltinFunction { Name: "int" }: return DType.Int64;

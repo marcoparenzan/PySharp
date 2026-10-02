@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <EmbeddedResource Include="py\*.py" LogicalName="PySharpLib.Torch.py.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
+    <PackageReference Include="TorchSharp-cpu" Version="0.107.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the torch module, a Python binding over TorchSharp (libtorch). -->
+    <PackageId>PySharp.Torch</PackageId>
+    <Version>2.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PySharp's torch module (tensors, autograd, torch.nn, torch.optim) — a Python binding over TorchSharp/libtorch. Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;torch;pytorch;pysharp;ndsharp</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

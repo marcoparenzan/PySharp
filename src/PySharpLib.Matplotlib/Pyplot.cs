@@ -122,7 +122,7 @@ internal static class Modules
         foreach (var name in new[]
         {
             "plot", "scatter", "bar", "barh", "hist", "imshow", "fill_between", "stem", "errorbar", "axhline", "axvline", "text",
-            "annotate", "arrow", "legend", "grid", "axis", "semilogy", "semilogx", "loglog", "tick_params", "margins", "cla",
+            "annotate", "arrow", "legend", "grid", "axis", "semilogy", "semilogx", "loglog", "tick_params", "margins", "cla", "contour", "contourf", "clabel",
         })
         {
             var fn = AxesApi.Table[name];

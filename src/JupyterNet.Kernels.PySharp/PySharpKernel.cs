@@ -26,6 +26,7 @@ public sealed class PySharpKernel : IKernel
         PySharpLib.Cv2.Cv2Registration.Register(_engine.Importer);
         PySharpLib.Pywt.PywtRegistration.Register(_engine.Importer);
         PySharpLib.Matplotlib.MatplotlibRegistration.Register(_engine.Importer);
+        PySharpLib.Torch.TorchRegistration.Register(_engine.Importer);
     }
 
     public Task ExecuteAsync(string code, IKernelOutputSink sink, CancellationToken cancellationToken)

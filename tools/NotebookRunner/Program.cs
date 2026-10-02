@@ -74,6 +74,7 @@ static (string, int, int, int, string) RunNotebook(string path, string name, boo
     PySharpLib.Numpy.NumpyRegistration.Register(engine.Importer);
     PySharpLib.Cv2.Cv2Registration.Register(engine.Importer);
     PySharpLib.Pywt.PywtRegistration.Register(engine.Importer);
+    PySharpLib.Torch.TorchRegistration.Register(engine.Importer);
     int currentCell = 0, imageCount = 0;
     if (stub) StubModules.Register(engine);
     else

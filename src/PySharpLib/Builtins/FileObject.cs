@@ -31,7 +31,7 @@ public static class FileObject
 
     public static object Open(Interp interp, object[] args, Dictionary<string, object>? kwargs)
     {
-        string path = args[0] as string ?? throw PyErr.TypeError("open() path must be str");
+        string path = args[0] as string ?? PySharpLib.Modules.OsModule.PathArg(interp, args[0]);
         string mode = args.Length > 1 ? (string)args[1]
             : kwargs is not null && kwargs.TryGetValue("mode", out var m) ? (string)m
             : "r";

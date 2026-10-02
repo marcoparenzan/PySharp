@@ -68,6 +68,10 @@ public static class PathlibModule
             return PyNone.Instance;
         });
 
+        // Path.home() / Path.cwd(): classmethods returning a path of the concrete class
+        cls.Dict["home"] = new PyClassMethod(new PyBuiltinFunction($"{name}.home", (_, _, _) => Make(NormalizeSeparators(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)))));
+        cls.Dict["cwd"] = new PyClassMethod(new PyBuiltinFunction($"{name}.cwd", (_, _, _) => Make(NormalizeSeparators(Directory.GetCurrentDirectory()))));
+
         Add("__str__", (_, a, _) => Value(a[0]));
         Add("__repr__", (_, a, _) => $"{name}('{Value(a[0])}')");
         Add("__fspath__", (_, a, _) => Value(a[0]));

@@ -26,6 +26,7 @@ public static class Py
         PySharpLib.Cv2.Cv2Registration.Register(engine.Importer);
         PySharpLib.Pywt.PywtRegistration.Register(engine.Importer);
         PySharpLib.Matplotlib.MatplotlibRegistration.Register(engine.Importer);
+        PySharpLib.Torch.TorchRegistration.Register(engine.Importer);
         return engine;
     }
 

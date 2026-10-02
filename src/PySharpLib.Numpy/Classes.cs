@@ -103,6 +103,7 @@ internal static class Classes
             return DTypeObject(Conv.ToDType(a[1]) ?? throw PyErr.TypeError("Cannot interpret None as a data type"));
         });
         Add("__init__", (_, _, _) => PyNone.Instance);
+        Add("__setstate__", (_, _, _) => PyNone.Instance);
         cls.Dict["name"] = Native.Prop(s => DTypeOf(s).Name());
         cls.Dict["kind"] = Native.Prop(s => DTypeOf(s).Kind().ToString());
         cls.Dict["itemsize"] = Native.Prop(s => new BigInteger(DTypeOf(s).ItemSize()));
@@ -186,6 +187,7 @@ internal static class Classes
         cls.Dict["__new__"] = Native.Fn("ndarray.__new__", (_, a, kw) =>
             throw PyErr.TypeError("ndarray cannot be constructed directly; use numpy.array(), numpy.zeros(), ..."));
 
+        Add("__setstate__", (_, a, _) => NumpyPickle.SetState(a[0], a[1]));
         Add("__repr__", (_, a, _) => ArrayFormat.Repr(Nd(a[0])));
         Add("__str__", (_, a, _) => ArrayFormat.Str(Nd(a[0])));
         Add("__len__", (_, a, _) =>

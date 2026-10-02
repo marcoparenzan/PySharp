@@ -91,6 +91,17 @@ internal static partial class NumpyRandom
             var p = new Args("choice", i, a.Skip(1).ToArray(), kw, "a", "size", "replace", "p", "axis", "shuffle");
             if (p.Has(3)) throw PyErr.NotImplementedError("Generator.choice(p=...) is not implemented yet");
             var g = Gen(a[0]);
+            // a sequence of non-numeric objects (strings, ...): numpy builds a string/object array and draws indices exactly like for
+            // an integer population — pick the same indices and return the Python objects
+            var seq = p.Required(0) is PyList pl ? pl.Items : p.Required(0) is PyTuple pt ? pt.Items.ToList() : null;
+            if (seq is not null && seq.Count > 0 && seq.Any(o => o is string))
+            {
+                var sz = SizeArg(p[1]);
+                int cnt = sz is null ? 1 : NDArray.SizeOf(sz);
+                var ids = g.ChooseIndices(seq.Count, cnt, p.Bool(2, true), p.Bool(5, true));
+                if (sz is null) return seq[(int)ids[0]];
+                return new PyList(ids.Select(k => seq[(int)k]));
+            }
             NDArray? pool = p.Required(0) is BigInteger ? null : p.ND(0);
             long popSize = pool is null ? (long)(BigInteger)p.Required(0) : pool.Shape[0];
             var size = SizeArg(p[1]);

@@ -56,6 +56,13 @@ public sealed class Importer
     public void RegisterBuiltin(string name, Func<Interp, PyModule> factory)
         => _builtinFactories[name] = factory;
 
+    private readonly Dictionary<string, (string Source, bool IsPackage)> _sourceModules = new();
+
+    /// <summary>Registers a module whose body is Python source held in memory (a binding library can ship
+    /// pure-Python parts, e.g. <c>torch.nn</c>, without files on disk). Behaves like a module loaded from a file.</summary>
+    public void RegisterSourceModule(string name, string source, bool isPackage = false)
+        => _sourceModules[name] = (source, isPackage);
+
     /// <summary>Hook for Interp: resolves name (with relative level) and returns the exact module.</summary>
     public PyModule Import(Interp interp, string name, int level, PyModule current)
     {
@@ -146,7 +153,7 @@ public sealed class Importer
             string? origin = loaded.Dict.TryGet("__file__", out var f) && f is string fs ? fs : null;
             return (origin, true);
         }
-        if (_builtinFactories.ContainsKey(absolute))
+        if (_builtinFactories.ContainsKey(absolute) || _sourceModules.ContainsKey(absolute))
             return (null, true);
 
         string relPath = absolute.Replace('.', Path.DirectorySeparatorChar);
@@ -173,6 +180,10 @@ public sealed class Importer
                 Modules[absolute] = module;
             return module;
         }
+
+        // 1b. in-memory Python source
+        if (_sourceModules.TryGetValue(absolute, out var src))
+            return ExecuteSource(interp, absolute, "<" + absolute + ">", src.Source, src.IsPackage);
 
         // 2. file system
         string relPath = absolute.Replace('.', Path.DirectorySeparatorChar);
@@ -215,6 +226,9 @@ public sealed class Importer
     }
 
     private PyModule ExecuteFile(Interp interp, string absolute, string filePath, bool isPackage)
+        => ExecuteSource(interp, absolute, filePath, null, isPackage);
+
+    private PyModule ExecuteSource(Interp interp, string absolute, string filePath, string? sourceText, bool isPackage)
     {
         var module = new PyModule(absolute) { Builtins = BuiltinsModule, FileName = filePath };
         module.Dict["__file__"] = filePath;
@@ -228,7 +242,7 @@ public sealed class Importer
             Modules[absolute] = module;
         try
         {
-            string source = File.ReadAllText(filePath);
+            string source = sourceText ?? File.ReadAllText(filePath);
             var ast = Parser.Parse(source, filePath);
             interp.RunModule(ast, module);
         }

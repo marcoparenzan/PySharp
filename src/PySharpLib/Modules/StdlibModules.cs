@@ -130,6 +130,7 @@ public static class StdlibModules
         // native NDSharp array library) — call `NumpyRegistration.Register(importer)` to enable it.
         importer.RegisterBuiltin("importlib.metadata", _ => ImportlibMetadataModule.Create(importer));
         importer.RegisterBuiltin("zipfile", _ => ZipfileModule.Create());
+        importer.RegisterBuiltin("tarfile", _ => TarfileModule.Create());
         importer.RegisterBuiltin("calendar", _ => CalendarModule.Create());
         importer.RegisterBuiltin("encodings", _ => new PyModule("encodings"));
         importer.RegisterBuiltin("encodings.aliases", _ => EncodingsAliasesModule.Create());

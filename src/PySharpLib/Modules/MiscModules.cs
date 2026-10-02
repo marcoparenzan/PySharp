@@ -658,13 +658,13 @@ public static class MiscModules
             PyInstance inst => CopyInstance(inst),
             _ => a[0],
         });
-        m.Dict["deepcopy"] = new PyBuiltinFunction("deepcopy", (interp, a, _) => DeepCopy(a[0]));
+        m.Dict["deepcopy"] = new PyBuiltinFunction("deepcopy", (interp, a, _) => DeepCopy(interp, a[0], new Dictionary<object, object>(ReferenceEqualityComparer.Instance)));
         return m;
     }
 
     private static PyInstance CopyInstance(PyInstance inst)
     {
-        var copy = new PyInstance(inst.Class);
+        var copy = new PyInstance(inst.Class) { Native = inst.Native };
         foreach (var e in inst.Dict.Entries)
             copy.Dict[e.Key] = e.Value;
         // Real `__slots__` attributes live in separate storage (see PyInstance.Slots) — a shallow
@@ -676,32 +676,43 @@ public static class MiscModules
         return copy;
     }
 
-    private static object DeepCopy(object o) => o switch
+    private static object DeepCopy(Interp interp, object o, Dictionary<object, object> memo)
     {
-        PyList l => new PyList(l.Items.Select(DeepCopy)),
-        PyTuple t => new PyTuple(t.Items.Select(DeepCopy).ToArray()),
-        PySet s => new PySet(s.Items.Select(DeepCopy)),
-        PyDict d => DeepCopyDict(d),
-        PyInstance inst => DeepCopyInstance(inst),
-        _ => o,
-    };
-
-    private static PyDict DeepCopyDict(PyDict d)
-    {
-        var copy = new PyDict();
-        foreach (var e in d.Entries)
-            copy[DeepCopy(e.Key)] = DeepCopy(e.Value);
-        return copy;
-    }
-
-    private static PyInstance DeepCopyInstance(PyInstance inst)
-    {
-        var copy = new PyInstance(inst.Class);
-        foreach (var e in inst.Dict.Entries)
-            copy.Dict[e.Key] = DeepCopy(e.Value);
-        if (inst.Slots is { } slots)
-            foreach (var e in slots.Entries)
-                copy.EnsureSlots()[e.Key] = DeepCopy(e.Value);
-        return copy;
+        if (o is PyList or PyDict or PySet or PyInstance && memo.TryGetValue(o, out var done)) return memo[o];
+        switch (o)
+        {
+            case PyList l:
+            {
+                var copy = new PyList();
+                memo[o] = copy;
+                foreach (var item in l.Items) copy.Items.Add(DeepCopy(interp, item, memo));
+                return copy;
+            }
+            case PyTuple t: return new PyTuple(t.Items.Select(x => DeepCopy(interp, x, memo)).ToArray());
+            case PySet s: return new PySet(s.Items.Select(x => DeepCopy(interp, x, memo)));
+            case PyDict d:
+            {
+                var copy = new PyDict();
+                memo[o] = copy;
+                foreach (var e in d.Entries) copy[DeepCopy(interp, e.Key, memo)] = DeepCopy(interp, e.Value, memo);
+                return copy;
+            }
+            case PyInstance inst:
+            {
+                // a class may define its own __deepcopy__(memo) (e.g. a native-backed tensor)
+                if (interp.TryCallMethod(inst, "__deepcopy__", new object[] { new PyDict() }, out var custom) && custom is not PyNone)
+                {
+                    memo[o] = custom;
+                    return custom;
+                }
+                var copy = new PyInstance(inst.Class) { Native = inst.Native };
+                memo[o] = copy;
+                foreach (var e in inst.Dict.Entries) copy.Dict[e.Key] = DeepCopy(interp, e.Value, memo);
+                if (inst.Slots is { } slots)
+                    foreach (var e in slots.Entries) copy.EnsureSlots()[e.Key] = DeepCopy(interp, e.Value, memo);
+                return copy;
+            }
+            default: return o;
+        }
     }
 }

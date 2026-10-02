@@ -21,6 +21,7 @@ public static class NumpyRegistration
         PyModule? numpy = null;
         PyModule Numpy() => numpy ??= NumpyModule.Create();
         importer.RegisterBuiltin("numpy", _ => Numpy());
+        NumpyPickle.Register(importer, Numpy);
         foreach (var sub in new[] { "linalg", "random", "fft" })
         {
             var name = sub;

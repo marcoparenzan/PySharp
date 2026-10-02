@@ -42,6 +42,41 @@ public static class UrllibModule
         m.Dict["proxy_bypass"] = new PyBuiltinFunction("proxy_bypass", (_, a, _) =>
             ProxyBypassEnvironment((string)a[0]));
         m.Dict["Request"] = RequestClass;
+        // urlretrieve(url, filename=None, reporthook=None, data=None): downloads to a file (redirects followed), returns (filename, headers)
+        m.Dict["urlretrieve"] = new PyBuiltinFunction("urlretrieve", (interp, a, kw) =>
+        {
+            string url = a[0] is string us ? us : OsModule.PathArg(interp, a[0]);
+            object? fn = a.Length > 1 ? a[1] : kw is not null && kw.TryGetValue("filename", out var f0) ? f0 : null;
+            object? hook = a.Length > 2 ? a[2] : kw is not null && kw.TryGetValue("reporthook", out var h0) ? h0 : null;
+            string path = fn is null or PyNone ? Path.GetTempFileName() : OsModule.PathArg(interp, fn);
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("Python-urllib/3.12");
+                using var resp = http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+                if (!resp.IsSuccessStatusCode) throw PyErr.Raise(PyErr.OSErrorClass, $"HTTP Error {(int)resp.StatusCode}: {resp.ReasonPhrase}");
+                long total = resp.Content.Headers.ContentLength ?? -1;
+                const int block = 8192;
+                using var src = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                if (Path.GetDirectoryName(Path.GetFullPath(path)) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
+                using var dst = File.Create(path);
+                var buf = new byte[block];
+                long blockNum = 0;
+                if (hook is not null and not PyNone) interp.Call(hook, new object[] { new System.Numerics.BigInteger(0), new System.Numerics.BigInteger(block), new System.Numerics.BigInteger(total) }, null);
+                int n;
+                while ((n = src.Read(buf, 0, buf.Length)) > 0)
+                {
+                    dst.Write(buf, 0, n);
+                    blockNum++;
+                    if (hook is not null and not PyNone) interp.Call(hook, new object[] { new System.Numerics.BigInteger(blockNum), new System.Numerics.BigInteger(block), new System.Numerics.BigInteger(total) }, null);
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                throw PyErr.Raise(PyErr.OSErrorClass, $"<urlopen error {ex.Message}>");
+            }
+            return new PyTuple(new object[] { path, new PyDict() });
+        });
         return m;
     }
 

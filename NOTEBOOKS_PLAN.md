@@ -254,14 +254,45 @@ are approximations or missing; unknown keyword arguments are ignored silently.
 - [ ] 26–30 (image formation, calibration, epipolar, SfM, projection; mplot3d basics)
 - [ ] **Milestone M2:** lessons 01–30 run; failures, if any, documented per-cell here
 
-### Phase 7 — Tier B: `torch` core
-- [ ] Decide D3; `PySharp.Torch` binding: `tensor`, `manual_seed`, ops, `no_grad`, autograd, `nn.Module/
-      Linear/Sequential/Conv/MaxPool/BatchNorm/LayerNorm/Embedding/MultiheadAttention/Transformer*`,
-      `optim.Adam/SGD/schedulers`, `nn.functional.*`
-- [ ] Python class subclassing `nn.Module` from PySharp code (needs `__call__`/`forward`/parameter
-      registration through the interpreter's class machinery)
-- [ ] stdlib gaps: `pickle` load for CIFAR, `tarfile`, `urllib.request.urlretrieve`
-- [ ] **Milestone M3:** lessons 31–37 and 44–51 run
+### Phase 7 — Tier B: `torch` core  (code written 2026-10-02, **not accepted: see Open points**)
+- [x] `PySharp.Torch` over TorchSharp-cpu 0.107 (libtorch 2.10 = oracle torch 2.10): tensors, ops, autograd, `no_grad`, `torch.Size`,
+      `nn.Module` and layers (Python source embedded in the assembly), `optim` (SGD/Adam/AdamW/RMSprop/Adagrad), `lr_scheduler`,
+      `utils.data`, `nn.functional`, `nn.init`
+- [x] `nn.Module` subclassing from PySharp code (Module is Python source)
+- [x] stdlib gaps: `tarfile`, real `pickle` reader (protocols 0–5, numpy arrays), `copy.deepcopy` honoring `__deepcopy__`
+      (`urllib.request.urlretrieve` already existed; CIFAR download not exercised: no network from the dev session)
+- [ ] **Milestone M3:** lessons 31–37 and 44–51 run — measured in a dev session (Debug runner): 31–34, 37, 44–49, 51 passed every cell;
+      35/36/38/39 need CIFAR; 50 timed out in Debug. **No complete Release sweep was ever finished.**
+- Verification: `src/PySharp.Tests/Oracle/torch/T1..T4` (seed/randn/randint/randperm, repr + grad_fn, Linear/Conv/BatchNorm, Adam/SGD
+  trajectories, MultiheadAttention/TransformerEncoder, DataLoader shuffle + random_split, StepLR/Cosine) equal real torch output.
+
+## Open points
+
+The cvintro notebooks as a whole are **not working yet** (decision 2026-10-02: the owner finishes the notebook work). State to start from:
+
+1. **No trustworthy run report.** `NOTEBOOKS_RUN.md` is from the earlier matplotlib-stub era (or partial); a full Release sweep
+   (`dotnet build -c Release tools/NotebookRunner`, then run it with `--timeout 900`) was started and interrupted. Always run the runner in
+   Release — Debug is ~10x slower and produces false timeouts (lesson 50).
+2. **CIFAR lessons — retried with network (2026-10-02), Release runner:** 35, 36 and 39 pass every cell with the real CIFAR-10 download;
+   **38 still fails at `import torchvision`** (Phase 8: pretrained resnet18). Bugs found and fixed on the way: `urllib.request.urlretrieve`
+   was missing (added: redirects, `reporthook`), `Path.home()/cwd()` missing, `open()` rejected Path objects, Python-2 pickles carry the
+   numpy dtype name as `bytes` (`b'u1'`), `range` was not accepted as array input by numpy/matplotlib/torch. The real CIFAR batch unpickles
+   identically to CPython (keys, dtype, sum, labels). Remaining diff: `float32` `.mean()` over 30M elements differs from numpy in the 7th
+   digit (0.47658494 vs 0.47658497; NDSharp's float32 reduction order is not numpy's pairwise blocking).
+3. **Lessons 40–43 and 52–61 never run.** They import only torch/nn (+ some `torchvision`: models in 38, 41, 42, 43); `torchvision`,
+   `FaceDetectorYN`, Haar cascades are not implemented (Phase 8).
+4. **Kernel in VS Code with torch not re-tested.** The published kernel must ship libtorch natives (large); the new native-library
+   resolver in `JupyterNet.Engine/KernelPluginLoader.cs` handles plugin natives but was only exercised for SkiaSharp/OpenCvSharp.
+   VS Code notebooks failed before on stale kernel publish / missing natives — rebuild with `build/package-extension.ps1` and republish
+   `src/JupyterNet.Kernels.PySharp/bin/publish` (stop the running host first).
+5. **Numeric:** lesson 50 DINO with centering gives 0.2416 vs 0.2479 in real torch (ops equal; suspected chaotic divergence — unproven).
+6. **Known gaps:** matplotlib `twinx`/`pcolormesh`/`plot_surface`/offset text/pdf+svg `savefig`; `torch.save/load` is a pickle shim; `grad_fn`
+   names are approximations (a tag per op, not libtorch's); `Module.parameters()` and friends return iterators over lists (not generators);
+   `fused`/`foreach` optimizer variants absent; CUDA/MPS always unavailable.
+7. **Uncommitted:** everything from Phases 1–7 in PySharp, and the JupyterNet changes (image output, native resolver). Suggested Phase 7
+   commit title: *Phase 7 of the cvintro plan: PySharp.Torch over TorchSharp/libtorch (tensors, autograd, nn/optim/utils.data in Python
+   source), tarfile, real pickle + numpy-pickle reader, deepcopy honoring __deepcopy__ — seed/repr/training verified against torch 2.10*.
+8. **Docs not updated for Phase 7:** README, RELEASE_NOTES, PROJECT_LOG (matplotlib phase is documented).
 
 ### Phase 8 — Tier C: pretrained models
 - [ ] Weight/format route per D3; `torchvision.models` (resnet18, fcn_resnet50, fasterrcnn, maskrcnn),

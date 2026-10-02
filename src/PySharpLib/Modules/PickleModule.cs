@@ -57,7 +57,7 @@ public static class PickleModule
             Write(a[0], bytes);
             return new PyBytes(bytes.ToArray());
         });
-        d["loads"] = new PyBuiltinFunction("loads", (_, a, _) =>
+        d["loads"] = new PyBuiltinFunction("loads", (interp, a, kw) =>
         {
             var data = a[0] switch
             {
@@ -65,6 +65,7 @@ public static class PickleModule
                 PyByteArray ba => ba.Data.ToArray(),
                 _ => throw PyErr.TypeError("a bytes-like object is required, not '" + PyOps.TypeName(a[0]) + "'"),
             };
+            if (RealPickle.LooksReal(data)) return RealPickle.Load(interp, data, EncodingArg(kw));
             int pos = 0;
             var result = Read(data, ref pos);
             return result;
@@ -76,7 +77,7 @@ public static class PickleModule
             interp.CallMethod(a[1], "write", new object[] { new PyBytes(bytes.ToArray()) });
             return PyNone.Instance;
         });
-        d["load"] = new PyBuiltinFunction("load", (interp, a, _) =>
+        d["load"] = new PyBuiltinFunction("load", (interp, a, kw) =>
         {
             var raw = interp.CallMethod(a[0], "read", Array.Empty<object>());
             var data = raw switch
@@ -85,12 +86,16 @@ public static class PickleModule
                 PyByteArray ba => ba.Data.ToArray(),
                 _ => throw PyErr.TypeError("file must be opened in binary mode"),
             };
+            if (RealPickle.LooksReal(data)) return RealPickle.Load(interp, data, EncodingArg(kw));
             int pos = 0;
             return Read(data, ref pos);
         });
 
         return m;
     }
+
+    private static string EncodingArg(Dictionary<string, object>? kw)
+        => kw is not null && kw.TryGetValue("encoding", out var e) && e is string s ? s : "ASCII";
 
     private static void WriteInt32(List<byte> buf, int value) => buf.AddRange(BitConverter.GetBytes(value));
 

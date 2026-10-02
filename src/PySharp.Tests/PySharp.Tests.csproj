@@ -26,6 +26,7 @@
     <ProjectReference Include="..\PySharpLib.Cv2\PySharpLib.Cv2.csproj" />
     <ProjectReference Include="..\PySharpLib.Pywt\PySharpLib.Pywt.csproj" />
     <ProjectReference Include="..\PySharpLib.Matplotlib\PySharpLib.Matplotlib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Torch\PySharpLib.Torch.csproj" />
     <ProjectReference Include="..\PySharpLib.Sqlite3\PySharpLib.Sqlite3.csproj" />
     <ProjectReference Include="..\PySharpLib.Pyodbc\PySharpLib.Pyodbc.csproj" />
     <ProjectReference Include="..\PySharpLib.Psycopg2\PySharpLib.Psycopg2.csproj" />
@@ -36,6 +37,7 @@
     <None Include="Corpus\snippets\**\*.py" CopyToOutputDirectory="PreserveNewest" LinkBase="Corpus\snippets" />
     <!-- Golden-output snippets produced against real CPython+numpy (tools/oracle) -->
     <None Include="Oracle\**\*.py;Oracle\**\*.expected" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
