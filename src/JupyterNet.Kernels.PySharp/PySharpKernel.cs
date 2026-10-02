@@ -25,6 +25,7 @@ public sealed class PySharpKernel : IKernel
         PySharpLib.Numpy.NumpyRegistration.Register(_engine.Importer);
         PySharpLib.Cv2.Cv2Registration.Register(_engine.Importer);
         PySharpLib.Pywt.PywtRegistration.Register(_engine.Importer);
+        PySharpLib.Matplotlib.MatplotlibRegistration.Register(_engine.Importer);
     }
 
     public Task ExecuteAsync(string code, IKernelOutputSink sink, CancellationToken cancellationToken)
@@ -47,12 +48,15 @@ public sealed class PySharpKernel : IKernel
             sink.WriteImage(mime, data);
             return PyNone.Instance;
         }));
+        // matplotlib: figures shown by plt.show() or still open when the cell ends go to this cell's output (inline backend)
+        PySharpLib.Matplotlib.MatplotlibRegistration.SetShowSink(png => sink.WriteImage("image/png", png));
         _stdout.GetStringBuilder().Clear();
 
         try
         {
             var module = _engine.Run(code, "<cell>");
             CarryGlobalsForward(module);
+            PySharpLib.Matplotlib.MatplotlibRegistration.FlushFigures();
 
             var text = _stdout.ToString();
             if (text.Length > 0) sink.WriteText(text);

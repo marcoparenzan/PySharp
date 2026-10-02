@@ -410,6 +410,14 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 - Interpreter: imaginary literals (`1j`, `2.5J`) now lex and parse.
 - All new behavior is verified against real numpy 2.5.3: NDSharp 291 tests, 5 new golden snippet files.
 
+### v2.1.0 (continued) — matplotlib
+
+- New packages **`NDSharp.Plot`** + **`PySharp.Matplotlib`**: `import matplotlib.pyplot as plt` — Figure/Axes model rendered by SkiaSharp
+  (PNG), 56 colormaps generated from real matplotlib, DejaVu Sans embedded. Ports matplotlib's tick locator/formatter, margins, GridSpec,
+  colorbar split, `tight_layout` and mplot3d projection; verified numerically against matplotlib 3.11.2 (`Oracle/matplotlib`).
+- The JupyterNet PySharp kernel shows figures inline (at `plt.show()` and at the end of each cell).
+- All 30 tier-A cvintro notebooks (lessons 01–30) now run every cell with real rendering (`NOTEBOOKS_RUN.md`).
+
 ### v2.1.0 (continued) — cv2 and pywt
 
 - New packages **`NDSharp.Image`** + **`PySharp.Cv2`**: `import cv2` over OpenCV 4.11 (through OpenCvSharp) — ~100 functions, all

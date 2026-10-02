@@ -21,6 +21,7 @@ public class OracleTests
     public static IEnumerable<object[]> Numpy() => Snippets("numpy");
     public static IEnumerable<object[]> Cv2() => Snippets("cv2");
     public static IEnumerable<object[]> Pywt() => Snippets("pywt");
+    public static IEnumerable<object[]> Matplotlib() => Snippets("matplotlib");
 
     private static void RunCase(string lib, string name)
     {
@@ -40,6 +41,9 @@ public class OracleTests
 
     [Theory, MemberData(nameof(Pywt))]
     public void Pywt_snippet_matches_real_pywavelets(string name) => RunCase("pywt", name);
+
+    [Theory, MemberData(nameof(Matplotlib))]
+    public void Matplotlib_snippet_matches_real_matplotlib(string name) => RunCase("matplotlib", name);
 
     [Theory, MemberData(nameof(Numpy))]
     public void Numpy_snippet_matches_real_numpy(string name) => RunCase("numpy", name);

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>$(NoWarn);CS8981</NoWarn>
+
+    <!-- NuGet package metadata: matplotlib-shaped plotting (figures, axes, images, lines, scatter, ...) rendered to PNG by SkiaSharp. -->
+    <PackageId>NDSharp.Plot</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>NDSharp.Plot — a matplotlib-style plotting model (Figure/Axes/imshow/plot/scatter/bar/hist/legend/colorbar, tight_layout) rendered to PNG with SkiaSharp. Bundles the DejaVu Sans font (Bitstream Vera license). No Python dependency.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>plot;matplotlib;chart;ndsharp;skia;dotnet</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NDSharp\NDSharp.csproj" />
+    <PackageReference Include="SkiaSharp" Version="3.119.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="3.119.0" />
+    <EmbeddedResource Include="Fonts\*.ttf" LogicalName="NDSharp.Plot.Fonts.%(Filename)%(Extension)" />
+    <None Include="Fonts\LICENSE_DEJAVU" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

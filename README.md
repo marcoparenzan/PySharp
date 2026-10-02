@@ -506,6 +506,10 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
 - **cv2 / pywt**: opt-in `PySharp.Cv2` (OpenCV 4.11 through OpenCvSharp, over the native `NDSharp.Image`) and `PySharp.Pywt`
   (discrete wavelets over `NDSharp.Wavelets`), verified against real OpenCV / PyWavelets output. Register with
   `Cv2Registration.Register(importer)` / `PywtRegistration.Register(importer)`; the `pysharp` CLI and the JupyterNet kernel do.
+- **matplotlib**: opt-in `PySharp.Matplotlib` over the native `NDSharp.Plot` (SkiaSharp renderer, embedded DejaVu Sans): `pyplot`
+  (figures, subplots, imshow, plot/scatter/bar/hist/contour, legends, colorbars, `tight_layout`, 3-D basics), `patches`, `cm`, `colors`,
+  `gridspec`. Ticks, limits and layout follow matplotlib's own algorithms (verified against real matplotlib); figures go to PNG and, in the
+  JupyterNet kernel, to the cell output (`IKernelOutputSink.WriteImage`). Register with `MatplotlibRegistration.Register(importer, sink)`.
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
   `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both

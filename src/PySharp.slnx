@@ -6,8 +6,10 @@
   <Project Path="PySharpLib/PySharpLib.csproj" />
   <Project Path="PySharpLib.Numpy/PySharpLib.Numpy.csproj" />
   <Project Path="NDSharp.Wavelets/NDSharp.Wavelets.csproj" />
+  <Project Path="NDSharp.Plot/NDSharp.Plot.csproj" />
   <Project Path="PySharpLib.Cv2/PySharpLib.Cv2.csproj" />
   <Project Path="PySharpLib.Pywt/PySharpLib.Pywt.csproj" />
+  <Project Path="PySharpLib.Matplotlib/PySharpLib.Matplotlib.csproj" />
   <Project Path="PipSharpLib/PipSharpLib.csproj" />
   <Project Path="PySharp/PySharp.csproj" />
   <Project Path="PySharp.Tests/PySharp.Tests.csproj" />

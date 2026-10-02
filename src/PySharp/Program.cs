@@ -48,6 +48,7 @@ internal static class Host
         PySharpLib.Numpy.NumpyRegistration.Register(engine.Importer);
         PySharpLib.Cv2.Cv2Registration.Register(engine.Importer);
         PySharpLib.Pywt.PywtRegistration.Register(engine.Importer);
+        PySharpLib.Matplotlib.MatplotlibRegistration.Register(engine.Importer);
         string site = SitePackagesDir();
         if (Directory.Exists(site))
             engine.Importer.SearchPaths.Add(site);

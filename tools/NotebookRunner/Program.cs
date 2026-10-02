@@ -23,6 +23,7 @@ string? filter = null;
 bool stub = false;
 int timeoutSeconds = 120;
 string? outPath = null;
+string? imagesDir = null;
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -31,6 +32,7 @@ for (int i = 0; i < args.Length; i++)
         case "--stub": stub = true; break;
         case "--timeout": timeoutSeconds = int.Parse(args[++i]); break;
         case "--out": outPath = args[++i]; break;
+        case "--images": imagesDir = args[++i]; break;
         default: dir = args[i]; break;
     }
 }
@@ -40,7 +42,7 @@ foreach (var file in Directory.GetFiles(dir, "*.ipynb").OrderBy(x => x))
 {
     string name = Path.GetFileNameWithoutExtension(file);
     if (filter is not null && !name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
-    results.Add(RunNotebook(file, name, stub, timeoutSeconds));
+    results.Add(RunNotebook(file, name, stub, timeoutSeconds, imagesDir));
 }
 
 var md = new StringBuilder();
@@ -59,7 +61,7 @@ Console.WriteLine(md.ToString());
 if (outPath is not null) File.WriteAllText(outPath, md.ToString());
 return 0;
 
-static (string, int, int, int, string) RunNotebook(string path, string name, bool stub, int timeoutSeconds)
+static (string, int, int, int, string) RunNotebook(string path, string name, bool stub, int timeoutSeconds, string? imagesDir)
 {
     var doc = JsonDocument.Parse(File.ReadAllText(path)).RootElement;
     var cells = doc.GetProperty("cells").EnumerateArray()
@@ -72,7 +74,19 @@ static (string, int, int, int, string) RunNotebook(string path, string name, boo
     PySharpLib.Numpy.NumpyRegistration.Register(engine.Importer);
     PySharpLib.Cv2.Cv2Registration.Register(engine.Importer);
     PySharpLib.Pywt.PywtRegistration.Register(engine.Importer);
+    int currentCell = 0, imageCount = 0;
     if (stub) StubModules.Register(engine);
+    else
+    {
+        PySharpLib.Matplotlib.MatplotlibRegistration.Register(engine.Importer, png =>
+        {
+            imageCount++;
+            if (imagesDir is null) return;
+            Directory.CreateDirectory(imagesDir);
+            File.WriteAllBytes(Path.Combine(imagesDir, $"{name}_c{currentCell:00}_{imageCount}.png"), png);
+        });
+        PySharpLib.Matplotlib.MatplotlibRegistration.ResetFigures();
+    }
     engine.SetVariable("display_image", new PyBuiltinFunction("display_image", (_, _, _) => PyNone.Instance));
     engine.SetVariable("display_html", (Action<string>)(_ => { }));
 
@@ -83,6 +97,7 @@ static (string, int, int, int, string) RunNotebook(string path, string name, boo
     {
         string code = string.Join("\n", cells[ci].Split('\n').Where(l => !l.TrimStart().StartsWith('%') && !l.TrimStart().StartsWith('!')));
         string? error = null;
+        currentCell = ci;
         var sw = Stopwatch.StartNew();
         var thread = new Thread(() =>
         {
@@ -92,6 +107,7 @@ static (string, int, int, int, string) RunNotebook(string path, string name, boo
                 foreach (var (key, value) in module.Dict.Entries)
                     if (key is string k && !(k.StartsWith("__") && k.EndsWith("__")))
                         engine.Globals[k] = value;
+                if (!stub) PySharpLib.Matplotlib.MatplotlibRegistration.FlushFigures();
             }
             catch (PyRaise ex) { error = PyErr.FormatTraceback(ex).Split('\n').Where(l => l.Trim().Length > 0).LastOrDefault() ?? ex.Message; }
             catch (PySyntaxError ex) { error = $"SyntaxError: {ex.Message} (line {ex.Line})"; }
@@ -113,7 +129,7 @@ static (string, int, int, int, string) RunNotebook(string path, string name, boo
         }
         writer.GetStringBuilder().Clear();
     }
-    Console.Error.WriteLine($"{name}: {ok}/{cells.Count} ok");
+    Console.Error.WriteLine($"{name}: {ok}/{cells.Count} ok, {imageCount} figures");
     return (name, cells.Count, ok, failed, first);
 }
 

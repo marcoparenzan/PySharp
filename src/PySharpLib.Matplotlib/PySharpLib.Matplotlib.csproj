@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
+    <ProjectReference Include="..\NDSharp.Plot\NDSharp.Plot.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the matplotlib module, a Python binding over NDSharp.Plot. -->
+    <PackageId>PySharp.Matplotlib</PackageId>
+    <Version>2.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PySharp's matplotlib.pyplot module — a Python binding over NDSharp.Plot (SkiaSharp renderer). Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;matplotlib;pyplot;pysharp;ndsharp</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

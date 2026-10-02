@@ -225,12 +225,24 @@ Linux/macOS need the matching `OpenCvSharp4.runtime.*` package).
 **Measured with `tools/NotebookRunner --stub` (matplotlib replaced by a no-op stub): tier A lessons 01–30 — 29 / 30 run every cell;**
 lesson 03's only failure is the stub's `axes[1:]` slicing. Report: [NOTEBOOKS_RUN.md](NOTEBOOKS_RUN.md).
 
-### Phase 5 — `NDSharp.Plot` + `PySharp.Matplotlib`
-- [ ] Figure/Axes model; `plt.subplots/figure/imshow/show/title/axis/tight_layout/suptitle`
-- [ ] `plot/scatter/hist/semilogy/stem/axhline/axvline/legend/xlabel…/colorbar/text/arrow/fill_between`
-- [ ] `matplotlib.patches` (Rectangle, Circle), `cm`, `set_aspect/xlim/ylim/ticks`
-- [ ] `plt.show()` → PNG bytes → `display_image` (Phase 3)
-- [ ] **Milestone M1:** lessons 01–04 run end to end in VS Code with images shown
+### Phase 5 — `NDSharp.Plot` + `PySharp.Matplotlib`  ✅ (2026-10-02)
+- [x] Figure/Axes model; `plt.subplots/figure/subplot/gca/imshow/show/title/axis/tight_layout/suptitle/savefig/close`
+- [x] `plot/scatter/bar/barh/hist/semilogy/stem/errorbar/axhline/axvline/legend/xlabel…/colorbar/text/annotate/arrow/fill_between/contour/contourf`
+- [x] `matplotlib.patches` (Rectangle, Circle, Ellipse, Polygon, FancyArrow), `cm` (56 LUTs generated from real matplotlib), `colors`, `gridspec`,
+      `set_aspect/xlim/ylim/ticks/tick_params/grid`, `mpl_toolkits.mplot3d` basics (`projection='3d'`, plot/scatter/text, `Poly3DCollection`, `view_init`)
+- [x] `plt.show()` and the end of every kernel cell render open figures to PNG → `IKernelOutputSink.WriteImage` (inline-backend behaviour)
+- [x] **Milestone M1** (and M2 for rendering): lessons 01–30 run every cell with real rendering — see [NOTEBOOKS_RUN.md](NOTEBOOKS_RUN.md)
+
+Design: `NDSharp.Plot` is a SkiaSharp-rendered figure model (no Python dependency; DejaVu Sans embedded). It ports the parts of matplotlib that decide
+*where things go*: `MaxNLocator`/`AutoLocator` tick placement (incl. the contour locator's finer steps), `ScalarFormatter` labels, margins and sticky
+edges, `GridSpec` cell maths, colorbar axes (`make_axes_gridspec` split: fraction 0.15, pad 0.05, box aspect 20), `tight_layout`
+(`_auto_adjust_subplotpars`) and mplot3d's world/view/perspective matrices. Verified numerically against real matplotlib 3.11.2
+(`src/PySharp.Tests/Oracle/matplotlib`): tick positions/labels, limits, colormap LUT values, subplot positions (within ~1 px), hist counts, artist counts.
+
+**Known divergences (Phase 5):** pixels are not identical to Agg (no hinting, different antialiasing; layout agrees to ~1 px); text metrics differ by
+≤ 1 px so `tight_layout` margins can differ in the third decimal; the axis *offset* text (`+1.234e3`) is not implemented (only the `×10ⁿ` scale);
+`twinx/twiny`, `pcolormesh`, `plot_surface`, `savefig` to PDF/SVG, mathtext beyond Greek letters/sub-superscripts, and 3-D pane/tick placement
+are approximations or missing; unknown keyword arguments are ignored silently.
 
 ### Phase 6 — Tier A completion, in blocks (each block = a milestone; probe the whole block)
 - [ ] 05–10 (moments, eigen, distance, geometry, warping, convolution) — `filter2D/warpAffine/moments/
