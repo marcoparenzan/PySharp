@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="NDSharp/NDSharp.csproj" />
+  <Project Path="NDSharp.Tests/NDSharp.Tests.csproj" />
   <Project Path="PySharpLib/PySharpLib.csproj" />
   <Project Path="PipSharpLib/PipSharpLib.csproj" />
   <Project Path="PySharp/PySharp.csproj" />

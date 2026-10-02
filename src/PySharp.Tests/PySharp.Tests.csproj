@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PipSharpLib\PipSharpLib.csproj" />
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
     <ProjectReference Include="..\PySharpLib.Sqlite3\PySharpLib.Sqlite3.csproj" />
     <ProjectReference Include="..\PySharpLib.Pyodbc\PySharpLib.Pyodbc.csproj" />
     <ProjectReference Include="..\PySharpLib.Psycopg2\PySharpLib.Psycopg2.csproj" />
@@ -30,6 +31,8 @@
   <ItemGroup>
     <!-- Corpus di snippet (RustPython, MIT) copiato accanto ai test -->
     <None Include="Corpus\snippets\**\*.py" CopyToOutputDirectory="PreserveNewest" LinkBase="Corpus\snippets" />
+    <!-- Golden-output snippets produced against real CPython+numpy (tools/oracle) -->
+    <None Include="Oracle\**\*.py;Oracle\**\*.expected" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -64,11 +64,11 @@ public sealed class PackageInstaller
         }
         if (wheel is null)
         {
-            // numpy specifically: point at this project's own real, if partial, in-tree shim
+            // numpy specifically: point at this project's own numpy module (a binding over NDSharp)
             // (see NUMPY_PLAN.md) rather than leaving the user to guess why a compiled-C-extension
             // package can never have a pure wheel to begin with.
             string hint = string.Equals(name, "numpy", StringComparison.OrdinalIgnoreCase)
-                ? " numpy is a C extension; use PySharp's built-in numpy shim (`import numpy`) instead."
+                ? " numpy is a C extension; use PySharp's own numpy module (the PySharp.Numpy package, backed by the native NDSharp library; `import numpy`) instead."
                 : "";
             throw new InvalidOperationException(
                 $"No pure-python wheel (py3-none-any) found for {name} {resolvedVersion}. " +

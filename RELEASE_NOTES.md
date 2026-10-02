@@ -376,3 +376,27 @@ though only `PySharp.Interpreter`'s own dependency contract actually changed.
 - **Runtime**: .NET 10 (`net10.0`).
 - **Target language version**: a subset of Python 3.12.
 - **paho-mqtt**: pinned to 2.1.0, MQTT 3.1.1 to IoT Hub.
+
+---
+
+## v2.1.0 — 2026-10-02
+
+**numpy moves out of the interpreter into a native .NET library** — scenario 13 (running the cvintro
+course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
+
+- New package **`NDSharp`** (`src/NDSharp`, no Python dependency): typed n-dimensional arrays with numpy
+  semantics — 12 dtypes and numpy's exact promotion table (NEP 50 weak Python scalars), strided views,
+  broadcasting, ufuncs, multi-axis reductions with numpy's pairwise float summation, advanced indexing,
+  batched `matmul`, and a port of numpy's `arrayprint` (`repr`/`str`).
+- New package **`PySharp.Numpy`** (`src/PySharpLib.Numpy`): the Python-facing binding (`ndarray`, `dtype`,
+  numpy scalar types, in-place operators, numpy exception classes). Opt-in, like the DB companions:
+  `NumpyRegistration.Register(importer)`. **Breaking:** `numpy` is no longer built into `PySharp.Interpreter`.
+- The old shim (boxed elements, `double`-only arithmetic, 3 dtypes) is removed. Behavior changes that follow
+  from being faithful to numpy 2.x: whole-column array printing, `np.arange(5)` is `int64`, `int` literals no
+  longer widen `uint8` arrays, `float(arr)` needs a 0-d array, `np.exp` of ints is float64, errors are
+  `AxisError`/`UFuncTypeError`.
+- PySharpLib gained three small generic hooks: `PyInstance.Native`, `IPyNumberLike` (numpy scalars work
+  where `int`/`float` are expected) and `PyClass.InstanceCheck`.
+- Verification: 261 NDSharp tests and 126 golden snippets, all with expected output produced by real
+  CPython + numpy 2.5.3 (`tools/oracle`).
+

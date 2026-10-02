@@ -975,6 +975,8 @@ public static class BuiltinsFactory
             case PyTuple t:
                 return t.Items.Any(x => IsInstance(obj, x));
             case PyClass cls:
+                if (cls.InstanceCheck is { } hostCheck && hostCheck(obj))
+                    return true;
                 if (cls.Dict.TryGet("__protocol_attrs__", out var protoAttrs) && protoAttrs is PyList protoNames)
                     return obj is PyInstance protoInst
                         ? protoNames.Items.All(n => protoInst.Class.TryLookup((string)n, out _))

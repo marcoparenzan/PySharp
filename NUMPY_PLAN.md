@@ -1,5 +1,9 @@
 # NumPy support — a long, step-by-step plan
 
+> **Superseded (2026-10-02):** the numpy shim described here was replaced by the native **NDSharp** library
+> plus the thin `PySharp.Numpy` binding — see [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) Phase 1. This file stays
+> as the historical plan of the shim; its 12 phases map onto NDSharp features that all exist now.
+
 **Goal.** Provide a usable `numpy` in PySharp by shipping a **C# `numpy`-shaped shim** (a native
 module), *not* by loading the real numpy. Real numpy is a CPython **C extension** compiled against the
 C-API; a Python-in-C# interpreter cannot load its `.pyd`/`.so` binaries. This is a structural wall

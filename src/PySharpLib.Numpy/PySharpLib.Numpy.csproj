@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\NDSharp\NDSharp.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the numpy module, as a thin Python-facing binding over the native
+         NDSharp array library. Opt-in companion to PySharp.Interpreter. -->
+    <PackageId>PySharp.Numpy</PackageId>
+    <Version>2.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PySharp's numpy module — a Python binding over the native .NET NDSharp array library (not real numpy). Opt-in companion to PySharp.Interpreter.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;numpy;ndarray;pysharp;ndsharp</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

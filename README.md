@@ -496,12 +496,13 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   full probe-driven log.
 - **Pure PyPI packages**: any `py3-none-any` wheel without compiled extensions (e.g. paho-mqtt,
   pydantic v1).
-- **numpy**: a real C# shim (not the real numpy, which is a compiled C extension a from-scratch
-  interpreter cannot load — see [NUMPY.md](NUMPY.md)) — construction, `float64`/`int64`/`bool`
-  dtypes with real arithmetic promotion, indexing/slicing as real strided views, broadcasting,
-  reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`),
-  `np.random`, and a two-way .NET array interop bridge. See [NUMPY_PLAN.md](NUMPY_PLAN.md)'s full
-  12-phase plan (all phases done) and ROADMAP.md scenario 12.
+- **numpy**: the opt-in `PySharp.Numpy` companion — a thin Python binding over **NDSharp**, a native
+  .NET n-dimensional array library with numpy semantics (not the real numpy, a compiled C extension a
+  from-scratch interpreter cannot load — see [NUMPY.md](NUMPY.md)). 12 dtypes with numpy's promotion table
+  (`uint8` wrap-around, `float32`, ...), strided views, broadcasting, ufuncs, reductions, advanced
+  indexing, `matmul`, numpy-faithful `repr`, and a .NET array interop bridge. Verified against real
+  numpy 2.5.3 with golden outputs. Register it with `NumpyRegistration.Register(engine.Importer)` (the
+  `pysharp` CLI and the JupyterNet kernel already do). See [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
   `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both

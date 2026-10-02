@@ -22,6 +22,7 @@ public sealed class PySharpKernel : IKernel
     public PySharpKernel()
     {
         _engine = new PyEngine(_stdout);
+        PySharpLib.Numpy.NumpyRegistration.Register(_engine.Importer);
     }
 
     public Task ExecuteAsync(string code, IKernelOutputSink sink, CancellationToken cancellationToken)

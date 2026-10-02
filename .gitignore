@@ -438,3 +438,5 @@ config.json
 # `pysharp install <pkg>`/`dotnet run -- install`, and the vendored samples/src copies), without
 # untracking the vendored paho-mqtt files already committed under samples/ and src/.
 site-packages/
+
+tools/oracle/.venv/

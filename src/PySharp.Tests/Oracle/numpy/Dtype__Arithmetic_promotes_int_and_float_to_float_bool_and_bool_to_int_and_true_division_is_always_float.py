@@ -1,0 +1,12 @@
+import numpy as np
+ints = np.array([1, 2, 3])
+floats = np.array([1.5, 2.5, 3.5])
+print(str(ints + floats))
+print((ints + floats).dtype.name)
+bools = np.array([True, True, False])
+print((bools + bools).dtype.name)
+print(str(bools + bools))
+print((ints + 2).dtype.name)
+print(str(ints + 2))
+print((ints / 2).dtype.name)
+print(str(ints / 2))

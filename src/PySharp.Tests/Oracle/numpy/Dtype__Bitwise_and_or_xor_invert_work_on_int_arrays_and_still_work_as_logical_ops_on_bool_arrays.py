@@ -1,0 +1,11 @@
+import numpy as np
+x = np.array([0b1010, 0b1100])
+y = np.array([0b0110, 0b1010])
+print(str(x & y))
+print(str(x | y))
+print(str(x ^ y))
+print(str(~np.array([0, 1, -1])))
+mtrue = np.array([True, True, False])
+mfalse = np.array([True, False, False])
+print(str(mtrue & mfalse))
+print((mtrue & mfalse).dtype.name)

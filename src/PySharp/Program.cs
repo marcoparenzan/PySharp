@@ -45,6 +45,7 @@ internal static class Host
         PySharpLib.Sqlite3.Sqlite3Registration.Register(engine.Importer);
         PySharpLib.Pyodbc.PyodbcRegistration.Register(engine.Importer);
         PySharpLib.Psycopg2.Psycopg2Registration.Register(engine.Importer);
+        PySharpLib.Numpy.NumpyRegistration.Register(engine.Importer);
         string site = SitePackagesDir();
         if (Directory.Exists(site))
             engine.Importer.SearchPaths.Add(site);

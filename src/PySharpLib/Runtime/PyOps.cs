@@ -105,6 +105,7 @@ public static class PyOps
     {
         BigInteger i => i,
         bool b => b ? BigInteger.One : BigInteger.Zero,
+        PyInstance { Native: IPyNumberLike n } when n.TryAsBigInt(out var nv) => nv,
         // IntEnum members: the value attribute is the underlying integer
         PyInstance inst when inst.Dict.TryGet("value", out var v) && v is BigInteger ev => ev,
         _ => throw PyErr.TypeError($"{what}: expected int, got {TypeName(o)}"),
@@ -115,6 +116,7 @@ public static class PyOps
         double d => d,
         BigInteger i => (double)i,
         bool b => b ? 1.0 : 0.0,
+        PyInstance { Native: IPyNumberLike n } when n.TryAsDouble(out var nd) => nd,
         PyInstance inst when inst.Dict.TryGet("value", out var v) && v is BigInteger ev => (double)ev,
         _ => throw PyErr.TypeError($"expected number, got {TypeName(o)}"),
     };
@@ -123,6 +125,7 @@ public static class PyOps
     public static int SeqIndex(object index, int len, string typeName)
     {
         var bi = index is bool b ? (b ? BigInteger.One : BigInteger.Zero)
+            : index is PyInstance { Native: IPyNumberLike nl } && nl.TryAsBigInt(out var nlv) ? nlv
             : index as BigInteger? ?? throw PyErr.TypeError(
                 $"{typeName} indices must be integers, not {TypeName(index)}");
         var i = (int)bi;

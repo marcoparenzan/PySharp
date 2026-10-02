@@ -22,6 +22,11 @@ public sealed class PyClass
     /// </summary>
     public PyClass? Metaclass { get; set; }
 
+    /// <summary>Optional host hook letting a natively-backed class claim values that are not
+    /// <see cref="PyInstance"/>s for `isinstance` (e.g. numpy's `floating`/`integer` classes claim the
+    /// plain Python float/int values numpy results are represented as).</summary>
+    public Func<object, bool>? InstanceCheck { get; set; }
+
     /// <summary>
     /// Classes registered as virtual subclasses via real <c>abc.ABC.register()</c> (e.g.
     /// <c>os.PathLike.register(pathlib.Path)</c>) — recognized by isinstance/issubclass without
@@ -182,7 +187,25 @@ public sealed class PyInstance
     /// column/table/identifier names throughout the ORM and SQL-compiler pipeline.</summary>
     public string? StrValue { get; set; }
 
+    /// <summary>Host payload for instances of natively-backed classes (e.g. the NDSharp array behind a
+    /// numpy `ndarray`). Keeps the payload out of <see cref="Dict"/> (and so out of `__dict__`/`vars()`).
+    /// If it implements <see cref="IPyNumberLike"/>, the instance is accepted wherever a Python
+    /// int/float is required (indexing, `range()`, `math.*`, ...).</summary>
+    public object? Native { get; set; }
+
     public PyInstance(PyClass cls) => Class = cls;
 
     public override string ToString() => $"<{Class.Name} object>";
+}
+
+/// <summary>Implemented by <see cref="PyInstance.Native"/> payloads that stand for a number (numpy
+/// scalars): lets <see cref="PyOps.AsBigInt"/>/<see cref="PyOps.AsDouble"/> accept the instance,
+/// like Python's <c>__index__</c>/<c>__float__</c>.</summary>
+public interface IPyNumberLike
+{
+    /// <summary>The value as a Python int, if it is integral (bool counts); false for floats.</summary>
+    bool TryAsBigInt(out System.Numerics.BigInteger value);
+
+    /// <summary>The value as a Python float.</summary>
+    bool TryAsDouble(out double value);
 }

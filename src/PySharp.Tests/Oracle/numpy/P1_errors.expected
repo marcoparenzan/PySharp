@@ -1,0 +1,17 @@
+ValueError: operands could not be broadcast together with shapes (2,3) (4,) 
+ValueError: cannot reshape array of size 6 into shape (4,2)
+ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (2,) + inhomogeneous part.
+IndexError: index 2 is out of bounds for axis 0 with size 2
+IndexError: index 5 is out of bounds for axis 0 with size 3
+ValueError: matmul: Input operand 1 has a mismatch in its core dimension 0, with gufunc signature (n?,k),(k,m?)->(n?,m?) (size 3 is different from 2)
+AxisError: axis 1 is out of bounds for array of dimension 1
+OverflowError: Python integer 300 out of bounds for uint8
+TypeError: numpy boolean subtract, the `-` operator, is not supported, use the bitwise_xor, the `^` operator, or the logical_xor function instead.
+ValueError: all the input array dimensions except for the concatenation axis must match exactly, but along dimension 1, the array at index 0 has size 2 and the array at index 1 has size 3
+ValueError: zero-size array to reduction operation maximum which has no identity
+TypeError: only 0-dimensional arrays can be converted to Python scalars
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+TypeError: len() of unsized object
+ValueError: all input arrays must have the same shape
+ValueError: can only specify one unknown dimension
+ValueError: Integers to negative integer powers are not allowed.

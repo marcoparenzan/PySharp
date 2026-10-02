@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CS8981</NoWarn>
+
+    <!-- NuGet package metadata: a native .NET n-dimensional array library (numpy semantics),
+         with no Python dependency. PySharp.Numpy binds it to the PySharp interpreter. -->
+    <PackageId>NDSharp</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>NDSharp — a native .NET n-dimensional array library with numpy semantics (typed dtypes, strided views, broadcasting, ufuncs, reductions, linalg). No Python dependency.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>ndarray;numpy;numerics;array;tensor;dotnet</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

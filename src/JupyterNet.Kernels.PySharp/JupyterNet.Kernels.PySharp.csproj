@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
   </ItemGroup>
 
 </Project>

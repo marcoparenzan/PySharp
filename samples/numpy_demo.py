@@ -3,7 +3,7 @@
 # Licensed under the MIT License. See the LICENSE file in the project
 # root for full license information.
 
-# numpy_demo.py — a realistic numpy session, driven end-to-end by PySharp.
+# numpy_demo.py — a realistic numpy session, driven end-to-end by PySharp (PySharp.Numpy over NDSharp).
 #
 # See NUMPY_PLAN.md for the full phased plan. `numpy` here is a real C# `numpy`-shaped shim over
 # this repo's own `ndarray` type (real numpy is a compiled CPython C extension a from-scratch

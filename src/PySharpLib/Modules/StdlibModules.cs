@@ -126,10 +126,8 @@ public static class StdlibModules
         importer.RegisterBuiltin("ast", _ => AstModule.Create());
         importer.RegisterBuiltin("numbers", _ => NumbersModule.Create());
         importer.RegisterBuiltin("heapq", _ => HeapqModule.Create());
-        importer.RegisterBuiltin("numpy", _ => NumpyModule.Create());
-        // Same `os.path` pattern: `numpy.linalg` is reachable both as an attribute after `import
-        // numpy` and directly via `import numpy.linalg`/`from numpy.linalg import norm`.
-        importer.RegisterBuiltin("numpy.linalg", _ => (PyModule)NumpyModule.Create().Dict["linalg"]);
+        // numpy is no longer built in: it lives in the opt-in PySharp.Numpy companion (a binding over the
+        // native NDSharp array library) — call `NumpyRegistration.Register(importer)` to enable it.
         importer.RegisterBuiltin("importlib.metadata", _ => ImportlibMetadataModule.Create(importer));
         importer.RegisterBuiltin("zipfile", _ => ZipfileModule.Create());
         importer.RegisterBuiltin("calendar", _ => CalendarModule.Create());

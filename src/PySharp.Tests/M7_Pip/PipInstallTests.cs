@@ -63,7 +63,7 @@ public class PipInstallTests : IClassFixture<PahoInstallFixture>
         var installer = new PackageInstaller(sitePackages, TextWriter.Null);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallAsync("numpy"));
         Assert.Contains("No pure-python wheel", ex.Message);
-        Assert.Contains("PySharp's built-in numpy shim", ex.Message);
+        Assert.Contains("PySharp's own numpy module", ex.Message);
     }
 }
 
