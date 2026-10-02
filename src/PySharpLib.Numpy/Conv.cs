@@ -5,6 +5,7 @@
 
 using System.Numerics;
 using NDSharp;
+using PySharpLib.Builtins;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Numpy;
@@ -72,6 +73,7 @@ internal static class Conv
             DType.Float64 => (double)v,
             DType.Int64 => new BigInteger((long)v),
             DType.Bool => (bool)v,
+            DType.Complex128 => ComplexType.Make((Complex)v),
             _ => new PyInstance(Classes.ScalarClass(a.DType)) { Native = new ScalarBox(a.Ndim == 0 ? a.Copy() : a) },
         };
     }
@@ -81,6 +83,7 @@ internal static class Conv
     {
         bool b => b,
         double d => d,
+        Complex c => ComplexType.Make(c),
         float f => (double)f,
         Half h => (double)h,
         sbyte x => new BigInteger(x),
@@ -120,6 +123,8 @@ internal static class Conv
                 else throw new NDOverflowException($"Python int too large to convert to C long");
                 return true;
             case double d: nd = NDArray.WeakScalar(d); return true;
+            case PyInstance ci when ci.Class == ComplexType.ComplexClass && ci.Dict.TryGet("__value__", out var cv) && cv is Complex cc:
+                nd = NDArray.WeakScalar(cc); return true;
             case PyList or PyTuple: nd = FromSequence(o, null); return true;
             case ClrObject { Instance: Array arr }: nd = FromClrArray(arr); return true;
             default: nd = null!; return false;
@@ -275,6 +280,7 @@ internal static class Conv
             case PyInstance { Native: DTypeBox box }: return box.Value;
             case PyClass cls when Classes.TryDTypeOfClass(cls, out var dt): return dt;
             case string s: return DTypes.TryFromName(s, out var d) ? d : throw PyErr.TypeError($"data type '{s}' not understood");
+            case PyClass c when c == ComplexType.ComplexClass: return DType.Complex128;
             case PyBuiltinFunction { Name: "float" }: return DType.Float64;
             case PyBuiltinFunction { Name: "int" }: return DType.Int64;
             case PyBuiltinFunction { Name: "bool" }: return DType.Bool;

@@ -400,3 +400,13 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 - Verification: 261 NDSharp tests and 126 golden snippets, all with expected output produced by real
   CPython + numpy 2.5.3 (`tools/oracle`).
 
+### v2.1.0 (continued) — numpy Phase 2: the rest of the surface the cvintro notebooks use
+
+- `numpy.random.default_rng` is **bit-identical to numpy** (PCG64 + SeedSequence, Lemire bounded integers,
+  Floyd/shuffle exactly as numpy), including `uint8`/`int32` integer draws with numpy's buffering.
+- New: `sort/argsort/unique/bincount/median/percentile/diff/gradient/cross/convolve/cov/corrcoef`, `mgrid`, `s_`,
+  ufunc `.at/.reduce/.accumulate/.outer`, `numpy.linalg` (`inv/solve/det/eigh/svd/lstsq/pinv/matrix_rank`),
+  `complex64`/`complex128` and `numpy.fft`.
+- Interpreter: imaginary literals (`1j`, `2.5J`) now lex and parse.
+- All new behavior is verified against real numpy 2.5.3: NDSharp 291 tests, 5 new golden snippet files.
+

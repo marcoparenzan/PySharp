@@ -1296,6 +1296,15 @@ public sealed class Parser
         string text = t.Text.Replace("_", "");
         try
         {
+            if (text.EndsWith('j') || text.EndsWith('J'))
+            {
+                // Imaginary literal: desugars to complex(0.0, value) — evaluated through the builtin class.
+                double imag = double.Parse(text[..^1], CultureInfo.InvariantCulture);
+                var zero = new CallArg(null, new FloatLit(0.0) { Line = t.Line, Col = t.Column }, false, false);
+                var im = new CallArg(null, new FloatLit(imag) { Line = t.Line, Col = t.Column }, false, false);
+                return new CallExpr(new NameExpr("complex") { Line = t.Line, Col = t.Column }, new List<CallArg> { zero, im })
+                    { Line = t.Line, Col = t.Column };
+            }
             if (text.StartsWith("0x") || text.StartsWith("0X"))
                 return new IntLit(ParseBigIntBase(text[2..], 16)) { Line = t.Line, Col = t.Column };
             if (text.StartsWith("0o") || text.StartsWith("0O"))

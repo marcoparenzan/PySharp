@@ -1,0 +1,40 @@
+import numpy as np
+a = np.array([[4.0, 7.0], [2.0, 6.0]])
+print(np.linalg.inv(a))
+print(np.allclose(np.linalg.inv(a) @ a, np.eye(2)))
+print(np.linalg.det(a), np.linalg.det(np.array([[1, 2], [3, 4]])), np.linalg.det(np.eye(3)), np.linalg.det(np.array([[1.0, 2.0], [2.0, 4.0]])))
+print(*np.linalg.slogdet(np.array([[1.0, 2.0], [3.0, 4.0]])))
+b = np.array([[3.0, 1.0, 2.0], [1.0, 5.0, 1.0], [2.0, 1.0, 4.0]])
+print(np.linalg.solve(b, np.array([1.0, 2.0, 3.0])), np.linalg.solve(b, np.eye(3)))
+print(np.linalg.inv(np.array([[1, 2], [3, 4]])), np.linalg.inv(np.array([[1, 2], [3, 4]], dtype=np.float32)).dtype)
+print(np.linalg.det(np.arange(9.0).reshape(3, 3) + np.eye(3)), np.linalg.det(np.stack([a, a * 2])))
+try:
+    np.linalg.inv(np.array([[1.0, 2.0], [2.0, 4.0]]))
+except np.linalg.LinAlgError as e:
+    print("LinAlgError:", e)
+try:
+    np.linalg.solve(np.zeros((2, 2)), np.ones(2))
+except np.linalg.LinAlgError as e:
+    print("LinAlgError:", e)
+
+w, v = np.linalg.eigh(b)
+print(w)
+print(np.round(np.abs(v), 6))
+print(np.allclose(b @ v, v * w), np.allclose(v.T @ v, np.eye(3)))
+print(np.linalg.eigvalsh(np.array([[2.0, 1.0], [1.0, 2.0]])))
+m = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+u, s, vt = np.linalg.svd(m)
+print(u.shape, s, vt.shape)
+print(np.round(s, 10), np.allclose(u[:, :2] * s @ vt, m))
+u, s, vt = np.linalg.svd(m, full_matrices=False)
+print(u.shape, vt.shape, np.allclose((u * s) @ vt, m), np.round(np.abs(vt), 6))
+print(np.linalg.svd(m.T)[0].shape, np.linalg.svd(m.T)[2].shape, np.linalg.svd(m, compute_uv=False))
+print(np.linalg.matrix_rank(np.array([[1.0, 2.0], [2.0, 4.0]])), np.linalg.matrix_rank(np.eye(3)))
+
+x = np.array([[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [1.0, 4.0]])
+y = np.array([6.0, 5.0, 7.0, 10.0])
+sol, res, rank, sv = np.linalg.lstsq(x, y, rcond=None)
+print(sol, res, rank, sv)
+print(np.linalg.lstsq(x, np.stack([y, y * 2], axis=1), rcond=None)[0])
+print(np.linalg.lstsq(np.array([[1.0, 2.0], [2.0, 4.0]]), np.array([1.0, 2.0]), rcond=None)[0])
+print(np.linalg.pinv(m), np.linalg.norm(m, 2) if False else 0)

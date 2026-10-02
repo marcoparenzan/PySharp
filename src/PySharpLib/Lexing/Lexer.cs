@@ -245,6 +245,10 @@ public sealed class Lexer
             }
         }
 
+        // Imaginary literal: 1j, 2.5J, 1e3j
+        if (!AtEnd && Peek is 'j' or 'J' && !IsIdentPart(PeekAt(1)) && !(_src[start] == '0' && start + 1 < _pos && _src[start + 1] is 'x' or 'X' or 'o' or 'O' or 'b' or 'B'))
+            Advance();
+
         _tokens.Add(new Token(TokenKind.Number, _src[start.._pos], startLine, startCol));
     }
 

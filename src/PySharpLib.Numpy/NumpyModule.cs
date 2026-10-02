@@ -35,6 +35,8 @@ public static class NumpyModule
         m.Dict["NAN"] = double.NaN;
         m.Dict["euler_gamma"] = 0.5772156649015329;
         m.Dict["newaxis"] = PyNone.Instance;
+        m.Dict["mgrid"] = GridObjects.MGrid;
+        m.Dict["s_"] = GridObjects.IndexExpression;
 
         // Classes
         m.Dict["ndarray"] = Classes.NdArray;
@@ -46,6 +48,7 @@ public static class NumpyModule
         m.Dict["unsignedinteger"] = Classes.UnsignedInteger;
         m.Dict["inexact"] = Classes.Inexact;
         m.Dict["floating"] = Classes.Floating;
+        m.Dict["complexfloating"] = Classes.ComplexFloating;
 
         foreach (var dt in DTypes.All)
             m.Dict[dt == DType.Bool ? "bool_" : dt.Name()] = Classes.ScalarClass(dt);
@@ -56,21 +59,16 @@ public static class NumpyModule
             ("intc", DType.Int32), ("uintc", DType.UInt32), ("byte", DType.Int8), ("ubyte", DType.UInt8),
             ("short", DType.Int16), ("ushort", DType.UInt16), ("longlong", DType.Int64), ("ulonglong", DType.UInt64),
             ("half", DType.Float16), ("single", DType.Float32), ("double", DType.Float64), ("float_", DType.Float64),
+            ("csingle", DType.Complex64), ("cdouble", DType.Complex128), ("complex_", DType.Complex128),
         })
             m.Dict[alias] = Classes.ScalarClass(dt);
 
         m.Dict["linalg"] = BuildLinalg();
         m.Dict["random"] = NumpyRandom.Create();
-        m.Dict["fft"] = new PyModule("numpy.fft");
+        m.Dict["fft"] = NumpyFft.Create();
         m.Dict["exceptions"] = NumpyErrors.CreateModule();
         return m;
     }
 
-    private static PyModule BuildLinalg()
-    {
-        var m = new PyModule("numpy.linalg");
-        m.Dict["norm"] = NumpyFunctions.All["norm"];
-        m.Dict["LinAlgError"] = NumpyErrors.LinAlgError;
-        return m;
-    }
+    private static PyModule BuildLinalg() => NumpyLinalg.Create();
 }

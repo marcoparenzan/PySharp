@@ -157,18 +157,31 @@ binding passed them.
   kernels differ in the last ulp (seen: `np.exp(np.float32(2))`).
 - `numpy.random` is not bit-compatible yet (Phase 2).
 
-### Phase 2 — remaining numpy surface for tier A (27 names; `NOTEBOOKS_BASELINE.md` is the live list)
-Done in Phase 1: all dtypes, `*_like`, `array_equal/allclose/isclose`, `meshgrid`, `tile/roll/pad`,
-`fliplr/flipud`, `diag/diagonal/fill_diagonal`, `arctan2/degrees/radians/hypot/log1p/log2`, `nonzero`,
-`count_nonzero`, `outer`, `broadcast_to`. Still missing:
-- [ ] **`random.default_rng` + PCG64** (and `RandomState`/MT19937 for `np.random.seed`) — bit-compatible
-      streams (88 uses; seeds drive every figure); verify against the oracle
-- [ ] `mgrid`/`s_`/`real`, `add.at`
-- [ ] stats/sets: `cov`, `corrcoef`, `median`, `percentile`, `unique`, `bincount`, `unravel_index`, `diff`,
-      `gradient`, `convolve`, `cross`
-- [ ] `linalg`: `inv`, `solve`, `det`, `eigh`, `svd`, `lstsq` (+ `LinAlgError`); matrix `norm(ord=2)`
-- [ ] `fft`: `fft`, `fft2`, `ifft2`, `fftshift`, `ifftshift` (needs a complex dtype)
-- [ ] Probe shows **0 missing `np.*`** for lessons 01–30
+### Phase 2 — remaining numpy surface for tier A  ✅ (2026-10-02)
+- [x] **`random.default_rng`** (SeedSequence + PCG64 + Generator): bit-identical to numpy for `random`, `uniform`,
+      `integers` (all widths, Lemire with numpy's 32-bit buffering), `choice` (incl. Floyd's algorithm),
+      `permutation`, `shuffle`, and to 1e-12 for `normal`/`standard_normal` (ziggurat tables recomputed, not copied);
+      30 tests against `Fixtures/rng_cases.json` + golden snippet `P2_default_rng`
+- [x] `mgrid`/`s_`/`real`/`imag`/`angle`/`conj`, ufunc methods `.at`/`.reduce`/`.accumulate`/`.outer`
+- [x] `sort`/`argsort`/`unique`/`bincount`/`unravel_index`/`median`/`percentile`/`quantile`/`diff`/`gradient`/
+      `cross`/`convolve`/`cov`/`corrcoef`/`take` (golden snippet `P2_stats_sets`)
+- [x] `linalg`: `inv`, `solve`, `det` (numpy's `sign*exp(sum(log|u|))` formula), `slogdet`, `eigh`, `eigvalsh`,
+      `svd`, `lstsq`, `matrix_rank`, `pinv`, `LinAlgError` (golden snippet `P2_linalg`)
+- [x] **complex dtypes** `complex64`/`complex128` through the whole stack (promotion table checked for 196 dtype
+      pairs, casting, arithmetic, `abs/angle/conj/exp/sqrt/...`, sum/mean, indexing, printing) and **`numpy.fft`**
+      (`fft/ifft/fft2/ifft2/fftn/ifftn/rfft/irfft/fftshift/ifftshift/fftfreq/rfftfreq`, `norm=`; golden `P2_complex_fft`)
+- [x] interpreter: imaginary literals (`2j`) in the lexer/parser
+- [x] **Probe: 0 missing `np.*` names on every notebook** (was 58)
+- [ ] still open, deliberately small: `Generator.multivariate_normal` (1 use; needs a sign-compatible SVD),
+      `choice(p=...)`, `RandomState`/MT19937 for legacy `np.random.seed` (no notebook uses it), `unique(axis=)`
+
+**Known divergences added in Phase 2:**
+- `eigh`/`svd` use Jacobi methods: eigen/singular **values** match numpy, vector **signs** can differ from LAPACK's
+  (`U`, `Vt`, eigenvectors are equal up to a sign per column; outputs are verified sign-independently).
+- FFT: results agree with numpy to ~1e-15 but not bit for bit (pocketfft's exact operation order); zero imaginary
+  parts of real-input transforms are exact, but the *sign* of a zero (`-0.j`) can differ.
+- `inv`/`solve` rounding noise (e.g. `inv(a) @ a` off-diagonals) differs from OpenBLAS (FMA, blocking).
+- `argsort` is stable (numpy's quicksort is not, only ties can differ); `float32` `exp/sin/...` ulp-level.
 
 ### Phase 3 — Image output in JupyterNet
 - [ ] `IKernelOutputSink.WriteImage(string mime, byte[] data)` (abstractions + protocol message +

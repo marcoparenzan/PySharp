@@ -7,7 +7,7 @@ namespace NDSharp;
 
 /// <summary>The element types an <see cref="NDArray"/> can hold. Mirrors numpy's fixed-width
 /// scalar dtypes (<c>bool</c>, <c>int8..int64</c>, <c>uint8..uint64</c>, <c>float16/32/64</c>).
-/// Complex dtypes are reserved for the fft work (NOTEBOOKS_PLAN.md Phase 2).</summary>
+/// <c>complex64</c>/<c>complex128</c> are stored as <see cref="System.Numerics.Complex"/> (complex64 rounds to single precision after every operation).</summary>
 public enum DType : byte
 {
     Bool,
@@ -22,6 +22,8 @@ public enum DType : byte
     Float16,
     Float32,
     Float64,
+    Complex64,
+    Complex128,
 }
 
 /// <summary>Static facts about <see cref="DType"/>s and numpy's type-promotion rules.</summary>
@@ -34,7 +36,7 @@ public static class DTypes
     private static readonly DType[] PromotionOrder =
     {
         DType.Bool, DType.UInt8, DType.Int8, DType.UInt16, DType.Int16, DType.UInt32, DType.Int32,
-        DType.UInt64, DType.Int64, DType.Float16, DType.Float32, DType.Float64,
+        DType.UInt64, DType.Int64, DType.Float16, DType.Float32, DType.Float64, DType.Complex64, DType.Complex128,
     };
 
     public static readonly IReadOnlyList<DType> All = PromotionOrder;
@@ -53,6 +55,8 @@ public static class DTypes
         DType.Float16 => "float16",
         DType.Float32 => "float32",
         DType.Float64 => "float64",
+        DType.Complex64 => "complex64",
+        DType.Complex128 => "complex128",
         _ => throw new NDNotSupportedException($"unknown dtype {d}"),
     };
 
@@ -62,6 +66,7 @@ public static class DTypes
         DType.Bool => 'b',
         DType.Int8 or DType.Int16 or DType.Int32 or DType.Int64 => 'i',
         DType.UInt8 or DType.UInt16 or DType.UInt32 or DType.UInt64 => 'u',
+        DType.Complex64 or DType.Complex128 => 'c',
         _ => 'f',
     };
 
@@ -70,13 +75,21 @@ public static class DTypes
         DType.Bool or DType.Int8 or DType.UInt8 => 1,
         DType.Int16 or DType.UInt16 or DType.Float16 => 2,
         DType.Int32 or DType.UInt32 or DType.Float32 => 4,
+        DType.Complex128 => 16,
         _ => 8,
     };
 
     public static bool IsBool(this DType d) => d == DType.Bool;
     public static bool IsFloat(this DType d) => d.Kind() == 'f';
     public static bool IsInteger(this DType d) => d.Kind() is 'i' or 'u';
-    public static bool IsSigned(this DType d) => d.Kind() is 'i' or 'f';
+    public static bool IsSigned(this DType d) => d.Kind() is 'i' or 'f' or 'c';
+    public static bool IsComplex(this DType d) => d.Kind() == 'c';
+
+    /// <summary>The real dtype of a complex dtype's parts (float32 for complex64, float64 for complex128); other dtypes unchanged.</summary>
+    public static DType RealPart(this DType d) => d switch { DType.Complex64 => DType.Float32, DType.Complex128 => DType.Float64, _ => d };
+
+    /// <summary>The complex dtype whose parts have dtype <paramref name="d"/> (float32 and smaller give complex64).</summary>
+    public static DType ComplexOf(this DType d) => d switch { DType.Float64 or DType.Int32 or DType.UInt32 or DType.Int64 or DType.UInt64 or DType.Complex128 => DType.Complex128, _ => DType.Complex64 };
 
     /// <summary>The CLR element type of the backing array.</summary>
     public static Type ClrType(this DType d) => d switch
@@ -93,6 +106,7 @@ public static class DTypes
         DType.Float16 => typeof(Half),
         DType.Float32 => typeof(float),
         DType.Float64 => typeof(double),
+        DType.Complex64 or DType.Complex128 => typeof(System.Numerics.Complex),
         _ => throw new NDNotSupportedException($"unknown dtype {d}"),
     };
 
@@ -110,6 +124,7 @@ public static class DTypes
         if (t == typeof(Half)) return DType.Float16;
         if (t == typeof(float)) return DType.Float32;
         if (t == typeof(double)) return DType.Float64;
+        if (t == typeof(System.Numerics.Complex)) return DType.Complex128;
         throw new NDTypeException($"no NDSharp dtype for CLR type {t.Name}");
     }
 
@@ -135,6 +150,8 @@ public static class DTypes
             "float16" or "f2" or "half" => DType.Float16,
             "float32" or "f4" or "single" => DType.Float32,
             "float64" or "f8" or "float" or "double" or "float_" => DType.Float64,
+            "complex64" or "c8" or "csingle" => DType.Complex64,
+            "complex128" or "c16" or "complex" or "cdouble" => DType.Complex128,
             _ => null,
         };
         dtype = r ?? default;
@@ -149,6 +166,13 @@ public static class DTypes
         if (to == DType.Bool) return false;
         char fk = from.Kind(), tk = to.Kind();
         int fs = from.ItemSize(), ts = to.ItemSize();
+        if (fk == 'c' || tk == 'c')
+        {
+            if (tk != 'c') return false;
+            if (fk == 'c') return ts >= fs;
+            // real -> complex: the parts must hold the real type exactly (complex64 = float32 parts).
+            return to == DType.Complex128 || (fk == 'f' ? fs <= 4 : fs <= 2);
+        }
         return (fk, tk) switch
         {
             ('u', 'u') => ts >= fs,
@@ -185,7 +209,7 @@ public static class DTypes
     /// 16-bit ints float32, wider ints float64.</summary>
     public static DType FloatResult(DType d) => d.Kind() switch
     {
-        'f' => d,
+        'f' or 'c' => d,
         'b' => DType.Float16,
         _ => d.ItemSize() switch { 1 => DType.Float16, 2 => DType.Float32, _ => DType.Float64 },
     };
@@ -201,7 +225,7 @@ public static class DTypes
 
     /// <summary>Dtype for the <c>mean</c> of dtype <paramref name="d"/>: floats stay, everything
     /// else is float64.</summary>
-    public static DType MeanResult(DType d) => d.IsFloat() ? d : DType.Float64;
+    public static DType MeanResult(DType d) => d.IsFloat() || d.IsComplex() ? d : DType.Float64;
 }
 
 /// <summary>numpy's <c>casting=</c> rules for in-place operations and assignment.</summary>
@@ -219,7 +243,7 @@ public enum Casting
 
 public static class CastingRules
 {
-    private static int KindRank(DType d) => d.Kind() switch { 'b' => 0, 'u' => 1, 'i' => 2, _ => 3 };
+    private static int KindRank(DType d) => d.Kind() switch { 'b' => 0, 'u' => 1, 'i' => 2, 'f' => 3, _ => 4 };
 
     /// <summary>numpy <c>can_cast(from, to, casting)</c>.</summary>
     public static bool CanCast(DType from, DType to, Casting casting) => casting switch

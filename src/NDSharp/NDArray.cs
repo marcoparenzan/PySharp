@@ -166,6 +166,7 @@ public sealed partial class NDArray
             DType.Int8 => ((sbyte[])Buffer)[p],
             DType.UInt8 => ((byte[])Buffer)[p],
             DType.Bool => ((bool[])Buffer)[p] ? 1.0 : 0.0,
+            DType.Complex64 or DType.Complex128 => ((System.Numerics.Complex[])Buffer)[p].Real,
             _ => throw new NDNotSupportedException("unsupported buffer"),
         };
     }
@@ -238,6 +239,8 @@ public sealed partial class NDArray
     /// <summary>Weak scalar from a Python-style int (stored as int64, or uint64 when it only fits there).</summary>
     public static NDArray WeakScalar(long v) => Scalar(v).AsWeak();
     public static NDArray WeakScalar(ulong v) => new NDArray(DType.UInt64, new[] { v }, Array.Empty<int>()).AsWeak();
+    /// <summary>Weak scalar from a Python-style complex.</summary>
+    public static NDArray WeakScalar(System.Numerics.Complex v) => new NDArray(DType.Complex128, new[] { v }, Array.Empty<int>()).AsWeak();
     /// <summary>Weak scalar from a Python-style float.</summary>
     public static NDArray WeakScalar(double v) => Scalar(v).AsWeak();
 

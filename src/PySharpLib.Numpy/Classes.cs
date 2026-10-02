@@ -21,6 +21,7 @@ internal static class Classes
     public static readonly PyClass UnsignedInteger;
     public static readonly PyClass Inexact;
     public static readonly PyClass Floating;
+    public static readonly PyClass ComplexFloating;
     public static readonly PyClass DTypeClass = new("dtype", new List<PyClass>());
     public static readonly PyClass NdArray = new("ndarray", new List<PyClass>());
 
@@ -36,6 +37,7 @@ internal static class Classes
         UnsignedInteger = new PyClass("unsignedinteger", new List<PyClass> { Integer });
         Inexact = new PyClass("inexact", new List<PyClass> { Number });
         Floating = new PyClass("floating", new List<PyClass> { Inexact });
+        ComplexFloating = new PyClass("complexfloating", new List<PyClass> { Inexact });
 
         foreach (var dt in DTypes.All)
         {
@@ -44,6 +46,7 @@ internal static class Classes
                 'b' => Generic,
                 'i' => SignedInteger,
                 'u' => UnsignedInteger,
+                'c' => ComplexFloating,
                 _ => Floating,
             };
             var cls = new PyClass(dt.Name(), new List<PyClass> { parent });
@@ -53,18 +56,23 @@ internal static class Classes
 
         // Results of numpy operations that are float64/int64/bool are plain Python values (see
         // Conv.Scalarize), so the numpy scalar classes claim them for isinstance.
-        Generic.InstanceCheck = o => o is bool or BigInteger or double;
-        Number.InstanceCheck = o => o is BigInteger or double;
+        Generic.InstanceCheck = o => o is bool or BigInteger or double || IsPyComplexValue(o);
+        Number.InstanceCheck = o => o is BigInteger or double || IsPyComplexValue(o);
         Integer.InstanceCheck = SignedInteger.InstanceCheck = o => o is BigInteger;
-        Inexact.InstanceCheck = Floating.InstanceCheck = o => o is double;
+        Floating.InstanceCheck = o => o is double;
+        Inexact.InstanceCheck = o => o is double || IsPyComplexValue(o);
         ScalarClasses[DType.Float64].InstanceCheck = o => o is double;
         ScalarClasses[DType.Int64].InstanceCheck = o => o is BigInteger;
         ScalarClasses[DType.Bool].InstanceCheck = o => o is bool;
+        ScalarClasses[DType.Complex128].InstanceCheck = IsPyComplexValue;
+        ComplexFloating.InstanceCheck = IsPyComplexValue;
 
         BuildDTypeClass();
         BuildScalarClasses();
         BuildNdArrayClass();
     }
+
+    private static bool IsPyComplexValue(object o) => o is PyInstance pi && pi.Class == PySharpLib.Builtins.ComplexType.ComplexClass;
 
     public static PyClass ScalarClass(DType dt) => ScalarClasses[dt];
 
@@ -303,8 +311,8 @@ internal static class Classes
             return new PyTuple(d.Strides.Select(x => (object)new BigInteger(x * d.DType.ItemSize())).ToArray());
         });
         cls.Dict["T"] = Native.Prop(s => Conv.Result(np.Transpose(Conv.ND(s))));
-        cls.Dict["real"] = Native.Prop(s => s);
-        cls.Dict["imag"] = Native.Prop(s => Conv.Result(np.ZerosLike(Conv.ND(s))));
+        cls.Dict["real"] = Native.Prop(s => Conv.Result(np.Real(Conv.ND(s))));
+        cls.Dict["imag"] = Native.Prop(s => Conv.Result(np.Imag(Conv.ND(s))));
         cls.Dict["flat"] = Native.Prop(s => Conv.Wrap(np.Ravel(Conv.ND(s))));
         cls.Dict["base"] = Native.Prop(s => Conv.ND(s).Base is { } b ? Conv.Wrap(b) : PyNone.Instance);
     }

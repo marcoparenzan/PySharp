@@ -42,6 +42,8 @@ internal static class Red
     public static NDArray Fold<TK>(NDArray a, int[] axes, bool keepdims, object? identity, string opName)
         where TK : struct, INumBinary
     {
+        if (a.DType.IsComplex())
+            throw new NDNotSupportedException("this reduction is not implemented for complex arrays");
         if (a.DType == DType.Bool)
             return Fold<TK>(a.CastTo(DType.UInt8), axes, keepdims, identity is null ? null : Convert.ToByte(identity is bool b ? (b ? 1 : 0) : identity), opName).CastTo(DType.Bool);
         var outShape = OutShape(a.Shape, axes, keepdims);
@@ -284,7 +286,9 @@ public static partial class np
     private static DType ReductionType(NDArray a, DType? dtype) => dtype ?? DTypes.SumResult(a.DType);
 
     public static NDArray Sum(NDArray a, int[]? axis = null, bool keepdims = false, DType? dtype = null)
-        => Red.Fold<AddK>(a.CastTo(ReductionType(a, dtype)), Red.NormalizeAxes(axis, a.Ndim), keepdims, 0L, "add");
+        => a.DType.IsComplex()
+            ? Cx.FromParts(Sum(Real(a), axis, keepdims), Sum(Imag(a), axis, keepdims), a.DType)
+            : Red.Fold<AddK>(a.CastTo(ReductionType(a, dtype)), Red.NormalizeAxes(axis, a.Ndim), keepdims, 0L, "add");
 
     public static NDArray Prod(NDArray a, int[]? axis = null, bool keepdims = false, DType? dtype = null)
         => Red.Fold<MulK>(a.CastTo(ReductionType(a, dtype)), Red.NormalizeAxes(axis, a.Ndim), keepdims, 1L, "multiply");
@@ -323,6 +327,8 @@ public static partial class np
     public static NDArray Mean(NDArray a, int[]? axis = null, bool keepdims = false, DType? dtype = null)
     {
         var axes = Red.NormalizeAxes(axis, a.Ndim);
+        if (a.DType.IsComplex())
+            return Cx.FromParts(Mean(Real(a), axis, keepdims), Mean(Imag(a), axis, keepdims), a.DType);
         var dt = dtype ?? DTypes.MeanResult(a.DType);
         var s = Red.Fold<AddK>(a.CastTo(dt), axes, keepdims, 0L, "add");
         return Ew.Float<DivF>(s, CountOf(a, axes, dt), dt);

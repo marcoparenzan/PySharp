@@ -34,6 +34,7 @@ internal static class Cast
             DType.Float16 => From((Half[])src.Buffer, src, to, dst),
             DType.Float32 => From((float[])src.Buffer, src, to, dst),
             DType.Float64 => From((double[])src.Buffer, src, to, dst),
+            DType.Complex64 or DType.Complex128 => From((Complex[])src.Buffer, src, to, dst),
             _ => throw new NDNotSupportedException($"unsupported dtype {src.DType}"),
         };
     }
@@ -54,6 +55,11 @@ internal static class Cast
             case DType.Float16: Loop(buf, src, (Half[])dst); break;
             case DType.Float32: Loop(buf, src, (float[])dst); break;
             case DType.Float64: Loop(buf, src, (double[])dst); break;
+            case DType.Complex64:
+            case DType.Complex128:
+                Loop(buf, src, (Complex[])dst);
+                if (to == DType.Complex64) Cx.RoundC64((Complex[])dst);
+                break;
             default: throw new NDNotSupportedException($"unsupported dtype {to}");
         }
         return dst;
@@ -89,6 +95,15 @@ internal static class Cast
     {
         if (typeof(TD) == typeof(bool))
             return (TD)(object)(v != TS.Zero);
+
+        if (typeof(TS) == typeof(Complex))
+        {
+            var c = (Complex)(object)v;
+            if (typeof(TD) == typeof(Complex)) return (TD)(object)c;
+            return Conv<double, TD>(c.Real); // like numpy: the imaginary part is discarded
+        }
+        if (typeof(TD) == typeof(Complex))
+            return (TD)(object)new Complex(double.CreateTruncating(v), 0);
 
         if (IsFloat<TS>() && !IsFloat<TD>())
         {
@@ -167,6 +182,8 @@ internal static class Cast
             case DType.Float16: ((Half[])a.Buffer)[pos] = Boxed<Half>(value); break;
             case DType.Float32: ((float[])a.Buffer)[pos] = Boxed<float>(value); break;
             case DType.Float64: ((double[])a.Buffer)[pos] = Boxed<double>(value); break;
+            case DType.Complex64: ((Complex[])a.Buffer)[pos] = Cx.RoundC64(Boxed<Complex>(value)); break;
+            case DType.Complex128: ((Complex[])a.Buffer)[pos] = Boxed<Complex>(value); break;
             default: throw new NDNotSupportedException("unsupported buffer");
         }
     }
@@ -185,6 +202,7 @@ internal static class Cast
         Half x => Conv<Half, TD>(x),
         float x => Conv<float, TD>(x),
         double x => Conv<double, TD>(x),
+        Complex x => Conv<Complex, TD>(x),
         BigInteger x => x >= long.MinValue && x <= long.MaxValue ? Conv<long, TD>((long)x)
             : x > 0 && x <= ulong.MaxValue ? Conv<ulong, TD>((ulong)x)
             : throw new NDOverflowException($"Python int too large to convert to C long: {x}"),

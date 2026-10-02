@@ -12,7 +12,7 @@ namespace PySharpLib.Numpy;
 /// <summary><c>numpy.random</c>. This first version draws from <see cref="System.Random"/>: seeding
 /// makes the sequence reproducible run-to-run but does NOT reproduce numpy's actual values for a
 /// seed (NOTEBOOKS_PLAN.md Phase 2 replaces it with a bit-compatible MT19937/PCG64).</summary>
-internal static class NumpyRandom
+internal static partial class NumpyRandom
 {
     private static Random _rng = new();
 
@@ -20,6 +20,14 @@ internal static class NumpyRandom
     {
         var m = new PyModule("numpy.random");
         void Def(string name, BuiltinFn fn) => m.Dict[name] = Native.Fn(name, fn);
+
+        m.Dict["Generator"] = GeneratorClass;
+        Def("default_rng", (_, a, kw) =>
+        {
+            var p = new Args("default_rng", null!, a, kw, "seed");
+            if (p[0] is PyInstance { Native: NDSharp.Random.Generator } existing) return existing;
+            return new PyInstance(GeneratorClass) { Native = NDSharp.Random.Generator.DefaultRng(Entropy(p[0])) };
+        });
 
         Def("seed", (_, a, _) =>
         {

@@ -66,6 +66,10 @@ public sealed partial class NDArray
     /// a copy when any index is an array (advanced indexing).</summary>
     public NDArray Get(params NDIndex[] index) => Indexer.Get(this, index);
 
+    /// <summary>The absolute buffer positions (C-order) of the elements <c>a[index]</c> selects, and the shape of
+    /// that selection — what <c>ufunc.at</c> needs to update repeated indices in place.</summary>
+    public int[] IndexPositions(NDIndex[] index, out int[] shape) => Indexer.Positions(this, index, out shape);
+
     /// <summary>numpy <c>a[index] = value</c> (value broadcast to the indexed region, converted to this dtype).</summary>
     public void Put(NDArray value, params NDIndex[] index) => Indexer.Set(this, index, value);
 }
@@ -211,6 +215,26 @@ internal static class Indexer
         return plan;
     }
 
+    public static int[] Positions(NDArray a, NDIndex[] index, out int[] shape)
+    {
+        var plan = Resolve(a, index);
+        if (plan.Advanced.Count > 0)
+        {
+            var (sh, offsets) = AdvancedOffsets(a, index, plan);
+            shape = sh;
+            return offsets;
+        }
+        shape = plan.Dims.Select(d => d.Size).ToArray();
+        var list = new List<int>();
+        if (NDArray.SizeOf(shape) == 0) return Array.Empty<int>();
+        var w = new RowWalker(shape, plan.Dims.Select(d => d.Stride).ToArray());
+        do
+        {
+            for (int i = 0; i < w.InnerLen; i++) list.Add(plan.BaseOffset + w.Off0 + i * w.InnerStride0);
+        } while (w.Next());
+        return list.ToArray();
+    }
+
     // ------------------------------------------------------------------ get
 
     public static NDArray Get(NDArray a, NDIndex[] index)
@@ -331,6 +355,8 @@ internal static class Indexer
             case DType.UInt64: GatherT((ulong[])a.Buffer, offsets, (ulong[])result.Buffer); break;
             case DType.Float16: GatherT((Half[])a.Buffer, offsets, (Half[])result.Buffer); break;
             case DType.Float32: GatherT((float[])a.Buffer, offsets, (float[])result.Buffer); break;
+            case DType.Complex64:
+            case DType.Complex128: GatherT((System.Numerics.Complex[])a.Buffer, offsets, (System.Numerics.Complex[])result.Buffer); break;
             default: GatherT((double[])a.Buffer, offsets, (double[])result.Buffer); break;
         }
     }
@@ -356,6 +382,8 @@ internal static class Indexer
             case DType.UInt64: ScatterT((ulong[])a.Buffer, offsets, (ulong[])values.Buffer, vo); break;
             case DType.Float16: ScatterT((Half[])a.Buffer, offsets, (Half[])values.Buffer, vo); break;
             case DType.Float32: ScatterT((float[])a.Buffer, offsets, (float[])values.Buffer, vo); break;
+            case DType.Complex64:
+            case DType.Complex128: ScatterT((System.Numerics.Complex[])a.Buffer, offsets, (System.Numerics.Complex[])values.Buffer, vo); break;
             default: ScatterT((double[])a.Buffer, offsets, (double[])values.Buffer, vo); break;
         }
     }

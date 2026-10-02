@@ -53,7 +53,7 @@ public static class ArrayFormat
         var extras = new List<string>();
         if ((a.Size == 0 && a.Ndim != 1) || a.Size > options.Threshold)
             extras.Add($"shape={Broadcasting.ShapeRepr(a.Shape)}");
-        bool implied = a.DType is DType.Float64 or DType.Int64 or DType.Bool;
+        bool implied = a.DType is DType.Float64 or DType.Int64 or DType.Bool or DType.Complex128;
         if (!implied || a.Size == 0)
             extras.Add($"dtype={a.DType.Name()}");
         if (extras.Count == 0) return prefix + lst + ")";
@@ -89,6 +89,20 @@ public static class ArrayFormat
                     _ => d.ToString("R", CultureInfo.InvariantCulture),
                 };
                 return PythonFloatText(r, sci);
+            }
+            case System.Numerics.Complex c:
+            {
+                static string Part(double x, DType rd)
+                {
+                    string t = ScalarStr(x, rd);
+                    return t.EndsWith(".0", StringComparison.Ordinal) ? t[..^2] : t;
+                }
+                var rd = dtype.RealPart();
+                string im = Part(c.Imaginary, rd);
+                if (!im.StartsWith('-') && !im.StartsWith("nan")) im = "+" + im;
+                if (c.Real == 0 && !double.IsNegative(c.Real))
+                    return im.TrimStart('+') + "j";
+                return "(" + Part(c.Real, rd) + im + "j)";
             }
             default: return Convert.ToString(value, CultureInfo.InvariantCulture)!;
         }
@@ -161,8 +175,33 @@ public static class ArrayFormat
     private static ElementFormatter MakeFormatter(DType dt, List<object> data, PrintOptions o, bool zeroDim)
     {
         if (dt == DType.Bool) return new BoolFormatter(zeroDim);
+        if (dt.IsComplex()) return new ComplexFormatter(dt, data, o);
         if (dt.IsInteger()) return new IntFormatter(data);
         return new FloatFormatter(dt, data, o);
+    }
+
+    /// <summary>numpy's ComplexFloatingFormat: real and imaginary parts are formatted by independent float
+    /// formatters (the imaginary one always signed), then joined as <c>re</c><c>±im</c><c>j</c>.</summary>
+    private sealed class ComplexFormatter : ElementFormatter
+    {
+        private readonly FloatFormatter _re, _im;
+
+        public ComplexFormatter(DType dt, List<object> data, PrintOptions o)
+        {
+            var rd = dt.RealPart();
+            var cs = data.Cast<System.Numerics.Complex>().ToList();
+            _re = new FloatFormatter(rd, cs.Select(c => (object)c.Real).ToList(), o);
+            _im = new FloatFormatter(rd, cs.Select(c => (object)c.Imaginary).ToList(), o, plusSign: true);
+        }
+
+        public override string Format(object value)
+        {
+            var c = (System.Numerics.Complex)value;
+            string r = _re.Format(c.Real);
+            string i = _im.Format(c.Imaginary);
+            int sp = i.TrimEnd().Length;
+            return r + i[..sp] + "j" + i[sp..];
+        }
     }
 
     private sealed class BoolFormatter : ElementFormatter
@@ -192,10 +231,12 @@ public static class ArrayFormat
         private bool _exp;
         private int _padLeft, _padRight, _expSize = -1, _precision, _minDigits;
         private bool _trimKeep; // trim='k' (keep zeros) vs '.'
+        private readonly bool _plus;  // sign='+': always print the sign (imaginary parts)
 
-        public FloatFormatter(DType dt, List<object> data, PrintOptions o)
+        public FloatFormatter(DType dt, List<object> data, PrintOptions o, bool plusSign = false)
         {
             _dt = dt;
+            _plus = plusSign;
             _o = o;
             _precision = o.Precision;
             var vals = data.Select(v => ToDouble(v)).ToList();
@@ -338,7 +379,7 @@ public static class ArrayFormat
             string ipart = body[..dot], fpart = body[(dot + 1)..];
             if (trimKeep) { /* keep as is */ }
             if (fpart.Length < minDigits) fpart = fpart.PadRight(minDigits, '0');
-            string sign = neg ? "-" : "";
+            string sign = neg ? "-" : _plus ? "+" : "";
             string left = (sign + ipart).PadLeft(padLeft);
             string right = fpart.PadRight(padRight);
             return left + "." + right;
@@ -371,7 +412,7 @@ public static class ArrayFormat
             if (fp.Length < minDigits) fp = fp.PadRight(minDigits, '0');
             string es = Math.Abs(exp).ToString(CultureInfo.InvariantCulture);
             es = es.PadLeft(Math.Max(2, expSize), '0');
-            string sign = neg ? "-" : "";
+            string sign = neg ? "-" : _plus ? "+" : "";
             string left = (sign + ip).PadLeft(padLeft);
             return left + "." + fp + "e" + (exp < 0 ? "-" : "+") + es;
         }

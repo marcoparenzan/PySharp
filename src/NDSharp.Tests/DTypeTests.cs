@@ -8,7 +8,7 @@ using NDSharp;
 namespace NDSharp.Tests;
 
 /// <summary>Promotion/casting rules checked against fixtures dumped from real numpy 2.5.3
-/// (tools/oracle venv: <c>np.promote_types</c>, <c>np.can_cast(.., 'safe')</c>) for all 144 pairs.</summary>
+/// (tools/oracle venv: <c>np.promote_types</c>, <c>np.can_cast(.., 'safe')</c>) for all 196 pairs.</summary>
 public class DTypeTests
 {
     private static IEnumerable<string[]> Rows(string file)
@@ -19,7 +19,7 @@ public class DTypeTests
     public void Promote_matches_numpy_for_every_dtype_pair()
     {
         var rows = Rows("promote_types.csv").ToList();
-        Assert.Equal(144, rows.Count);
+        Assert.Equal(196, rows.Count);
         foreach (var r in rows)
             Assert.True(DTypes.FromName(r[2]) == DTypes.Promote(DTypes.FromName(r[0]), DTypes.FromName(r[1])),
                 $"promote({r[0]}, {r[1]}) expected {r[2]} got {DTypes.Promote(DTypes.FromName(r[0]), DTypes.FromName(r[1])).Name()}");

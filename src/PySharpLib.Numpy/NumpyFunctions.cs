@@ -601,7 +601,7 @@ internal static class NumpyFunctions
             Assign.Copy(Conv.ND(a[0]), Conv.ND(a[1]), Casting.Unsafe);
             return PyNone.Instance;
         });
-        Def("conj", (i, a, k) => Conv.Wrap(Conv.ND(a[0]).Copy()));
+        Def("conj", (i, a, k) => Conv.Wrap(np.Conj(Conv.ND(a[0]))));
         Alias("conjugate", "conj");
         Def("tobytes", (i, a, k) =>
         {
@@ -611,6 +611,191 @@ internal static class NumpyFunctions
             return new PyBytes(bytes);
         });
         Alias("tostring", "tobytes");
+
+        // ---------------------------------------------------------------- sorting, sets, statistics
+        Def("sort", (i, a, k) =>
+        {
+            var p = new Args("sort", i, a, k, "a", "axis", "kind", "order");
+            var nd = p.ND(0);
+            if (p[1] is PyNone) return Conv.Wrap(np.Sort(nd, null));
+            return Conv.Wrap(np.Sort(nd, p.Int(1, -1)));
+        });
+        Def("argsort", (i, a, k) =>
+        {
+            var p = new Args("argsort", i, a, k, "a", "axis", "kind", "order");
+            var nd = p.ND(0);
+            if (p[1] is PyNone) return Conv.Wrap(np.ArgSort(nd, null));
+            return Conv.Wrap(np.ArgSort(nd, p.Int(1, -1)));
+        });
+        Def("unique", (i, a, k) =>
+        {
+            var p = new Args("unique", i, a, k, "ar", "return_index", "return_inverse", "return_counts", "axis");
+            if (p.Has(4)) throw PyErr.NotImplementedError("np.unique(axis=...) is not implemented");
+            bool ri = p.Bool(1, false), rv = p.Bool(2, false), rc = p.Bool(3, false);
+            var r = np.Unique(p.ND(0), ri, rv, rc);
+            var parts = new List<object> { Conv.Wrap(r.Values) };
+            if (ri) parts.Add(Conv.Wrap(r.Index!));
+            if (rv) parts.Add(Conv.Wrap(r.Inverse!));
+            if (rc) parts.Add(Conv.Wrap(r.Counts!));
+            return parts.Count == 1 ? parts[0] : new PyTuple(parts.ToArray());
+        });
+        Def("bincount", (i, a, k) =>
+        {
+            var p = new Args("bincount", i, a, k, "x", "weights", "minlength");
+            return Conv.Wrap(np.BinCount(p.ND(0), p.NDOpt(1), p.Int(2, 0)));
+        });
+        Def("unravel_index", (i, a, k) =>
+        {
+            var p = new Args("unravel_index", i, a, k, "indices", "shape", "order");
+            var parts = np.UnravelIndex(p.ND(0), Conv.ToShape(p.Required(1)));
+            return new PyTuple(parts.Select(x => Conv.Result(x)).ToArray());
+        });
+        Def("median", (i, a, k) =>
+        {
+            var p = new Args("median", i, a, k, "a", "axis", "out", "overwrite_input", "keepdims");
+            return p.Finish(2, np.Median(p.ND(0), p.Axes(1), p.Bool(4, false)));
+        });
+        Def("percentile", (i, a, k) =>
+        {
+            var p = new Args("percentile", i, a, k, "a", "q", "axis", "out", "overwrite_input", "method", "keepdims");
+            if (p.Has(5) && (string)p[5]! != "linear") throw PyErr.NotImplementedError($"percentile(method='{p[5]}') is not implemented");
+            return p.Finish(3, np.Percentile(p.ND(0), p.ND(1), p.Axes(2), p.Bool(6, false)));
+        });
+        Def("quantile", (i, a, k) =>
+        {
+            var p = new Args("quantile", i, a, k, "a", "q", "axis", "out", "overwrite_input", "method", "keepdims");
+            if (p.Has(5) && (string)p[5]! != "linear") throw PyErr.NotImplementedError($"quantile(method='{p[5]}') is not implemented");
+            return p.Finish(3, np.Percentile(p.ND(0), p.ND(1), p.Axes(2), p.Bool(6, false), isQuantile: true));
+        });
+        Def("diff", (i, a, k) =>
+        {
+            var p = new Args("diff", i, a, k, "a", "n", "axis", "prepend", "append");
+            if (p.Has(3) || p.Has(4)) throw PyErr.NotImplementedError("np.diff(prepend/append) is not implemented");
+            return Conv.Wrap(np.Diff(p.ND(0), p.Int(1, 1), p.Int(2, -1)));
+        });
+        Def("gradient", (i, a, k) =>
+        {
+            var spacing = new List<double>();
+            int? axis = null;
+            var arrays = a.ToList();
+            if (k is not null)
+            {
+                foreach (var (key, v) in k)
+                {
+                    if (key == "axis") axis = Conv.ToInt(v, "axis");
+                    else if (key == "edge_order") { if (Conv.ToInt(v, "edge_order") != 1) throw PyErr.NotImplementedError("gradient(edge_order=2) is not implemented"); }
+                    else throw PyErr.TypeError($"gradient() got an unexpected keyword argument '{key}'");
+                }
+            }
+            var f = Conv.ND(arrays[0]);
+            foreach (var sp in arrays.Skip(1))
+            {
+                if (Conv.TryUnwrap(sp) is { Ndim: > 0 }) throw PyErr.NotImplementedError("gradient with coordinate arrays is not implemented");
+                spacing.Add(PyOps.AsDouble(Conv.TryUnwrap(sp) is { Ndim: 0 } n0 ? Conv.Scalarize(n0) : sp));
+            }
+            var res = np.Gradient(f, spacing.Count == 0 ? null : spacing.ToArray(), axis is int ax ? new[] { ax } : null);
+            return res.Length == 1 ? Conv.Wrap(res[0]) : new PyList(res.Select(x => (object)Conv.Wrap(x)).ToArray());
+        });
+        Def("cross", (i, a, k) =>
+        {
+            var p = new Args("cross", i, a, k, "a", "b", "axisa", "axisb", "axisc", "axis");
+            return Conv.Result(np.Cross(p.ND(0), p.ND(1)));
+        });
+        Def("convolve", (i, a, k) =>
+        {
+            var p = new Args("convolve", i, a, k, "a", "v", "mode");
+            return Conv.Wrap(np.Convolve(p.ND(0), p.ND(1), p.Has(2) ? (string)p[2]! : "full"));
+        });
+        Def("cov", (i, a, k) =>
+        {
+            var p = new Args("cov", i, a, k, "m", "y", "rowvar", "bias", "ddof", "fweights", "aweights", "dtype");
+            if (p.Has(5) || p.Has(6)) throw PyErr.NotImplementedError("cov(fweights/aweights) is not implemented");
+            return Conv.Result(np.Cov(p.ND(0), p.NDOpt(1), p.Bool(2, true), p.Bool(3, false), p.IntOrNull(4)));
+        });
+        Def("corrcoef", (i, a, k) =>
+        {
+            var p = new Args("corrcoef", i, a, k, "x", "y", "rowvar", "bias", "ddof", "dtype");
+            return Conv.Result(np.CorrCoef(p.ND(0), p.NDOpt(1), p.Bool(2, true)));
+        });
+        Def("real", (i, a, k) => Conv.Result(np.Real(Conv.ND(a[0]))));
+        Def("imag", (i, a, k) => Conv.Result(np.Imag(Conv.ND(a[0]))));
+        Def("angle", (i, a, k) =>
+        {
+            var p = new Args("angle", i, a, k, "z", "deg");
+            return Conv.Result(np.Angle(p.ND(0), p.Bool(1, false)));
+        });
+        Def("iscomplexobj", (i, a, k) => Conv.ND(a[0]).DType.IsComplex());
+        Def("iscomplex", (i, a, k) => Conv.Result(np.NotEqual(np.Imag(Conv.ND(a[0])), NDArray.WeakScalar(0L))));
+        Def("isreal", (i, a, k) => Conv.Result(np.Equal(np.Imag(Conv.ND(a[0])), NDArray.WeakScalar(0L))));
+        Def("take", (i, a, k) =>
+        {
+            var p = new Args("take", i, a, k, "a", "indices", "axis", "out", "mode");
+            var arr = p.ND(0);
+            var idx = p.ND(1);
+            if (p[2] is null or PyNone) return Conv.Result(np.Ravel(arr).Get(idx));
+            int ax = np.NormalizeAxis(p.Int(2, 0), arr.Ndim);
+            var items = Enumerable.Repeat<NDIndex>(Slice.All, ax).Append(idx).ToArray();
+            return Conv.Result(arr.Get(items));
+        });
+
+        // ufunc methods: .at / .reduce / .accumulate / .outer on the binary ufuncs
+        var binaries = new Dictionary<string, Func<NDArray, NDArray, NDArray>>
+        {
+            ["add"] = np.Add, ["subtract"] = np.Subtract, ["multiply"] = np.Multiply, ["divide"] = np.Divide,
+            ["maximum"] = np.Maximum, ["minimum"] = np.Minimum, ["power"] = np.Power, ["mod"] = np.Mod,
+            ["floor_divide"] = np.FloorDivide, ["bitwise_and"] = np.BitwiseAnd, ["bitwise_or"] = np.BitwiseOr,
+            ["bitwise_xor"] = np.BitwiseXor, ["logical_and"] = np.LogicalAnd, ["logical_or"] = np.LogicalOr,
+            ["arctan2"] = np.Arctan2, ["hypot"] = np.Hypot,
+        };
+        foreach (var (uname, op) in binaries)
+        {
+            var uf = all[uname];
+            var f = op;
+            uf.Attributes["outer"] = Native.Fn($"{uname}.outer", (i, a, k) =>
+            {
+                var x = Conv.ND(a[0]);
+                var y = Conv.ND(a[1]);
+                var xs = np.Reshape(x, x.Shape.Concat(Enumerable.Repeat(1, y.Ndim)).ToArray());
+                return Conv.Result(f(xs, y));
+            });
+            uf.Attributes["at"] = Native.Fn($"{uname}.at", (i, a, k) =>
+            {
+                var target = Conv.ND(a[0]);
+                var (items, _) = Conv.ParseIndex(a[1]);
+                var positions = target.IndexPositions(items, out var shape);
+                NDArray? b = a.Length > 2 && a[2] is not PyNone ? Conv.ND(a[2]) : null;
+                NDArray? bflat = b is null ? null : np.Ravel(Broadcasting.BroadcastTo(b, shape)).Copy();
+                for (int q = 0; q < positions.Length; q++)
+                {
+                    var cur = target.ViewWith(Array.Empty<int>(), Array.Empty<int>(), positions[q]);
+                    var val = bflat is null ? cur : bflat.Get(q);
+                    Assign.Copy(cur, f(cur, val), Casting.Unsafe);
+                }
+                return PyNone.Instance;
+            });
+        }
+        BuiltinFn Reduce(string name, Func<NDArray, int[]?, bool, NDArray> r) => (i, a, k) =>
+        {
+            var p = new Args(name + ".reduce", i, a, k, "array", "axis", "dtype", "out", "keepdims");
+            var axes = p.Has(1) || p[1] is PyNone ? p.Axes(1) : new[] { 0 };
+            return p.Finish(3, r(p.ND(0), axes, p.Bool(4, false)));
+        };
+        all["add"].Attributes["reduce"] = Native.Fn("add.reduce", Reduce("add", (x, ax, kd) => np.Sum(x, ax, kd)));
+        all["multiply"].Attributes["reduce"] = Native.Fn("multiply.reduce", Reduce("multiply", (x, ax, kd) => np.Prod(x, ax, kd)));
+        all["maximum"].Attributes["reduce"] = Native.Fn("maximum.reduce", Reduce("maximum", np.Max));
+        all["minimum"].Attributes["reduce"] = Native.Fn("minimum.reduce", Reduce("minimum", np.Min));
+        all["logical_and"].Attributes["reduce"] = Native.Fn("logical_and.reduce", Reduce("logical_and", np.All));
+        all["logical_or"].Attributes["reduce"] = Native.Fn("logical_or.reduce", Reduce("logical_or", np.Any));
+        all["add"].Attributes["accumulate"] = Native.Fn("add.accumulate", (i, a, k) =>
+        {
+            var p = new Args("add.accumulate", i, a, k, "array", "axis", "dtype", "out");
+            return Conv.Wrap(np.CumSum(p.ND(0), p.Int(1, 0), p.DType(2)));
+        });
+        all["multiply"].Attributes["accumulate"] = Native.Fn("multiply.accumulate", (i, a, k) =>
+        {
+            var p = new Args("multiply.accumulate", i, a, k, "array", "axis", "dtype", "out");
+            return Conv.Wrap(np.CumProd(p.ND(0), p.Int(1, 0), p.DType(2)));
+        });
 
         return all;
     }

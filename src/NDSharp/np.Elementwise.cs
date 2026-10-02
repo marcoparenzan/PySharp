@@ -3,6 +3,8 @@
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
+using System.Numerics;
+
 namespace NDSharp;
 
 /// <summary>The numpy-shaped functional API. Split across <c>np.*.cs</c> files by topic.</summary>
@@ -10,7 +12,13 @@ public static partial class np
 {
     // ================================================================ arithmetic
 
-    public static NDArray Add(NDArray a, NDArray b) => Ew.Num<AddK>(a, b, Ew.ResultType(a, b));
+    private static bool IsC(DType d) => d.IsComplex();
+
+    public static NDArray Add(NDArray a, NDArray b)
+    {
+        var rt = Ew.ResultType(a, b);
+        return IsC(rt) ? Cx.Binary(a, b, rt, static (x, y) => x + y) : Ew.Num<AddK>(a, b, rt);
+    }
 
     public static NDArray Subtract(NDArray a, NDArray b)
     {
@@ -18,17 +26,25 @@ public static partial class np
         if (rt == DType.Bool)
             throw new NDTypeException(
                 "numpy boolean subtract, the `-` operator, is not supported, use the bitwise_xor, the `^` operator, or the logical_xor function instead.");
-        return Ew.Num<SubK>(a, b, rt);
+        return IsC(rt) ? Cx.Binary(a, b, rt, static (x, y) => x - y) : Ew.Num<SubK>(a, b, rt);
     }
 
-    public static NDArray Multiply(NDArray a, NDArray b) => Ew.Num<MulK>(a, b, Ew.ResultType(a, b));
-    public static NDArray Maximum(NDArray a, NDArray b) => Ew.Num<MaxK>(a, b, Ew.ResultType(a, b));
-    public static NDArray Minimum(NDArray a, NDArray b) => Ew.Num<MinK>(a, b, Ew.ResultType(a, b));
+    public static NDArray Multiply(NDArray a, NDArray b)
+    {
+        var rt = Ew.ResultType(a, b);
+        return IsC(rt) ? Cx.Binary(a, b, rt, static (x, y) => x * y) : Ew.Num<MulK>(a, b, rt);
+    }
+    private static DType NoComplex(DType rt)
+        => IsC(rt) ? throw new NDNotSupportedException("ordering of complex numbers is not implemented") : rt;
+
+    public static NDArray Maximum(NDArray a, NDArray b) => Ew.Num<MaxK>(a, b, NoComplex(Ew.ResultType(a, b)));
+    public static NDArray Minimum(NDArray a, NDArray b) => Ew.Num<MinK>(a, b, NoComplex(Ew.ResultType(a, b)));
 
     /// <summary>numpy <c>true_divide</c>: integers (and bool) divide in float64.</summary>
     public static NDArray Divide(NDArray a, NDArray b)
     {
         var rt = Ew.ResultType(a, b);
+        if (IsC(rt)) return Cx.Binary(a, b, rt, static (x, y) => x / y);
         return Ew.Float<DivF>(a, b, rt.IsFloat() ? rt : DType.Float64);
     }
 
@@ -58,6 +74,9 @@ public static partial class np
     public static NDArray Power(NDArray a, NDArray b)
     {
         var rt = Ew.ResultType(a, b);
+        if (IsC(rt))
+            return Cx.Binary(a, b, rt, static (x, y) => y.Imaginary == 0 && y.Real == Math.Floor(y.Real) && Math.Abs(y.Real) <= 8
+                ? IntPow(x, (int)y.Real) : Complex.Pow(x, y));
         if (rt == DType.Bool) rt = DType.Int8;
         return rt.IsFloat() ? Ew.Float<PowF>(a, b, rt) : Ew.Int<PowI>(a, b, rt);
     }
@@ -67,8 +86,21 @@ public static partial class np
 
     // ================================================================ comparison
 
-    public static NDArray Equal(NDArray a, NDArray b) => Ew.Compare<EqK>(a, b);
-    public static NDArray NotEqual(NDArray a, NDArray b) => Ew.Compare<NeK>(a, b);
+    private static Complex IntPow(Complex x, int n)
+    {
+        if (n < 0) return Complex.One / IntPow(x, -n);
+        var r = Complex.One;
+        for (int i = 0; i < n; i++) r *= x;
+        return r;
+    }
+
+    private static bool AnyC(NDArray a, NDArray b) => IsC(a.DType) || IsC(b.DType);
+
+    public static NDArray Equal(NDArray a, NDArray b)
+        => AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x == y) : Ew.Compare<EqK>(a, b);
+
+    public static NDArray NotEqual(NDArray a, NDArray b)
+        => AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x != y) : Ew.Compare<NeK>(a, b);
     public static NDArray Less(NDArray a, NDArray b) => Ew.Compare<LtK>(a, b);
     public static NDArray LessEqual(NDArray a, NDArray b) => Ew.Compare<LeK>(a, b);
     public static NDArray Greater(NDArray a, NDArray b) => Ew.Compare<GtK>(a, b);
@@ -109,35 +141,36 @@ public static partial class np
 
     public static NDArray Negative(NDArray a)
     {
+        if (IsC(a.DType)) return Cx.Unary(a, static c => -c);
         if (a.DType == DType.Bool)
             throw new NDTypeException("The numpy boolean negative, the `-` operator, is not supported, use the `~` operator or the logical_not function instead.");
         return Ew.UnNum<NegK>(a);
     }
 
-    public static NDArray Positive(NDArray a) => Ew.UnNum<PosK>(a);
-    public static NDArray Abs(NDArray a) => Ew.UnNum<AbsK>(a);
+    public static NDArray Positive(NDArray a) => IsC(a.DType) ? a.Copy() : Ew.UnNum<PosK>(a);
+    public static NDArray Abs(NDArray a) => IsC(a.DType) ? Cx.ToReal(a, Complex.Abs) : Ew.UnNum<AbsK>(a);
     public static NDArray Absolute(NDArray a) => Abs(a);
     public static NDArray Sign(NDArray a) => Ew.UnNum<SignK>(a);
-    public static NDArray Square(NDArray a) => Ew.UnNum<SquareK>(a);
+    public static NDArray Square(NDArray a) => IsC(a.DType) ? Cx.Unary(a, static c => c * c) : Ew.UnNum<SquareK>(a);
 
-    public static NDArray Sqrt(NDArray a) => Ew.UnFloat<SqrtK>(a);
+    public static NDArray Sqrt(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Sqrt) : Ew.UnFloat<SqrtK>(a);
     public static NDArray Cbrt(NDArray a) => Ew.UnFloat<CbrtK>(a);
-    public static NDArray Exp(NDArray a) => Ew.UnFloat<ExpK>(a);
+    public static NDArray Exp(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Exp) : Ew.UnFloat<ExpK>(a);
     public static NDArray Exp2(NDArray a) => Ew.UnFloat<Exp2K>(a);
     public static NDArray Expm1(NDArray a) => Ew.UnFloat<Expm1K>(a);
-    public static NDArray Log(NDArray a) => Ew.UnFloat<LogK>(a);
+    public static NDArray Log(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Log) : Ew.UnFloat<LogK>(a);
     public static NDArray Log2(NDArray a) => Ew.UnFloat<Log2K>(a);
-    public static NDArray Log10(NDArray a) => Ew.UnFloat<Log10K>(a);
+    public static NDArray Log10(NDArray a) => IsC(a.DType) ? Cx.Unary(a, static c => Complex.Log10(c)) : Ew.UnFloat<Log10K>(a);
     public static NDArray Log1p(NDArray a) => Ew.UnFloat<Log1pK>(a);
-    public static NDArray Sin(NDArray a) => Ew.UnFloat<SinK>(a);
-    public static NDArray Cos(NDArray a) => Ew.UnFloat<CosK>(a);
-    public static NDArray Tan(NDArray a) => Ew.UnFloat<TanK>(a);
+    public static NDArray Sin(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Sin) : Ew.UnFloat<SinK>(a);
+    public static NDArray Cos(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Cos) : Ew.UnFloat<CosK>(a);
+    public static NDArray Tan(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Tan) : Ew.UnFloat<TanK>(a);
     public static NDArray Arcsin(NDArray a) => Ew.UnFloat<AsinK>(a);
     public static NDArray Arccos(NDArray a) => Ew.UnFloat<AcosK>(a);
     public static NDArray Arctan(NDArray a) => Ew.UnFloat<AtanK>(a);
-    public static NDArray Sinh(NDArray a) => Ew.UnFloat<SinhK>(a);
-    public static NDArray Cosh(NDArray a) => Ew.UnFloat<CoshK>(a);
-    public static NDArray Tanh(NDArray a) => Ew.UnFloat<TanhK>(a);
+    public static NDArray Sinh(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Sinh) : Ew.UnFloat<SinhK>(a);
+    public static NDArray Cosh(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Cosh) : Ew.UnFloat<CoshK>(a);
+    public static NDArray Tanh(NDArray a) => IsC(a.DType) ? Cx.Unary(a, Complex.Tanh) : Ew.UnFloat<TanhK>(a);
     public static NDArray Arcsinh(NDArray a) => Ew.UnFloat<AsinhK>(a);
     public static NDArray Arccosh(NDArray a) => Ew.UnFloat<AcoshK>(a);
     public static NDArray Arctanh(NDArray a) => Ew.UnFloat<AtanhK>(a);
@@ -154,6 +187,8 @@ public static partial class np
     /// <summary>numpy <c>round</c>/<c>around</c>: half-to-even; integers unchanged for decimals ≥ 0.</summary>
     public static NDArray Round(NDArray a, int decimals = 0)
     {
+        if (a.DType.IsComplex())
+            return Cx.FromParts(Round(Real(a), decimals), Round(Imag(a), decimals), a.DType);
         if (!a.DType.IsFloat())
         {
             if (decimals >= 0) return a.Copy();

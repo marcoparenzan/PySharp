@@ -55,6 +55,8 @@ public static class Assign
             case DType.UInt64: Loop((ulong[])s.Buffer, s.Offset, ss, (ulong[])dst.Buffer, dst); break;
             case DType.Float16: Loop((Half[])s.Buffer, s.Offset, ss, (Half[])dst.Buffer, dst); break;
             case DType.Float32: Loop((float[])s.Buffer, s.Offset, ss, (float[])dst.Buffer, dst); break;
+            case DType.Complex64:
+            case DType.Complex128: Loop((System.Numerics.Complex[])s.Buffer, s.Offset, ss, (System.Numerics.Complex[])dst.Buffer, dst); break;
             default: Loop((double[])s.Buffer, s.Offset, ss, (double[])dst.Buffer, dst); break;
         }
     }

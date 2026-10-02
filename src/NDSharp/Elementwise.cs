@@ -14,7 +14,7 @@ internal static class Ew
 {
     // ================================================================ result types
 
-    private static int Rank(DType d) => d.Kind() switch { 'b' => 0, 'i' or 'u' => 1, _ => 2 };
+    private static int Rank(DType d) => d.Kind() switch { 'b' => 0, 'i' or 'u' => 1, 'f' => 2, _ => 3 };
 
     /// <summary>numpy <c>result_type</c> for two operands, honoring weak scalars.</summary>
     public static DType ResultType(NDArray a, NDArray b, bool forCompare = false)
@@ -32,6 +32,8 @@ internal static class Ew
         if (sr < wr)
         {
             // Strong operand has a "lower" kind: the Python scalar's default dtype wins.
+            if (weak.DType == DType.Complex128)
+                return strong is DType.Float16 or DType.Float32 ? DType.Complex64 : DType.Complex128;
             return weak.DType == DType.UInt64 && strong == DType.Bool ? DType.UInt64 : weak.DType;
         }
         if (wr == 1 && sr == 1 && !WeakIntFits(weak, strong))
@@ -427,6 +429,8 @@ internal static class Ew
             case DType.UInt64: WhereLoop(cc, sc, (ulong[])xc.Buffer, xc.Offset, sx, (ulong[])yc.Buffer, yc.Offset, sy, (ulong[])o, shape); break;
             case DType.Float16: WhereLoop(cc, sc, (Half[])xc.Buffer, xc.Offset, sx, (Half[])yc.Buffer, yc.Offset, sy, (Half[])o, shape); break;
             case DType.Float32: WhereLoop(cc, sc, (float[])xc.Buffer, xc.Offset, sx, (float[])yc.Buffer, yc.Offset, sy, (float[])o, shape); break;
+            case DType.Complex64:
+            case DType.Complex128: WhereLoop(cc, sc, (Complex[])xc.Buffer, xc.Offset, sx, (Complex[])yc.Buffer, yc.Offset, sy, (Complex[])o, shape); break;
             default: WhereLoop(cc, sc, (double[])xc.Buffer, xc.Offset, sx, (double[])yc.Buffer, yc.Offset, sy, (double[])o, shape); break;
         }
         return Wrap(rt, o, shape);
