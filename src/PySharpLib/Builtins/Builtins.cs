@@ -500,8 +500,12 @@ public static class BuiltinsFactory
             _ => throw PyErr.TypeError($"bad operand type for abs(): '{PyOps.TypeName(args[0])}'"),
         });
 
-        Add("round", (_, args, _) =>
+        Add("round", (interp, args, __) =>
         {
+            // Real round() defers to the operand's own __round__ (numpy scalars, Decimal, user classes).
+            if (args[0] is PyInstance ri && ri.Class.TryLookup("__round__", out _)
+                && interp.TryCallMethod(ri, "__round__", args.Skip(1).ToArray(), out var custom))
+                return custom;
             double value = PyOps.AsDouble(args[0]);
             int digits = args.Length > 1 && args[1] is not PyNone ? (int)PyOps.AsBigInt(args[1], "ndigits") : 0;
             double rounded = Math.Round(value, digits, MidpointRounding.ToEven);

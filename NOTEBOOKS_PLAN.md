@@ -197,13 +197,33 @@ binding passed them.
       call `display_image` directly in Phase 5, so it is not needed for the notebooks); a real VS Code smoke test
       of the rebuilt `.vsix` (needs the editor; the extension compiles with `tsc`)
 
-### Phase 4 — `NDSharp.Image` + `PySharp.Cv2`, first slice
-- [ ] Codecs (D2): `imread` (BGR uint8, `IMREAD_GRAYSCALE/COLOR`), `imwrite`, `imencode`/`imdecode`
-- [ ] `cvtColor` (BGR2RGB/GRAY/HSV/LAB/YCrCb/Bayer…), `resize`, `flip`, `split/merge`, `add/absdiff/
-      addWeighted`, `normalize`, `copyMakeBorder` + border modes
-- [ ] drawing (`rectangle/circle/line/putText/fillPoly/arrowedLine/ellipse/drawMarker`)
-- [ ] `cv2` constant table (all 129 symbols resolvable even before implemented → clear
-      `NotImplementedError` naming the function, not `AttributeError`)
+### Phase 4 — `NDSharp.Image` + `PySharp.Cv2` (+ `NDSharp.Wavelets` + `PySharp.Pywt`)  ✅ (2026-10-02)
+Decision change vs D2: **image codecs come from OpenCV itself** (OpenCvSharp `ImRead`/`ImEncode`/`ImDecode`), not SkiaSharp —
+the same libjpeg/libpng as real cv2, so decoded pixels and even JPEG bytes are identical. SkiaSharp is kept for the matplotlib
+renderer (Phase 5). The oracle's OpenCV was aligned to OpenCvSharp's: `opencv-python 4.11.0.86`.
+- [x] `NDSharp.Image`: `Mats` (NDArray ⇄ Mat, 1-D vectors as N×1), and cv2-shaped functions with plain-int OpenCV constants —
+      I/O, `cvtColor`, `resize`, `flip`, `split/merge`, `copyMakeBorder`, saturating arithmetic, bitwise, `normalize`, `threshold`,
+      morphology, `floodFill`, connected components, drawing (in place), filters (`filter2D`, Gaussian/box/median/bilateral),
+      `Sobel/Scharr/Laplacian/Canny`, pyramids, Gabor, `cartToPolar`, `dct/idct`, `distanceTransform`, warps and transforms,
+      `moments/HuMoments`, `findContours`, corners, Hough lines/circles, **SIFT, BFMatcher, drawMatches/drawKeypoints**, optical
+      flow (Farneback, PyrLK), `StereoBM`, `Stitcher`, `CascadeClassifier`, `findHomography`, essential/fundamental matrices,
+      `recoverPose`, `triangulatePoints`, `calibrateCamera`, chessboard corners, `projectPoints`, `undistortPoints`, `Rodrigues`
+- [x] `PySharp.Cv2` binding with the full cv2 constant table generated from real cv2 (1717 constants), `cv2.error`, `KeyPoint`/
+      `DMatch` classes; `PySharp.Pywt` over `NDSharp.Wavelets` (all 106 discrete wavelets, 9 extension modes, dwt/idwt/dwt2/idwt2)
+- [x] Verified against the real libraries: golden snippets `Oracle/cv2/*` (5 files: color/geometry, arithmetic/threshold, morphology/
+      components, drawing/codecs, filters/geometry/moments/contours/Hough, SIFT/matching/RANSAC/flow/stereo/calibration/pose/
+      stitching) and `Oracle/pywt/P4_pywt` — all identical to cv2 4.11 / PyWavelets 1.8 output
+- [x] Also found/fixed through the notebooks: `np.gradient` with coordinates, complex `matmul`, array-valued `normal/uniform`,
+      `multivariate_normal`, `np.frombuffer`, `round()` on numpy scalars, a printing rule (numpy ≥ 2.3 exponent cutoff by dtype)
+- [ ] not done: `FaceDetectorYN` (lesson 41, needs OpenCV's DNN face detector — OpenCvSharp has no wrapper), `cv2.data.haarcascades`
+      files (lesson 40 downloads its own cascade)
+
+**Known divergences added in Phase 4:** `eigh`/`svd` vector signs (see Phase 2), `multivariate_normal` draws can differ in sign
+pattern for the same reason; `cv2` is built on OpenCvSharp's OpenCV 4.11 (only the `win` native runtime package is referenced —
+Linux/macOS need the matching `OpenCvSharp4.runtime.*` package).
+
+**Measured with `tools/NotebookRunner --stub` (matplotlib replaced by a no-op stub): tier A lessons 01–30 — 29 / 30 run every cell;**
+lesson 03's only failure is the stub's `axes[1:]` slicing. Report: [NOTEBOOKS_RUN.md](NOTEBOOKS_RUN.md).
 
 ### Phase 5 — `NDSharp.Plot` + `PySharp.Matplotlib`
 - [ ] Figure/Axes model; `plt.subplots/figure/imshow/show/title/axis/tight_layout/suptitle`

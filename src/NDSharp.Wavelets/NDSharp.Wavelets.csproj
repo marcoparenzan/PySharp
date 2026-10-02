@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package metadata: discrete wavelet transforms (the pywt functionality) on NDSharp arrays. -->
+    <PackageId>NDSharp.Wavelets</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>NDSharp.Wavelets — discrete wavelet transforms (dwt, idwt, dwt2, idwt2; haar/db/sym/coif/bior/rbio filter banks) on NDSharp arrays. No Python dependency.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>wavelet;dwt;signal;ndsharp;dotnet</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NDSharp\NDSharp.csproj" />
+  </ItemGroup>
+
+</Project>

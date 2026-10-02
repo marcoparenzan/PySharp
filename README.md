@@ -503,6 +503,9 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   indexing, `matmul`, numpy-faithful `repr`, and a .NET array interop bridge. Verified against real
   numpy 2.5.3 with golden outputs. Register it with `NumpyRegistration.Register(engine.Importer)` (the
   `pysharp` CLI and the JupyterNet kernel already do). See [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
+- **cv2 / pywt**: opt-in `PySharp.Cv2` (OpenCV 4.11 through OpenCvSharp, over the native `NDSharp.Image`) and `PySharp.Pywt`
+  (discrete wavelets over `NDSharp.Wavelets`), verified against real OpenCV / PyWavelets output. Register with
+  `Cv2Registration.Register(importer)` / `PywtRegistration.Register(importer)`; the `pysharp` CLI and the JupyterNet kernel do.
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
   `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both

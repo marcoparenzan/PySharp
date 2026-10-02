@@ -410,3 +410,13 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 - Interpreter: imaginary literals (`1j`, `2.5J`) now lex and parse.
 - All new behavior is verified against real numpy 2.5.3: NDSharp 291 tests, 5 new golden snippet files.
 
+### v2.1.0 (continued) — cv2 and pywt
+
+- New packages **`NDSharp.Image`** + **`PySharp.Cv2`**: `import cv2` over OpenCV 4.11 (through OpenCvSharp) — ~100 functions, all
+  1717 constants, `KeyPoint`/`DMatch`, SIFT, BFMatcher, StereoBM, Stitcher, calibration/pose estimation. Output is identical to
+  real cv2 on the golden snippets (`src/PySharp.Tests/Oracle/cv2`), including JPEG bytes.
+- New packages **`NDSharp.Wavelets`** + **`PySharp.Pywt`**: `import pywt` (dwt/idwt/dwt2/idwt2, all discrete wavelets).
+- numpy: `np.frombuffer`, `gradient` with coordinates, complex `matmul`, array-valued `Generator.normal/uniform`,
+  `multivariate_normal`; `zlib.crc32/adler32`; `round()` honors `__round__`.
+- `tools/NotebookRunner`: runs the cvintro notebooks cell by cell and reports failures (`NOTEBOOKS_RUN.md`).
+

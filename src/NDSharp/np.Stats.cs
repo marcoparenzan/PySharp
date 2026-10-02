@@ -309,6 +309,45 @@ public static partial class np
         return result.ToArray();
     }
 
+    /// <summary>numpy <c>gradient</c> with a coordinate array per axis (non-uniform spacing uses numpy's
+    /// second-order interior formula; evenly spaced coordinates collapse to the uniform case).</summary>
+    public static NDArray[] GradientCoordinates(NDArray f, IReadOnlyList<NDArray> coordinates, int[]? axes = null)
+    {
+        var ax = axes is null ? Enumerable.Range(0, f.Ndim).ToArray() : axes.Select(x => NormalizeAxis(x, f.Ndim)).ToArray();
+        if (coordinates.Count != ax.Length)
+            throw new NDValueException("spacing must either be a single scalar, or a scalar / 1d-array per axis");
+        var ft = f.DType.IsFloat() ? f : f.AsType(DType.Float64);
+        var result = new List<NDArray>();
+        for (int k = 0; k < ax.Length; k++)
+        {
+            var x = coordinates[k];
+            int a0 = ax[k], n = f.Shape[a0];
+            if (x.Ndim != 1 || x.Size != n)
+                throw new NDValueException("when 1d, distances must match the length of the corresponding dimension");
+            var dxs = Diff(x.DType.IsFloat() ? x : x.AsType(DType.Float64));
+            bool uniform = (bool)All(Equal(dxs, dxs.Get(0))).GetAt(0);
+            if (uniform)
+            {
+                result.Add(Gradient(f, new[] { Convert.ToDouble(dxs.Get(0).GetAt(0)) }, new[] { a0 })[0]);
+                continue;
+            }
+            int[] Shape1(int len) { var s = Enumerable.Repeat(1, f.Ndim).ToArray(); s[a0] = len; return s; }
+            NDArray Take(Slice s) { var idx = Enumerable.Repeat<NDIndex>(Slice.All, f.Ndim).ToArray(); idx[a0] = s; return ft.Get(idx); }
+            var dx1 = Reshape(dxs.Get(new Slice(0, n - 2)), Shape1(n - 2));
+            var dx2 = Reshape(dxs.Get(new Slice(1, null)), Shape1(n - 2));
+            var a = Negative(Divide(dx2, Multiply(dx1, Add(dx1, dx2))));
+            var b = Divide(Subtract(dx2, dx1), Multiply(dx1, dx2));
+            var c = Divide(dx1, Multiply(dx2, Add(dx1, dx2)));
+            var outArr = np.Zeros(f.Shape, ft.DType);
+            void Put(NDArray v, Slice s) { var idx = Enumerable.Repeat<NDIndex>(Slice.All, f.Ndim).ToArray(); idx[a0] = s; outArr.Put(v, idx); }
+            Put(Add(Add(Multiply(a, Take(new Slice(null, -2))), Multiply(b, Take(new Slice(1, -1)))), Multiply(c, Take(new Slice(2, null)))), new Slice(1, -1));
+            Put(Divide(Subtract(Take(new Slice(1, 2)), Take(new Slice(0, 1))), dxs.Get(new Slice(0, 1))), new Slice(0, 1));
+            Put(Divide(Subtract(Take(new Slice(-1, null)), Take(new Slice(-2, -1))), dxs.Get(new Slice(-1, null))), new Slice(-1, null));
+            result.Add(outArr);
+        }
+        return result.ToArray();
+    }
+
     // ================================================================ vector algebra
 
     /// <summary>numpy <c>cross</c> of 3-vectors (or 2-vectors, giving the z component) along the last axis.</summary>

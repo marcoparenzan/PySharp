@@ -47,6 +47,11 @@ public static partial class np
             case DType.UInt64: MatMulT<ulong>(ac, bc, sa, sb, batch, m, k, n, (ulong[])result.Buffer); break;
             case DType.Float16: MatMulT<Half>(ac, bc, sa, sb, batch, m, k, n, (Half[])result.Buffer); break;
             case DType.Float32: MatMulT<float>(ac, bc, sa, sb, batch, m, k, n, (float[])result.Buffer); break;
+            case DType.Complex64:
+            case DType.Complex128:
+                MatMulT<System.Numerics.Complex>(ac, bc, sa, sb, batch, m, k, n, (System.Numerics.Complex[])result.Buffer);
+                if (rt == DType.Complex64) Cx.RoundC64((System.Numerics.Complex[])result.Buffer);
+                break;
             default: MatMulT<double>(ac, bc, sa, sb, batch, m, k, n, (double[])result.Buffer); break;
         }
         // Drop the synthesized axes.
@@ -57,7 +62,7 @@ public static partial class np
     }
 
     private static void MatMulT<T>(NDArray a, NDArray b, int[] sa, int[] sb, int[] batch, int m, int k, int n, T[] o)
-        where T : unmanaged, INumber<T>
+        where T : unmanaged, INumberBase<T>
     {
         var x = (T[])a.Buffer;
         var y = (T[])b.Buffer;

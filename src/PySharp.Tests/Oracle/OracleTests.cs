@@ -19,6 +19,8 @@ public class OracleTests
             .Select(p => new object[] { Path.GetFileNameWithoutExtension(p) });
 
     public static IEnumerable<object[]> Numpy() => Snippets("numpy");
+    public static IEnumerable<object[]> Cv2() => Snippets("cv2");
+    public static IEnumerable<object[]> Pywt() => Snippets("pywt");
 
     private static void RunCase(string lib, string name)
     {
@@ -32,6 +34,12 @@ public class OracleTests
         finally { Directory.SetCurrentDirectory(previous); }
         Assert.Equal(expected.Replace("\r\n", "\n"), actual.Replace("\r\n", "\n"));
     }
+
+    [Theory, MemberData(nameof(Cv2))]
+    public void Cv2_snippet_matches_real_opencv(string name) => RunCase("cv2", name);
+
+    [Theory, MemberData(nameof(Pywt))]
+    public void Pywt_snippet_matches_real_pywavelets(string name) => RunCase("pywt", name);
 
     [Theory, MemberData(nameof(Numpy))]
     public void Numpy_snippet_matches_real_numpy(string name) => RunCase("numpy", name);

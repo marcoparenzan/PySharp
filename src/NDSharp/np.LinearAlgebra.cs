@@ -385,6 +385,14 @@ public static partial class np
                 var (u2, s2, v2) = JacobiSvd(tr, cols, rows); // tr = U2 S V2^T  =>  a = V2 S U2^T
                 u = v2; s = s2; v = u2;                       // u: rows×rows, v: cols×rows
             }
+            // LAPACK (Householder bidiagonalization) leaves the leading singular vectors with a negative first
+            // component far more often than not; mimic that for the dominant triplet so results agree more often.
+            if (k > 0 && v[0] > 1e-12)
+            {
+                int vc = rows >= cols ? cols : rows, uc2 = rows >= cols ? cols : rows;
+                for (int i = 0; i < (rows >= cols ? rows : cols); i++) { if (rows >= cols) u[i * uc2] = -u[i * uc2]; else v[i * vc] = -v[i * vc]; }
+                for (int i = 0; i < (rows >= cols ? cols : rows); i++) { if (rows >= cols) v[i * vc] = -v[i * vc]; else u[i * uc2] = -u[i * uc2]; }
+            }
             double[] uFull = fullMatrices && rows > k ? CompleteBasis(u, rows, k) : u;
             double[] vFull = fullMatrices && cols > k ? CompleteBasis(v, cols, k) : v;
             int ucols = fullMatrices && rows > k ? rows : k;

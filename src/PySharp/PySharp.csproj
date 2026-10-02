@@ -3,6 +3,8 @@
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
     <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
+    <ProjectReference Include="..\PySharpLib.Cv2\PySharpLib.Cv2.csproj" />
+    <ProjectReference Include="..\PySharpLib.Pywt\PySharpLib.Pywt.csproj" />
     <ProjectReference Include="..\PipSharpLib\PipSharpLib.csproj" />
     <ProjectReference Include="..\PySharpLib.Sqlite3\PySharpLib.Sqlite3.csproj" />
     <ProjectReference Include="..\PySharpLib.Pyodbc\PySharpLib.Pyodbc.csproj" />

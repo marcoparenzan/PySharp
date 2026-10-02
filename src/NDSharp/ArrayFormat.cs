@@ -251,7 +251,10 @@ public static class ArrayFormat
                 if (absNz.Count > 0)
                 {
                     double max = absNz.Max(), min = absNz.Min();
-                    if (max >= 1e8 || (!o.Suppress && (min < 0.0001 || max / min > 1000.0)))
+                    // numpy >= 2.3: the exponent cutoff depends on the dtype's decimal precision
+                    // (float16 -> 1e3, float32 -> 1e6, float64 -> 1e8).
+                    double cutoff = Math.Pow(10, Math.Min(8, dt switch { DType.Float16 => 3, DType.Float32 => 6, _ => 15 }));
+                    if (max >= cutoff || (!o.Suppress && (min < 0.0001 || max / min > 1000.0)))
                         _exp = true;
                 }
                 if (_exp)
@@ -409,7 +412,18 @@ public static class ArrayFormat
             }
             string ip = mant[..1];
             string fp = mant.Length > 1 ? mant[1..] : "";
-            if (fp.Length < minDigits) fp = fp.PadRight(minDigits, '0');
+            if (fp.Length < minDigits && av != 0)
+            {
+                // numpy's unique mode with min_digits keeps generating the value's *true* digits past the
+                // shortest representation (float32 0.89803922, not 0.89803920).
+                string e = av.ToString("E" + minDigits, CultureInfo.InvariantCulture);
+                int ePos = e.IndexOf('E');
+                string digits = e[..ePos].Replace(".", "");
+                exp = int.Parse(e[(ePos + 1)..], CultureInfo.InvariantCulture);
+                ip = digits[..1];
+                fp = digits[1..];
+            }
+            else if (fp.Length < minDigits) fp = fp.PadRight(minDigits, '0');
             string es = Math.Abs(exp).ToString(CultureInfo.InvariantCulture);
             es = es.PadLeft(Math.Max(2, expSize), '0');
             string sign = neg ? "-" : _plus ? "+" : "";

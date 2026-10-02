@@ -45,6 +45,24 @@ public sealed class Generator
 
     public NDArray StandardNormal(int[]? size = null) => Normal(0.0, 1.0, size);
 
+    /// <summary>numpy <c>normal(loc, scale, size)</c> with array-valued parameters (broadcast against each other
+    /// and <paramref name="size"/>); each element is <c>loc + scale * z</c> with z drawn in C order.</summary>
+    public NDArray Normal(NDArray loc, NDArray scale, int[]? size = null)
+    {
+        var shape = size ?? Broadcasting.Shape(loc.Shape, scale.Shape);
+        var z = StandardNormal(shape);
+        return np.Add(loc.AsType(DType.Float64), np.Multiply(scale.AsType(DType.Float64), z));
+    }
+
+    /// <summary>numpy <c>uniform(low, high, size)</c> with array-valued bounds: <c>low + (high - low) * u</c>.</summary>
+    public NDArray Uniform(NDArray low, NDArray high, int[]? size = null)
+    {
+        var l = low.AsType(DType.Float64);
+        var range = np.Subtract(high.AsType(DType.Float64), l);
+        var shape = size ?? Broadcasting.Shape(l.Shape, range.Shape);
+        return np.Add(l, np.Multiply(range, Random(shape)));
+    }
+
     public NDArray Normal(double loc, double scale, int[]? size = null)
     {
         var shape = Shape(size);
@@ -248,6 +266,21 @@ public sealed class Generator
                 raw[i] = unchecked(low + (long)Bounded(rng));
         var result = NDArray.FromArray(raw, shape);
         return dtype == DType.Int64 ? result : result.AsType(dtype);
+    }
+
+    /// <summary>numpy <c>multivariate_normal</c> (method 'svd'): rows ~ N(mean, cov). Reproduces numpy's draws when
+    /// the SVD's vector signs agree with LAPACK's (see NOTEBOOKS_PLAN.md known divergences).</summary>
+    public NDArray MultivariateNormal(NDArray mean, NDArray cov, int[]? size = null)
+    {
+        if (mean.Ndim != 1) throw new NDValueException("mean must be 1 dimensional");
+        int n = mean.Shape[0];
+        if (cov.Ndim != 2 || cov.Shape[0] != n || cov.Shape[1] != n) throw new NDValueException("mean and cov must have same length");
+        var finalShape = (size ?? Array.Empty<int>()).Concat(new[] { n }).ToArray();
+        var z = np.Reshape(StandardNormal(finalShape), -1, n);
+        var svd = np.Svd(cov.AsType(DType.Float64));
+        var transform = np.Multiply(np.ExpandDims(np.Sqrt(svd.S), 1), svd.Vt);
+        var x = np.Add(np.MatMul(z, transform), mean.AsType(DType.Float64));
+        return np.Reshape(x, finalShape);
     }
 
     // ================================================================ shuffling & sampling

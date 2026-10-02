@@ -33,6 +33,8 @@ internal static partial class NumpyRandom
         }
     }
 
+    private static bool IsArrayParam(object? o) => o is PyList or PyTuple || (o is not null && Conv.TryUnwrap(o) is { Ndim: > 0 });
+
     private static int[]? SizeArg(object? o) => o is null or PyNone ? null : Conv.ToShape(o);
 
     private static object Out(NDArray a, bool scalar) => scalar ? Conv.Scalarize(a) : Conv.Wrap(a);
@@ -54,12 +56,16 @@ internal static partial class NumpyRandom
         {
             var p = new Args("uniform", i, a.Skip(1).ToArray(), kw, "low", "high", "size");
             var size = SizeArg(p[2]);
+            if (IsArrayParam(p[0]) || IsArrayParam(p[1]))
+                return Out(Gen(a[0]).Uniform(p.Has(0) ? p.ND(0) : NDArray.Scalar(0.0), p.Has(1) ? p.ND(1) : NDArray.Scalar(1.0), size), false);
             return Out(Gen(a[0]).Uniform(p.Double(0, 0.0), p.Double(1, 1.0), size), size is null);
         });
         Def("normal", (i, a, kw) =>
         {
             var p = new Args("normal", i, a.Skip(1).ToArray(), kw, "loc", "scale", "size");
             var size = SizeArg(p[2]);
+            if (IsArrayParam(p[0]) || IsArrayParam(p[1]))
+                return Out(Gen(a[0]).Normal(p.Has(0) ? p.ND(0) : NDArray.Scalar(0.0), p.Has(1) ? p.ND(1) : NDArray.Scalar(1.0), size), false);
             return Out(Gen(a[0]).Normal(p.Double(0, 0.0), p.Double(1, 1.0), size), size is null);
         });
         Def("standard_normal", (i, a, kw) =>
@@ -97,6 +103,12 @@ internal static partial class NumpyRandom
             if (size is null)
                 return Conv.Result(pool is null ? idxArr.Get(0) : pool.Get((int)idx[0]));
             return Conv.Wrap(result);
+        });
+        Def("multivariate_normal", (i, a, kw) =>
+        {
+            var p = new Args("multivariate_normal", i, a.Skip(1).ToArray(), kw, "mean", "cov", "size", "check_valid", "tol", "method");
+            if (p.Has(5) && (string)p[5]! != "svd") throw PyErr.NotImplementedError("multivariate_normal supports method='svd' only");
+            return Conv.Wrap(Gen(a[0]).MultivariateNormal(p.ND(0), p.ND(1), SizeArg(p[2])));
         });
         Def("permutation", (i, a, kw) =>
         {

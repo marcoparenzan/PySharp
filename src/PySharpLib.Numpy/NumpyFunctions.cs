@@ -375,6 +375,26 @@ internal static class NumpyFunctions
             var p = new Args("trace", i, a, k, "a", "offset", "axis1", "axis2", "dtype", "out");
             return Conv.Result(np.Trace(p.ND(0), p.Int(1, 0)));
         });
+        Def("frombuffer", (i, a, k) =>
+        {
+            var p = new Args("frombuffer", i, a, k, "buffer", "dtype", "count", "offset");
+            byte[] bytes = p.Required(0) switch
+            {
+                PyBytes b => b.Data,
+                PyByteArray ba => ba.Data.ToArray(),
+                var o when Conv.TryUnwrap(o) is { } nd => nd.Copy().Buffer is var buf ? ToBytes(buf) : Array.Empty<byte>(),
+                _ => throw PyErr.TypeError("a bytes-like object is required"),
+            };
+            var dt = p.DType(1) ?? DType.Float64;
+            int offset = p.Int(3, 0), size = dt.ItemSize();
+            int count = p.Has(2) && p.Int(2, -1) >= 0 ? p.Int(2, -1) : (bytes.Length - offset) / size;
+            if (count * size + offset > bytes.Length) throw PyErr.ValueError("buffer is smaller than requested size");
+            if ((bytes.Length - offset) % size != 0 && !(p.Has(2) && p.Int(2, -1) >= 0))
+                throw PyErr.ValueError("buffer size must be a multiple of element size");
+            var arr = Array.CreateInstance(dt.ClrType(), count);
+            Buffer.BlockCopy(bytes, offset, arr, 0, count * size);
+            return Conv.Wrap(new NDArray(dt, arr, new[] { count }));
+        });
         Def("fill_diagonal", (i, a, k) =>
         {
             var p = new Args("fill_diagonal", i, a, k, "a", "val", "wrap");
@@ -688,10 +708,16 @@ internal static class NumpyFunctions
                 }
             }
             var f = Conv.ND(arrays[0]);
+            var coords = new List<NDArray>();
             foreach (var sp in arrays.Skip(1))
             {
-                if (Conv.TryUnwrap(sp) is { Ndim: > 0 }) throw PyErr.NotImplementedError("gradient with coordinate arrays is not implemented");
-                spacing.Add(PyOps.AsDouble(Conv.TryUnwrap(sp) is { Ndim: 0 } n0 ? Conv.Scalarize(n0) : sp));
+                if (sp is PyList or PyTuple || Conv.TryUnwrap(sp) is { Ndim: > 0 }) coords.Add(Conv.ND(sp));
+                else spacing.Add(PyOps.AsDouble(Conv.TryUnwrap(sp) is { Ndim: 0 } n0 ? Conv.Scalarize(n0) : sp));
+            }
+            if (coords.Count > 0)
+            {
+                var gc = np.GradientCoordinates(f, coords, axis is int ax0 ? new[] { ax0 } : null);
+                return gc.Length == 1 ? Conv.Wrap(gc[0]) : new PyList(gc.Select(x => (object)Conv.Wrap(x)).ToArray());
             }
             var res = np.Gradient(f, spacing.Count == 0 ? null : spacing.ToArray(), axis is int ax ? new[] { ax } : null);
             return res.Length == 1 ? Conv.Wrap(res[0]) : new PyList(res.Select(x => (object)Conv.Wrap(x)).ToArray());
@@ -834,6 +860,14 @@ internal static class NumpyFunctions
         if (args.Count == 1 && args[0] is PyTuple or PyList) return Conv.ToShape(args[0]);
         if (args.Count == 1 && Conv.IsNdArray(args[0])) return Conv.ToShape(args[0]);
         return args.Select(x => Conv.ToInt(x, "shape")).ToArray();
+    }
+
+    private static byte[] ToBytes(Array buf)
+    {
+        int n = Buffer.ByteLength(buf);
+        var bytes = new byte[n];
+        Buffer.BlockCopy(buf, 0, bytes, 0, n);
+        return bytes;
     }
 
     internal static PyTuple Shape(NDArray a) => new(a.Shape.Select(d => (object)new BigInteger(d)).ToArray());

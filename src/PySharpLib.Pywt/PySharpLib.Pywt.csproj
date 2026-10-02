@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
+    <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
+    <ProjectReference Include="..\NDSharp.Wavelets\NDSharp.Wavelets.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package metadata: the pywt module, a Python binding over NDSharp.Wavelets. -->
+    <PackageId>PySharp.Pywt</PackageId>
+    <Version>2.1.0</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Description>PySharp's pywt module (discrete wavelet transforms) — a Python binding over NDSharp.Wavelets. Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>python;pywt;wavelets;pysharp;ndsharp</PackageTags>
+    <PackageProjectUrl>https://github.com/marcoparenzan/PySharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/marcoparenzan/PySharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
