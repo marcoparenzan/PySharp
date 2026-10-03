@@ -1,6 +1,6 @@
 # Notebook run report
 
-Generated 2026-10-02 16:14 by tools/NotebookRunner (real matplotlib). Do not edit by hand.
+Generated 2026-10-03 10:17 by tools/NotebookRunner (real matplotlib). Do not edit by hand.
 
 | Notebook | Code cells | OK | Failed | First failure |
 |---|---|---|---|---|
@@ -34,36 +34,36 @@ Generated 2026-10-02 16:14 by tools/NotebookRunner (real matplotlib). Do not edi
 | lesson28_epipolar_geometry | 8 | 8 | 0 |  |
 | lesson29_structure_from_motion | 8 | 8 | 0 |  |
 | lesson30_projection | 6 | 6 | 0 |  |
-| lesson31_neural_network_fundamentals | 10 | 1 | 9 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson32_multilayer_perceptrons | 9 | 1 | 8 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson33_optimization | 13 | 0 | 13 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson34_convolutional_neural_networks | 7 | 1 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson35_training_a_cnn | 9 | 0 | 9 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson36_image_classification_practice | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'tarfile' |
-| lesson37_classic_architectures | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson38_transfer_learning | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'tarfile' |
-| lesson39_visualizing_cnns | 8 | 1 | 7 | cell 0: ModuleNotFoundError: No module named 'tarfile' |
-| lesson40_object_detection_sliding_windows | 7 | 0 | 7 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson41_object_detection_regression | 7 | 0 | 7 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson42_semantic_segmentation | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson43_instance_segmentation | 8 | 0 | 8 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson44_precision_and_parallel_training | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson45_attention_mechanism | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson46_transformer_architecture | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson47_vision_transformers | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson48_autoencoders | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson49_self_supervised_learning | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson50_dino_self_distillation | 6 | 1 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson51_masked_autoencoders | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson52_vision_language_models | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson53_visual_question_answering | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson54_segment_anything | 4 | 0 | 4 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson55_open_vocabulary_detection | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson56_monocular_depth_estimation | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson57_depth_anything | 3 | 0 | 3 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson58_stereo_foundationstereo | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson59_feedforward_pose_estimation | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson60_diffusion_models | 6 | 0 | 6 | cell 0: ModuleNotFoundError: No module named 'torch' |
-| lesson61_neural_rendering | 5 | 0 | 5 | cell 0: ModuleNotFoundError: No module named 'torch' |
+| lesson31_neural_network_fundamentals | 10 | 10 | 0 |  |
+| lesson32_multilayer_perceptrons | 9 | 9 | 0 |  |
+| lesson33_optimization | 13 | 13 | 0 |  |
+| lesson34_convolutional_neural_networks | 7 | 7 | 0 |  |
+| lesson35_training_a_cnn | 9 | 9 | 0 |  |
+| lesson36_image_classification_practice | 6 | 6 | 0 |  |
+| lesson37_classic_architectures | 4 | 4 | 0 |  |
+| lesson38_transfer_learning | 6 | 6 | 0 |  |
+| lesson39_visualizing_cnns | 8 | 8 | 0 |  |
+| lesson40_object_detection_sliding_windows | 7 | 7 | 0 |  |
+| lesson41_object_detection_regression | 7 | 7 | 0 |  |
+| lesson42_semantic_segmentation | 6 | 6 | 0 |  |
+| lesson43_instance_segmentation | 8 | 8 | 0 |  |
+| lesson44_precision_and_parallel_training | 6 | 6 | 0 |  |
+| lesson45_attention_mechanism | 4 | 4 | 0 |  |
+| lesson46_transformer_architecture | 5 | 5 | 0 |  |
+| lesson47_vision_transformers | 4 | 4 | 0 |  |
+| lesson48_autoencoders | 6 | 6 | 0 |  |
+| lesson49_self_supervised_learning | 4 | 4 | 0 |  |
+| lesson50_dino_self_distillation | 6 | 6 | 0 |  |
+| lesson51_masked_autoencoders | 6 | 6 | 0 |  |
+| lesson52_vision_language_models | 4 | 4 | 0 |  |
+| lesson53_visual_question_answering | 4 | 4 | 0 |  |
+| lesson54_segment_anything | 4 | 4 | 0 |  |
+| lesson55_open_vocabulary_detection | 5 | 5 | 0 |  |
+| lesson56_monocular_depth_estimation | 5 | 5 | 0 |  |
+| lesson57_depth_anything | 3 | 3 | 0 |  |
+| lesson58_stereo_foundationstereo | 5 | 5 | 0 |  |
+| lesson59_feedforward_pose_estimation | 5 | 5 | 0 |  |
+| lesson60_diffusion_models | 6 | 6 | 0 |  |
+| lesson61_neural_rendering | 5 | 5 | 0 |  |
 
-**Notebooks with every cell passing: 30 / 61**  (cells: 242 ok / 424)
+**Notebooks with every cell passing: 61 / 61**  (cells: 424 ok / 424)

@@ -268,36 +268,54 @@ are approximations or missing; unknown keyword arguments are ignored silently.
 
 ## Open points
 
-The cvintro notebooks as a whole are **not working yet** (decision 2026-10-02: the owner finishes the notebook work). State to start from:
+**Status 2026-10-03:** a full Release sweep (`NOTEBOOKS_RUN.md`, `tools/NotebookRunner`, real matplotlib, real CIFAR-10 / COCO / pretrained weights
+downloaded on first use) passes **61 / 61 notebooks, 424 / 424 code cells**. What is left is about confidence beyond the runner, not the runner itself.
+(History: on 2026-10-02 the owner took the notebook work over; the points below were written then and updated as they were closed.)
 
-1. **No trustworthy run report.** `NOTEBOOKS_RUN.md` is from the earlier matplotlib-stub era (or partial); a full Release sweep
-   (`dotnet build -c Release tools/NotebookRunner`, then run it with `--timeout 900`) was started and interrupted. Always run the runner in
-   Release — Debug is ~10x slower and produces false timeouts (lesson 50).
-2. **CIFAR lessons — retried with network (2026-10-02), Release runner:** 35, 36 and 39 pass every cell with the real CIFAR-10 download;
-   **38 still fails at `import torchvision`** (Phase 8: pretrained resnet18). Bugs found and fixed on the way: `urllib.request.urlretrieve`
+1. **Full sweep done.** Always run the runner in Release (`dotnet build -c Release tools/NotebookRunner`, then run it with `--timeout 1500`) —
+   Debug is ~10x slower and gives false timeouts. A complete sweep takes about 20 minutes (training loops, CPU inference of the detectors).
+2. **CIFAR lessons — retried with network (2026-10-02), Release runner:** 35, 36, 39 pass every cell with the real CIFAR-10 download, and
+   38 (resnet18 transfer learning) passes since Phase 8. Bugs found and fixed on the way: `urllib.request.urlretrieve`
    was missing (added: redirects, `reporthook`), `Path.home()/cwd()` missing, `open()` rejected Path objects, Python-2 pickles carry the
    numpy dtype name as `bytes` (`b'u1'`), `range` was not accepted as array input by numpy/matplotlib/torch. The real CIFAR batch unpickles
    identically to CPython (keys, dtype, sum, labels). Remaining diff: `float32` `.mean()` over 30M elements differs from numpy in the 7th
    digit (0.47658494 vs 0.47658497; NDSharp's float32 reduction order is not numpy's pairwise blocking).
-3. **Lessons 40–43 and 52–61 never run.** They import only torch/nn (+ some `torchvision`: models in 38, 41, 42, 43); `torchvision`,
-   `FaceDetectorYN`, Haar cascades are not implemented (Phase 8).
-4. **Kernel in VS Code with torch not re-tested.** The published kernel must ship libtorch natives (large); the new native-library
-   resolver in `JupyterNet.Engine/KernelPluginLoader.cs` handles plugin natives but was only exercised for SkiaSharp/OpenCvSharp.
-   VS Code notebooks failed before on stale kernel publish / missing natives — rebuild with `build/package-extension.ps1` and republish
-   `src/JupyterNet.Kernels.PySharp/bin/publish` (stop the running host first).
+3. **Lessons 38, 40–43 and 52–61:** all pass every cell (Release runner, 2026-10-03; 38/41/42/43 after Phase 8, 40 and 58 after fixing
+   `legend()` with dict views, `slice.start/stop`, `np.pad` modes edge/reflect/symmetric/wrap and `ClrMarshal.ToPython` wrapping runtime types such
+   as `PySlice` as .NET objects when globals are carried between cells — the last one also hit the VS Code kernel).
+4. **Kernel with torch, tested through the real JupyterNet plugin loader (2026-10-03):** `src/JupyterNet.Kernels.PySharp/bin/publish` republished
+   for `-r win-x64` (362 MB; without `-r` the publish carries every platform's natives, 1.3 GB). `jupyternet run` on a torch/numpy/matplotlib
+   test notebook and on lesson 31 (all cells, 4 PNG figures, 6 s) succeeds, with `manual_seed(0); randn(3)` equal to real torch. The VS Code
+   extension installed earlier already has the native-library resolver; reload the window to pick up the new publish. **Not tested inside
+   VS Code itself.** Packaging a .vsix with the pysharp kernel bundled would need the same `-r win-x64` (`build/package-extension.ps1` does
+   not pass it yet).
 5. **Numeric:** lesson 50 DINO with centering gives 0.2416 vs 0.2479 in real torch (ops equal; suspected chaotic divergence — unproven).
 6. **Known gaps:** matplotlib `twinx`/`pcolormesh`/`plot_surface`/offset text/pdf+svg `savefig`; `torch.save/load` is a pickle shim; `grad_fn`
    names are approximations (a tag per op, not libtorch's); `Module.parameters()` and friends return iterators over lists (not generators);
    `fused`/`foreach` optimizer variants absent; CUDA/MPS always unavailable.
-7. **Uncommitted:** everything from Phases 1–7 in PySharp, and the JupyterNet changes (image output, native resolver). Suggested Phase 7
-   commit title: *Phase 7 of the cvintro plan: PySharp.Torch over TorchSharp/libtorch (tensors, autograd, nn/optim/utils.data in Python
-   source), tarfile, real pickle + numpy-pickle reader, deepcopy honoring __deepcopy__ — seed/repr/training verified against torch 2.10*.
+7. **Uncommitted:** the fixes of 2026-10-03 (np.pad modes, slice attributes, legend with dict views, ClrMarshal pass-through), the
+   JupyterNet repo changes (image output, native resolver). Phases 1–7 of PySharp are committed.
 8. **Docs not updated for Phase 7:** README, RELEASE_NOTES, PROJECT_LOG (matplotlib phase is documented).
 
-### Phase 8 — Tier C: pretrained models
-- [ ] Weight/format route per D3; `torchvision.models` (resnet18, fcn_resnet50, fasterrcnn, maskrcnn),
-      `FaceDetectorYN` (ONNX) / `CascadeClassifier`
-- [ ] **Milestone M4:** lessons 38–43 and 52–61 — run what is feasible, document the rest honestly
+### Phase 8 — Tier C: pretrained models  ✅ (2026-10-03)
+Route (decision): not ONNX Runtime — torchvision itself, ported. The pure-Python parts of torchvision 0.25 (BSD-3) are copied from the oracle
+venv by `tools/oracle/gen_torchvision.py` into `src/PySharpLib.Torch/py/torchvision.*.py` (relative imports rewritten, header says GENERATED),
+on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to them. The official `.pth` weights are downloaded and read.
+- [x] `torch.load` of both checkpoint formats (zip with persistent storages; legacy pre-1.6 sequential pickles), `torch.hub.load_state_dict_from_url`
+      (same `~/.cache/torch/hub/checkpoints` as real torch), `Module.load_state_dict` with torch's per-module `_load_from_state_dict` hooks
+      (needed for old-name checkpoints: FPN/RPN renames, BatchNorm `num_batches_tracked`)
+- [x] `torchvision.models`: resnet18 (all resnet/mobilenet builders import), `segmentation.fcn_resnet50`, `detection.fasterrcnn_resnet50_fpn`,
+      `detection.maskrcnn_resnet50_fpn` with their `*_Weights` enums (url, meta, `transforms()`), `torchvision.ops` (nms/batched_nms/box_iou/
+      roi_align/MultiScaleRoIAlign/FPN/misc), `transforms` (tensor-only `functional`: resize with antialias, center_crop, normalize, ...)
+- [x] native kernels in C# that libtorch lacks: `nms` and `roi_align` (forward, same float arithmetic as torchvision's CPU kernels)
+- [x] `cv2.FaceDetectorYN` (YuNet): runs the ONNX net through OpenCV DNN with OpenCV's own padding/decoding/NMS (OpenCvSharp has no wrapper)
+- [x] **Milestone M4:** 38, 41, 42, 43 and 52–61 run every cell (lesson 38/41/42/43 measured individually 2026-10-03)
+- Verification (all equal to real torchvision 0.25 / OpenCV 4.11 output): `Oracle/torchvision/V1..V5` — resnet18 untrained (seeded) and pretrained,
+  FCN-ResNet50 pretrained, Faster R-CNN and Mask R-CNN pretrained on the COCO sample (boxes, labels, scores, mask sums), YuNet detections.
+  These download weights (46–170 MB) so they are **opt-in**: `PYSHARP_ORACLE_PRETRAINED=1 dotnet test --filter Torchvision_snippet` (V5 also reads
+  the course photo from `CVINTRO_DIR`, default `D:/clones/sbirchfield.github.io/cvintro`).
+- Not ported (not needed by the course): other model families (efficientnet, vit, convnext, ...), video/io/datasets, v2 transforms, PIL inputs.
+  `torch.jit`/`torch.fx`/`torch.compiler` are no-op stubs.
 
 ### Phase 9 — Close-out
 - [ ] README/ROADMAP/RELEASE_NOTES; version bump (lockstep, as in v2.0.0); PROJECT_LOG entry

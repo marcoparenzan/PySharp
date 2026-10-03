@@ -80,6 +80,15 @@ public static class TypeMethods
             return true;
         }
         // data attributes (not methods)
+        if (obj is PySlice sl)
+        {
+            switch (name)
+            {
+                case "start": value = sl.Start; return true;
+                case "stop": value = sl.Stop; return true;
+                case "step": value = sl.Step; return true;
+            }
+        }
         if (obj is PyRange r)
         {
             switch (name)

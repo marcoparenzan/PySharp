@@ -24,18 +24,33 @@ public static class TorchRegistration
         importer.RegisterBuiltin("torch._C", _ => TorchModule.Create());
         importer.RegisterBuiltin("torch._F", _ => TorchFunctional.Create());
         importer.RegisterBuiltin("torch.nn.init", _ => TorchFunctional.CreateInit());
-        foreach (var (name, isPackage) in new[]
-                 {
-                     ("torch", true), ("torch.nn", true), ("torch.nn.functional", false), ("torch.nn.modules", false), ("torch.nn.utils", true), ("torch.optim", true),
-                     ("torch.optim.lr_scheduler", false), ("torch.utils", true), ("torch.utils.data", false), ("torch.cuda", true),
-                     ("torch.backends", true), ("torch.autograd", true), ("torch.linalg", false), ("torch.nn.parameter", false),
-                 })
+        importer.RegisterBuiltin("torch._utils", _ => TorchSerialization.UtilsModule());
+        // every embedded py/<module>.py (or <module>.pkg.py for a package's __init__) is a Python-source module
+        var names = PySource.ModuleNames().ToList();
+        foreach (var (name, pkgFlag) in names)
+        {
+            bool isPackage = pkgFlag || names.Any(n => n.Item1.StartsWith(name + ".", StringComparison.Ordinal));
             importer.RegisterSourceModule(name, PySource.Load(name), isPackage);
+        }
     }
 }
 
 internal static class PySource
 {
+    private const string Prefix = "PySharpLib.Torch.py.";
+
+    /// <summary>(module name, declared as a package with a .pkg.py file) for every embedded Python source.</summary>
+    public static IEnumerable<(string, bool)> ModuleNames()
+    {
+        foreach (var r in typeof(PySource).Assembly.GetManifestResourceNames())
+        {
+            if (!r.StartsWith(Prefix, StringComparison.Ordinal) || !r.EndsWith(".py", StringComparison.Ordinal)) continue;
+            var n = r[Prefix.Length..^3];
+            bool pkg = n.EndsWith(".pkg", StringComparison.Ordinal);
+            yield return (pkg ? n[..^4] : n, pkg);
+        }
+    }
+
     public static string Load(string module)
     {
         string res = "PySharpLib.Torch.py." + module + ".py";
@@ -294,7 +309,7 @@ internal static class TorchModule
         Def("randn", (i, a, kw) => { var o = GetOpts(kw); return TC.Wrap(Finish(torch.randn(SizeFrom(a, kw), o.DType, null, false, o.Gen), o)); });
         Def("full", (i, a, kw) =>
         {
-            var p = new Args("full", i, a, kw, "size", "fill_value", "dtype", "device", "requires_grad", "generator");
+            var p = new Args("full", i, a, kw, "size", "fill_value", "dtype", "device", "requires_grad", "generator", "layout", "pin_memory");
             var o = GetOpts(kw);
             var fv = p.Required(1);
             var dt = o.DType ?? (fv is double ? TC.DefaultFloat : fv is bool ? ScalarType.Bool : ScalarType.Int64);
@@ -315,7 +330,7 @@ internal static class TorchModule
         });
         Def("arange", (i, a, kw) =>
         {
-            var p = new Args("arange", i, a, kw, "start", "end", "step", "dtype", "device", "requires_grad");
+            var p = new Args("arange", i, a, kw, "start", "end", "step", "dtype", "device", "requires_grad", "layout", "pin_memory");
             var o = GetOpts(kw);
             object first = p.Required(0);
             object? second = p.Has(1) ? p[1] : null, third = p.Has(2) ? p[2] : null;
@@ -328,13 +343,13 @@ internal static class TorchModule
         });
         Def("linspace", (i, a, kw) =>
         {
-            var p = new Args("linspace", i, a, kw, "start", "end", "steps", "dtype", "device", "requires_grad");
+            var p = new Args("linspace", i, a, kw, "start", "end", "steps", "dtype", "device", "requires_grad", "layout", "pin_memory");
             var o = GetOpts(kw);
             return TC.Wrap(Finish(torch.linspace(TC.ToDouble(p.Required(0)), TC.ToDouble(p.Required(1)), TC.ToLong(p.Required(2)), o.DType ?? TC.DefaultFloat), o));
         });
         Def("eye", (i, a, kw) =>
         {
-            var p = new Args("eye", i, a, kw, "n", "m", "dtype", "device", "requires_grad");
+            var p = new Args("eye", i, a, kw, "n", "m", "dtype", "device", "requires_grad", "layout", "pin_memory");
             var o = GetOpts(kw);
             long n = TC.ToLong(p.Required(0));
             return TC.Wrap(Finish(torch.eye(n, p.Has(1) ? TC.ToLong(p[1]!) : n, o.DType ?? TC.DefaultFloat), o));
@@ -497,8 +512,14 @@ internal static class TorchModule
 
     private static void InstallMisc(PyModule m)
     {
+        foreach (var (name, cls) in TorchSerialization.StorageClasses) m.Dict[name] = cls;
+        m.Dict["_load_zip"] = Ops.Fn("_load_zip", (i, a, kw) => TorchSerialization.LoadZip(i, (string)a[0]));
+        m.Dict["_load_legacy"] = Ops.Fn("_load_legacy", (i, a, kw) => TorchSerialization.LoadLegacy(i, (string)a[0]));
+        TorchVisionOps.Install(m);
+        m.Dict["_get_tracing_state"] = Ops.Fn("_get_tracing_state", (i, a, kw) => PyNone.Instance);
         m.Dict["_set_size_class"] = Ops.Fn("_set_size_class", (i, a, kw) => { TC.SizeClass = a[0]; TC.Interp = i; return PyNone.Instance; });
         m.Dict["__version__"] = "2.10.0+pysharp (TorchSharp/libtorch)";
+        m.Dict["strided"] = "torch.strided";
         m.Dict["pi"] = Math.PI; m.Dict["e"] = Math.E; m.Dict["inf"] = double.PositiveInfinity; m.Dict["nan"] = double.NaN;
         m.Dict["_cuda_is_available"] = Ops.Fn("is_available", (i, a, kw) => false);
         m.Dict["_get_num_threads"] = Ops.Fn("get_num_threads", (i, a, kw) => new BigInteger(torch.get_num_threads()));

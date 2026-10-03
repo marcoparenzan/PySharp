@@ -179,6 +179,34 @@ internal static partial class Cv2Module
             return new PyInstance(stereoClass) { Native = new Cv.StereoBlockMatcher(p.Int(0, 0), p.Int(1, 21)) };
         });
 
+        // ------------------------------------------------------------ FaceDetectorYN (YuNet)
+        var yuClass = NewObjectClass("FaceDetectorYN");
+        Cv.FaceDetectorYuNet YU(object o) => (Cv.FaceDetectorYuNet)((PyInstance)o).Native!;
+        yuClass.Dict["detect"] = Fn("FaceDetectorYN.detect", (i, a, k) =>
+        {
+            var p = new Args("detect", i, a.Skip(1).ToArray(), k, "image", "faces");
+            var faces = YU(a[0]).Detect(A.Image(p.Required(0)));
+            return Tuple(Big(1), faces is null ? PyNone.Instance : A.Wrap(faces));
+        });
+        yuClass.Dict["setInputSize"] = Fn("FaceDetectorYN.setInputSize", (i, a, k) => { var (w, h) = A.Pair(a[1]); YU(a[0]).SetInputSize(w, h); return PyNone.Instance; });
+        yuClass.Dict["getInputSize"] = Fn("FaceDetectorYN.getInputSize", (i, a, k) => Tuple(Big(YU(a[0]).InputWidth), Big(YU(a[0]).InputHeight)));
+        yuClass.Dict["setScoreThreshold"] = Fn("FaceDetectorYN.setScoreThreshold", (i, a, k) => { YU(a[0]).ScoreThreshold = (float)PyOps.AsDouble(a[1]); return PyNone.Instance; });
+        yuClass.Dict["getScoreThreshold"] = Fn("FaceDetectorYN.getScoreThreshold", (i, a, k) => (double)YU(a[0]).ScoreThreshold);
+        yuClass.Dict["setNMSThreshold"] = Fn("FaceDetectorYN.setNMSThreshold", (i, a, k) => { YU(a[0]).NmsThreshold = (float)PyOps.AsDouble(a[1]); return PyNone.Instance; });
+        yuClass.Dict["getNMSThreshold"] = Fn("FaceDetectorYN.getNMSThreshold", (i, a, k) => (double)YU(a[0]).NmsThreshold);
+        yuClass.Dict["setTopK"] = Fn("FaceDetectorYN.setTopK", (i, a, k) => { YU(a[0]).TopK = Conv.ToInt(a[1], "top_k"); return PyNone.Instance; });
+        yuClass.Dict["getTopK"] = Fn("FaceDetectorYN.getTopK", (i, a, k) => Big(YU(a[0]).TopK));
+        m.Dict["FaceDetectorYN"] = yuClass;
+        BuiltinFn createYu = (i, a, k) =>
+        {
+            var p = new Args("FaceDetectorYN_create", i, a, k, "model", "config", "input_size", "score_threshold", "nms_threshold", "top_k", "backend_id", "target_id");
+            var (w, h) = A.Pair(p.Required(2));
+            string model = p.Required(0) is string ms ? ms : PyOps.Str(i, p.Required(0));
+            return new PyInstance(yuClass) { Native = new Cv.FaceDetectorYuNet(model, w, h, (float)p.Double(3, 0.9), (float)p.Double(4, 0.3), p.Int(5, 5000)) };
+        };
+        Def("FaceDetectorYN_create", createYu);
+        yuClass.Dict["create"] = new PyStaticMethod(Fn("FaceDetectorYN.create", createYu));
+
         // ------------------------------------------------------------ stitching & cascades
         var stitcherClass = NewObjectClass("Stitcher");
         stitcherClass.Dict["stitch"] = Fn("Stitcher.stitch", (i, a, k) =>

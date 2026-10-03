@@ -10,6 +10,15 @@ namespace PySharp.Tests.Oracle;
 /// very same snippet with REAL CPython + the real library (tools/oracle/make_golden.py). A failing
 /// case is therefore a real divergence from numpy/OpenCV/..., not a stale hand-typed expectation.
 /// To add coverage: drop a <c>.py</c> in the folder and run make_golden.py.</summary>
+public sealed class PretrainedTheoryAttribute : TheoryAttribute
+{
+    public PretrainedTheoryAttribute()
+    {
+        if (Environment.GetEnvironmentVariable("PYSHARP_ORACLE_PRETRAINED") != "1")
+            Skip = "downloads pretrained weights (hundreds of MB): set PYSHARP_ORACLE_PRETRAINED=1 to run";
+    }
+}
+
 public class OracleTests
 {
     private static string Root => Path.Combine(AppContext.BaseDirectory, "Oracle");
@@ -23,6 +32,7 @@ public class OracleTests
     public static IEnumerable<object[]> Pywt() => Snippets("pywt");
     public static IEnumerable<object[]> Matplotlib() => Snippets("matplotlib");
     public static IEnumerable<object[]> Torch() => Snippets("torch");
+    public static IEnumerable<object[]> Torchvision() => Snippets("torchvision");
 
     private static void RunCase(string lib, string name)
     {
@@ -48,6 +58,10 @@ public class OracleTests
 
     [Theory, MemberData(nameof(Torch))]
     public void Torch_snippet_matches_real_torch(string name) => RunCase("torch", name);
+
+    /// <summary>Pretrained-model snippets download torchvision weights (tens to hundreds of MB, cached in ~/.cache/torch/hub): opt-in.</summary>
+    [PretrainedTheory, MemberData(nameof(Torchvision))]
+    public void Torchvision_snippet_matches_real_torchvision(string name) => RunCase("torchvision", name);
 
     [Theory, MemberData(nameof(Numpy))]
     public void Numpy_snippet_matches_real_numpy(string name) => RunCase("numpy", name);

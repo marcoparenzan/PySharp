@@ -13,20 +13,33 @@ namespace PySharpLib.Modules;
 /// <summary>A reader for CPython's real pickle format (protocols 0–5, including the Python-2-era files such as CIFAR-10's
 /// batches). Globals are resolved through the import system, so <c>numpy.core.multiarray._reconstruct</c> and friends work as
 /// soon as numpy is registered.</summary>
-internal static class RealPickle
+public static class RealPickle
 {
     /// <summary>The private format PySharp's own <c>dumps</c> writes starts with a small tag byte (0–12); real pickles start with 0x80 or ASCII.</summary>
     public static bool LooksReal(byte[] data) => data.Length > 0 && (data[0] == 0x80 || data[0] >= 0x20);
 
     private static readonly object Mark = new();
 
-    public static object Load(Interp interp, byte[] d, string encoding)
+    public static object Load(Interp interp, byte[] d, string encoding, Func<object, object>? persistentLoad = null)
+        => Load(interp, d, encoding, persistentLoad, 0, out _);
+
+    /// <summary>Loads one pickle that starts at <paramref name="start"/>; <paramref name="end"/> is the offset just after its STOP
+    /// opcode (torch's legacy checkpoints concatenate several pickles and raw data in one file).</summary>
+    public static object Load(Interp interp, byte[] d, string encoding, Func<object, object>? persistentLoad, int start, out int end)
+    {
+        var endBox = new int[1];
+        var result = LoadCore(interp, d, encoding, persistentLoad, start, endBox);
+        end = endBox[0];
+        return result;
+    }
+
+    private static object LoadCore(Interp interp, byte[] d, string encoding, Func<object, object>? persistentLoad, int start, int[] endBox)
     {
         var stack = new List<object>();
         var metaStack = new Stack<List<object>>();
         var memo = new Dictionary<long, object>();
         long nextMemo = 0;
-        int pos = 0;
+        int pos = start;
         var dummyModule = new PyModule("__pickle__");
 
         byte Byte() => d[pos++];
@@ -78,7 +91,7 @@ internal static class RealPickle
         object LoadLoop()
         {
             stack.Clear();
-            pos = 0;
+            pos = start;
             while (true)
             {
                 byte op = Byte();
@@ -86,7 +99,7 @@ internal static class RealPickle
                 {
                     case '\x80': Byte(); break;
                     case '\x95': pos += 8; break;
-                    case '.': return stack[^1];
+                    case '.': endBox[0] = pos; return stack[^1];
                     case '(': stack.Add(Mark); break;
                     case '0': Pop(); break;
                     case '1': PopMark(); break;
@@ -128,11 +141,11 @@ internal static class RealPickle
                     case '\x85': { var a = Pop(); stack.Add(new PyTuple(new[] { a })); break; }
                     case '\x86': { var b = Pop(); var a = Pop(); stack.Add(new PyTuple(new[] { a, b })); break; }
                     case '\x87': { var c = Pop(); var b = Pop(); var a = Pop(); stack.Add(new PyTuple(new[] { a, b, c })); break; }
-                    case 'a': { var v = Pop(); ((PyList)stack[^1]).Items.Add(v); break; }
-                    case 'e': { var items = PopMark(); ((PyList)stack[^1]).Items.AddRange(items); break; }
+                    case 'a': { var v = Pop(); if (stack[^1] is PyList pl) pl.Items.Add(v); else interp.CallMethod(stack[^1], "append", new[] { v }); break; }
+                    case 'e': { var items = PopMark(); if (stack[^1] is PyList pl) pl.Items.AddRange(items); else foreach (var it in items) interp.CallMethod(stack[^1], "append", new[] { it }); break; }
                     case 'd': { var items = PopMark(); var dict = new PyDict(); for (int i = 0; i + 1 < items.Count; i += 2) dict[items[i]] = items[i + 1]; stack.Add(dict); break; }
-                    case 's': { var v = Pop(); var k = Pop(); ((PyDict)stack[^1])[k] = v; break; }
-                    case 'u': { var items = PopMark(); var dict = (PyDict)stack[^1]; for (int i = 0; i + 1 < items.Count; i += 2) dict[items[i]] = items[i + 1]; break; }
+                    case 's': { var v = Pop(); var k = Pop(); SetItem(interp, stack[^1], k, v); break; }
+                    case 'u': { var items = PopMark(); var target = stack[^1]; for (int i = 0; i + 1 < items.Count; i += 2) SetItem(interp, target, items[i], items[i + 1]); break; }
                     case '\x90': { var items = PopMark(); var set = (PySet)stack[^1]; foreach (var it in items) set.Items.Add(it); break; }
                     case '\x91': stack.Add(new PyFrozenSet(PopMark())); break;
                     case 'p': { long k = long.Parse(Line()); memo[k] = stack[^1]; break; }
@@ -163,11 +176,18 @@ internal static class RealPickle
                     }
                     case 'o': { var items = PopMark(); var cls = items[0]; stack.Add(NewObj(interp, cls, items.Skip(1).ToArray())); break; }
                     case 'i': { string m = Line(), n = Line(); var items = PopMark(); stack.Add(NewObj(interp, Global(m, n), items.ToArray())); break; }
-                    case 'P': throw Err("persistent ids are not supported");
+                    case 'Q': { var pid = Pop(); stack.Add(persistentLoad is null ? throw Err("persistent ids are not supported") : persistentLoad(pid)); break; }
+                    case 'P': { var pid = Line(); stack.Add(persistentLoad is null ? throw Err("persistent ids are not supported") : persistentLoad(pid)); break; }
                     default: throw Err($"invalid load key, '{(op >= 0x20 && op < 0x7f ? ((char)op).ToString() : "\\x" + op.ToString("x2"))}'.");
                 }
             }
         }
+    }
+
+    private static void SetItem(Interp interp, object target, object key, object value)
+    {
+        if (target is PyDict d) d[key] = value;
+        else interp.CallMethod(target, "__setitem__", new[] { key, value }); // OrderedDict & other dict subclasses
     }
 
     private static object NewObj(Interp interp, object cls, object[] args)

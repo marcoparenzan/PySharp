@@ -52,8 +52,18 @@ def save(obj, f, *args, **kwargs):
         pickle.dump(conv(obj), f)
 
 
-def load(f, *args, **kwargs):
+def load(f, map_location=None, pickle_module=None, *, weights_only=None, mmap=None, **kwargs):
     import pickle
+    import zipfile
+    import os
+    if isinstance(f, str) or hasattr(f, "__fspath__"):
+        path = os.fspath(f)
+        if zipfile.is_zipfile(path):
+            return _C._load_zip(path)
+        with open(path, "rb") as fh:
+            head = fh.read(16)
+        if head[:3] == b"":
+            return _C._load_legacy(path)
 
     def unconv(o):
         if isinstance(o, tuple) and len(o) == 3 and o[0] == "__tensor__":
@@ -68,6 +78,11 @@ def load(f, *args, **kwargs):
         with open(f, "rb") as fh:
             return unconv(pickle.load(fh))
     return unconv(pickle.load(f))
+
+
+def _assert(condition, message):
+    if not condition:
+        raise AssertionError(message)
 
 
 def get_num_threads():
@@ -92,7 +107,7 @@ class autocast:
         return fn
 
 
-from torch import nn, optim, utils, autograd, cuda, backends, linalg
+from torch import nn, optim, utils, autograd, cuda, backends, linalg, hub, fx, jit, compiler
 from torch.nn import functional
 
 grad = autograd.grad

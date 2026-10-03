@@ -42,6 +42,12 @@ internal sealed class TBox : IPyNumberLike, INdArrayConvertible
     public NDArray ToNDArray() => TC.ToNd(T);
 }
 
+internal static class TensorExt
+{
+    /// <summary>The elements as a managed array; an empty tensor yields an empty array (TorchSharp's data&lt;T&gt;() throws on those).</summary>
+    public static T[] ToArr<T>(this Tensor t) where T : unmanaged => t.numel() == 0 ? Array.Empty<T>() : t.data<T>().ToArray();
+}
+
 /// <summary>Python ⇄ libtorch conversions.</summary>
 internal static class TC
 {
@@ -176,7 +182,7 @@ internal static class TC
                 var t = tb.T;
                 var dims = t.shape;
                 for (int i = 0; i < dims.Length; i++) { if (depth + i < shape.Count) { if (shape[depth + i] != dims[i]) throw PyErr.ValueError("expected sequence of equal length"); } else shape.Add(dims[i]); }
-                var flat = t.to(ScalarType.Float64).flatten().data<double>().ToArray();
+                var flat = t.to(ScalarType.Float64).flatten().ToArr<double>();
                 vals.AddRange(flat);
                 kind[0] = Math.Max(kind[0], t.dtype == ScalarType.Bool ? 0 : IsFloat(t.dtype) ? 2 : 1);
                 return;
@@ -257,15 +263,15 @@ internal static class TC
         var shape = c.shape.Select(v => (int)v).ToArray();
         switch (c.dtype)
         {
-            case ScalarType.Float32: return NDArray.FromArray(c.data<float>().ToArray(), shape);
-            case ScalarType.Float64: return NDArray.FromArray(c.data<double>().ToArray(), shape);
-            case ScalarType.Int64: return NDArray.FromArray(c.data<long>().ToArray(), shape);
-            case ScalarType.Int32: return NDArray.FromArray(c.data<int>().ToArray(), shape);
-            case ScalarType.Int16: return NDArray.FromArray(c.data<short>().ToArray(), shape);
-            case ScalarType.Int8: return NDArray.FromArray(c.data<sbyte>().ToArray(), shape);
-            case ScalarType.Byte: return NDArray.FromArray(c.data<byte>().ToArray(), shape);
-            case ScalarType.Bool: return NDArray.FromArray(c.data<bool>().ToArray(), shape);
-            default: return NDArray.FromArray(c.to(ScalarType.Float32).data<float>().ToArray(), shape);
+            case ScalarType.Float32: return NDArray.FromArray(c.ToArr<float>(), shape);
+            case ScalarType.Float64: return NDArray.FromArray(c.ToArr<double>(), shape);
+            case ScalarType.Int64: return NDArray.FromArray(c.ToArr<long>(), shape);
+            case ScalarType.Int32: return NDArray.FromArray(c.ToArr<int>(), shape);
+            case ScalarType.Int16: return NDArray.FromArray(c.ToArr<short>(), shape);
+            case ScalarType.Int8: return NDArray.FromArray(c.ToArr<sbyte>(), shape);
+            case ScalarType.Byte: return NDArray.FromArray(c.ToArr<byte>(), shape);
+            case ScalarType.Bool: return NDArray.FromArray(c.ToArr<bool>(), shape);
+            default: return NDArray.FromArray(c.to(ScalarType.Float32).ToArr<float>(), shape);
         }
     }
 
@@ -289,9 +295,9 @@ internal static class TC
         var shape = c.shape;
         object[] flat = c.dtype switch
         {
-            ScalarType.Bool => c.data<bool>().ToArray().Select(v => (object)v).ToArray(),
-            ScalarType.Float32 or ScalarType.Float64 or ScalarType.Float16 or ScalarType.BFloat16 => c.to(ScalarType.Float64).data<double>().ToArray().Select(v => (object)v).ToArray(),
-            _ => c.to(ScalarType.Int64).data<long>().ToArray().Select(v => (object)new BigInteger(v)).ToArray(),
+            ScalarType.Bool => c.ToArr<bool>().Select(v => (object)v).ToArray(),
+            ScalarType.Float32 or ScalarType.Float64 or ScalarType.Float16 or ScalarType.BFloat16 => c.to(ScalarType.Float64).ToArr<double>().Select(v => (object)v).ToArray(),
+            _ => c.to(ScalarType.Int64).ToArr<long>().Select(v => (object)new BigInteger(v)).ToArray(),
         };
         int pos = 0;
         object Build(int d)
@@ -332,7 +338,7 @@ internal static class TC
             PyTuple t => t.Items.Select(i => ToLong(i)).ToArray(),
             PyRange rg => rg.Enumerate().Select(i => ToLong(i)).ToArray(),
             PyInstance { Native: SizeBox sb } => (long[])sb.Values.Clone(),
-            PyInstance { Native: TBox b } when b.T.Dimensions >= 1 => b.T.to(ScalarType.Int64).data<long>().ToArray(),
+            PyInstance { Native: TBox b } when b.T.Dimensions >= 1 => b.T.to(ScalarType.Int64).ToArr<long>(),
             _ => new[] { ToLong(o) },
         };
 

@@ -75,6 +75,8 @@ public static class ClrMarshal
             or PyInstance or PyClass or PyModule or PyFunction or PyBuiltinFunction or PyBoundMethod
             or ClrObject or ClrType or ClrMethod => value,
         Type t => new ClrType(t),
+        // any other runtime-native Python type (PySlice, PyRange, PyIterator, generators, ...) is already a Python value
+        _ when value.GetType().Namespace is { } ns && ns.StartsWith("PySharpLib", StringComparison.Ordinal) => value,
         char c => c.ToString(),
         sbyte or byte or short or ushort or int or uint or long or ulong
             => (BigInteger)Convert.ToInt64(value),

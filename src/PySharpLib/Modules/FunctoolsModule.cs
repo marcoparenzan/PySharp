@@ -240,6 +240,9 @@ public static class FunctoolsModule
         PyDict? wrapperAttrs = wrapper switch { PyFunction f => f.Attributes, PyBuiltinFunction b => b.Attributes, _ => null };
         if (wrapperAttrs is null)
             return;
+        // an earlier wraps()/update_wrapper may already have overridden __name__ on the wrapped function: that value wins
+        if (wrappedAttrs is not null && wrappedAttrs.TryGet("__name__", out var overriddenName) && overriddenName is string on)
+            name = on;
         if (name is not null)
         {
             wrapperAttrs["__name__"] = name;
@@ -248,6 +251,10 @@ public static class FunctoolsModule
         wrapperAttrs["__wrapped__"] = wrapped;
         if (wrappedAttrs is null)
             return;
+        // WRAPPER_UPDATES: the wrapped function's own attributes (its __dict__) are copied too
+        foreach (var e in wrappedAttrs.Entries.ToList())
+            if (e.Key is string k && !k.StartsWith("__", StringComparison.Ordinal))
+                wrapperAttrs[k] = e.Value;
         if (wrappedAttrs.TryGet("__doc__", out var doc))
             wrapperAttrs["__doc__"] = doc;
         if (wrappedAttrs.TryGet("__module__", out var mod))

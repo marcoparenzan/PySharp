@@ -79,6 +79,7 @@ class Module:
                 raise AttributeError("cannot assign parameters before Module.__init__() call")
             self._buffers.pop(name, None)
             self._modules.pop(name, None)
+            self._drop_plain(name)
             params[name] = value
         elif params is not None and name in params:
             if value is not None:
@@ -89,6 +90,7 @@ class Module:
                 raise AttributeError("cannot assign module before Module.__init__() call")
             params.pop(name, None)
             self._buffers.pop(name, None)
+            self._drop_plain(name)
             self._modules[name] = value
         elif params is not None and name in self._modules:
             if value is not None:
@@ -100,6 +102,13 @@ class Module:
             self._buffers[name] = value
         else:
             object.__setattr__(self, name, value)
+
+    def _drop_plain(self, name):
+        # a plain attribute of the same name (e.g. `self.head = None` in __init__) must not shadow the registered one
+        try:
+            object.__delattr__(self, name)
+        except AttributeError:
+            pass
 
     def __delattr__(self, name):
         if name in self._parameters:
@@ -306,25 +315,60 @@ class Module:
                 module.state_dict(destination, prefix + name + ".", keep_vars)
         return destination
 
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        persistent_buffers = {k: v for k, v in self._buffers.items() if k not in self._non_persistent_buffers_set}
+        local_state = {k: v for k, v in list(self._parameters.items()) + list(persistent_buffers.items()) if v is not None}
+        for name, param in local_state.items():
+            key = prefix + name
+            if key in state_dict:
+                input_param = state_dict[key]
+                if not isinstance(input_param, torch.Tensor):
+                    error_msgs.append("While copying the parameter named \"" + key + "\", expected torch.Tensor or Tensor-like object from checkpoint but received " + str(type(input_param)))
+                    continue
+                if tuple(input_param.shape) != tuple(param.shape):
+                    error_msgs.append("size mismatch for " + key + ": copying a param with shape " + str(input_param.shape) + " from checkpoint, the shape in current model is " + str(param.shape) + ".")
+                    continue
+                with torch.no_grad():
+                    param.copy_(input_param)
+            elif strict:
+                missing_keys.append(key)
+        if strict:
+            for key in state_dict.keys():
+                if key.startswith(prefix):
+                    input_name = key[len(prefix):].split(".", 1)
+                    if len(input_name) > 1:
+                        if input_name[0] not in self._modules:
+                            unexpected_keys.append(key)
+                    elif input_name[0] not in local_state:
+                        unexpected_keys.append(key)
+
     def load_state_dict(self, state_dict, strict=True, assign=False):
-        own = self.state_dict(keep_vars=True)
-        missing = [k for k in own if k not in state_dict]
-        unexpected = [k for k in state_dict if k not in own]
-        if strict and (missing or unexpected):
-            msgs = []
-            if unexpected:
-                msgs.append("Unexpected key(s) in state_dict: " + ", ".join('"' + k + '"' for k in unexpected) + ". ")
-            if missing:
-                msgs.append("Missing key(s) in state_dict: " + ", ".join('"' + k + '"' for k in missing) + ". ")
-            raise RuntimeError("Error(s) in loading state_dict for " + type(self).__name__ + ":\n\t" + "\n\t".join(msgs))
-        with torch.no_grad():
-            for k, v in own.items():
-                if k in state_dict:
-                    src = state_dict[k]
-                    if tuple(src.shape) != tuple(v.shape):
-                        raise RuntimeError("Error(s) in loading state_dict for " + type(self).__name__ + ":\n\tsize mismatch for " + k + ": copying a param with shape " + str(src.shape) + " from checkpoint, the shape in current model is " + str(v.shape) + ".")
-                    v.copy_(src)
-        return _IncompatibleKeys(missing, unexpected)
+        if not isinstance(state_dict, dict):
+            raise TypeError("Expected state_dict to be dict-like, got " + str(type(state_dict)) + ".")
+        metadata = getattr(state_dict, "_metadata", None)
+        state_dict = dict(state_dict)
+        missing_keys = []
+        unexpected_keys = []
+        error_msgs = []
+
+        def load(module, local_state_dict, prefix=""):
+            local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
+            module._load_from_state_dict(local_state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
+            for name, child in module._modules.items():
+                if child is not None:
+                    child_prefix = prefix + name + "."
+                    child_state_dict = {k: v for k, v in local_state_dict.items() if k.startswith(child_prefix)}
+                    load(child, child_state_dict, child_prefix)
+
+        load(self, state_dict)
+        if strict:
+            if len(unexpected_keys) > 0:
+                error_msgs.insert(0, "Unexpected key(s) in state_dict: " + ", ".join('"' + k + '"' for k in unexpected_keys) + ". ")
+            if len(missing_keys) > 0:
+                error_msgs.insert(0, "Missing key(s) in state_dict: " + ", ".join('"' + k + '"' for k in missing_keys) + ". ")
+        if len(error_msgs) > 0:
+            raise RuntimeError("Error(s) in loading state_dict for " + type(self).__name__ + ":\n\t" + "\n\t".join(error_msgs))
+        return _IncompatibleKeys(missing_keys, unexpected_keys)
 
     def extra_repr(self):
         return ""
@@ -655,6 +699,20 @@ class ConvTranspose2d(_ConvNd):
         return F.conv_transpose2d(input, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.groups, self.dilation)
 
 
+def _triple(v):
+    if isinstance(v, (tuple, list)):
+        return tuple(v)
+    return (v, v, v)
+
+
+class Conv3d(_ConvNd):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode="zeros", device=None, dtype=None):
+        super().__init__(in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), False, (0, 0, 0), groups, bias, padding_mode, 3)
+
+    def forward(self, input):
+        raise NotImplementedError("Conv3d forward is not supported yet")
+
+
 class _MaxPoolNd(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1, return_indices=False, ceil_mode=False):
         super().__init__()
@@ -738,6 +796,14 @@ class _NormBase(Module):
             self.register_buffer("running_var", None)
             self.register_buffer("num_batches_tracked", None)
 
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        version = local_metadata.get("version", None)
+        if (version is None or version < 2) and self.track_running_stats:
+            num_batches_tracked_key = prefix + "num_batches_tracked"
+            if num_batches_tracked_key not in state_dict:
+                state_dict[num_batches_tracked_key] = self.num_batches_tracked if self.num_batches_tracked is not None else torch.tensor(0, dtype=torch.long)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+
     def reset_running_stats(self):
         if self.track_running_stats:
             self.running_mean.zero_()
@@ -774,6 +840,10 @@ class BatchNorm1d(_BatchNorm):
 
 
 class BatchNorm2d(_BatchNorm):
+    pass
+
+
+class BatchNorm3d(_BatchNorm):
     pass
 
 
@@ -1034,6 +1104,22 @@ class Hardtanh(Module):
 
     def forward(self, input):
         return F.hardtanh(input, self.min_val, self.max_val)
+
+
+class Hardswish(Module):
+    def __init__(self, inplace=False):
+        super().__init__()
+
+    def forward(self, input):
+        return F.hardswish(input)
+
+
+class Hardsigmoid(Module):
+    def __init__(self, inplace=False):
+        super().__init__()
+
+    def forward(self, input):
+        return F.hardsigmoid(input)
 
 
 class PReLU(Module):

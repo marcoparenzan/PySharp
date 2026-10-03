@@ -33,6 +33,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("time", _ => TimeModule.Create());
         importer.RegisterBuiltin("os", _ => OsModule.Create());
         importer.RegisterBuiltin("glob", _ => GlobModule.Create());
+        importer.RegisterBuiltin("fnmatch", _ => FnmatchModule.Create());
         importer.RegisterBuiltin("shutil", _ => ShutilModule.Create());
         // Real CPython: `os.path` is importable both as `os.path` (an attribute reached only after
         // `import os`) and as its own dotted module name (`import os.path` directly) — found via

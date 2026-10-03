@@ -61,6 +61,7 @@ public static class OsModule
         });
 
         d["getcwd"] = new PyBuiltinFunction("getcwd", (_, _, _) => Directory.GetCurrentDirectory());
+        d["fspath"] = new PyBuiltinFunction("fspath", (interp, a, _) => a[0] is PyBytes ? a[0] : PathArg(interp, a[0]));
         d["urandom"] = new PyBuiltinFunction("urandom", (_, a, _) =>
             new PyBytes(RandomNumberGenerator.GetBytes((int)PyOps.AsBigInt(a[0], "n"))));
         d["getpid"] = new PyBuiltinFunction("getpid", (_, _, _) =>

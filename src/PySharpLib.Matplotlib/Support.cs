@@ -53,7 +53,7 @@ internal static class M
 
     public static bool IsStringSeq(object o) => o is PyList { Items.Count: > 0 } l && l.Items[0] is string || o is PyTuple { Items.Length: > 0 } t && t.Items[0] is string;
 
-    public static object[] Items(object o) => o switch { PyList l => l.Items.ToArray(), PyTuple t => t.Items, PyRange r => r.Enumerate().ToArray(), _ => throw PyErr.TypeError("expected a sequence") };
+    public static object[] Items(object o) => o switch { PyList l => l.Items.ToArray(), PyTuple t => t.Items, PyRange r => r.Enumerate().ToArray(), _ when Native.Current is { } ip => PyOps.Iterate(ip, o).ToArray(), _ => throw PyErr.TypeError("expected a sequence") };
 
     public static PyTuple Tup(params object[] v) => new(v);
     public static PyList Lst(IEnumerable<object> v) => new(v);

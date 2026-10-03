@@ -1,0 +1,11 @@
+11689512 122 ['conv1.weight', 'bn1.weight', 'bn1.bias']
+tensor([ 0.5398,  0.8330, -0.5560,  0.3283, -0.4957], grad_fn=<SliceBackward0>)
+torch.Size([3, 224, 224]) torch.float32 0.21187545359134674 tensor([1.6495, 1.6495, 1.6495])
+446 9.758 binder tensor([-1.1941, -0.0512, -1.3593, -2.3842], grad_fn=<SliceBackward0>)
+ImageClassification(
+    crop_size=[224]
+    resize_size=[256]
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    interpolation=InterpolationMode.BILINEAR
+)

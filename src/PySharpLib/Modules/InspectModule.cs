@@ -49,7 +49,15 @@ public static class InspectModule
 
         d["Parameter"] = ParameterClass;
         d["Signature"] = SignatureClass;
-        d["signature"] = new PyBuiltinFunction("signature", (interp, a, _) => BuildSignature(interp, a[0]));
+        d["signature"] = new PyBuiltinFunction("signature", (interp, a, kw) =>
+        {
+            // like CPython, follow the __wrapped__ chain left by functools.wraps unless follow_wrapped=False
+            object target = a[0];
+            bool follow = !(kw is not null && kw.TryGetValue("follow_wrapped", out var fw) && fw is false);
+            for (int hops = 0; follow && hops < 100 && interp.TryGetAttr(target, "__wrapped__", out var inner) && inner is not PyNone; hops++)
+                target = inner;
+            return BuildSignature(interp, target);
+        });
 
         // Real predicates (not stubs) over PySharp's actual runtime object shapes — found via
         // starlette's/anyio's real dependency chain (route-handler introspection: is this a plain

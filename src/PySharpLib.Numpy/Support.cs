@@ -13,9 +13,13 @@ namespace PySharpLib.Numpy;
 /// errors surface as the matching Python exceptions.</summary>
 internal static class Native
 {
+    /// <summary>The interpreter of the call in progress (lets helpers iterate arbitrary Python iterables).</summary>
+    public static Interp? Current;
+
     public static PyBuiltinFunction Fn(string name, BuiltinFn fn)
         => new(name, (interp, a, kw) =>
         {
+            Current = interp;
             try { return fn(interp, a, kw); }
             catch (NDException ex) { throw Translate(ex); }
         });

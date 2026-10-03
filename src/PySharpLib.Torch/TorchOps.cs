@@ -429,6 +429,18 @@ internal static partial class Ops
 
     private static void Misc()
     {
+        // x.new_zeros / new_ones / new_empty / new_full / new_tensor: a fresh tensor with x's dtype unless overridden
+        ScalarType? KwDType(Dictionary<string, object>? kw) => kw is not null && kw.TryGetValue("dtype", out var d) ? TC.ToDType(d) : null;
+        Raw("new_zeros", (i, a, kw) => R(torch.zeros(TC.ShapeArgs(a, 1), KwDType(kw) ?? TC.Unwrap(a[0]).dtype)));
+        Raw("new_ones", (i, a, kw) => R(torch.ones(TC.ShapeArgs(a, 1), KwDType(kw) ?? TC.Unwrap(a[0]).dtype)));
+        Raw("new_empty", (i, a, kw) => R(torch.empty(TC.ShapeArgs(a, 1), KwDType(kw) ?? TC.Unwrap(a[0]).dtype)));
+        Raw("new_full", (i, a, kw) =>
+        {
+            var x = TC.Unwrap(a[0]);
+            var dt = KwDType(kw) ?? x.dtype;
+            return R(torch.full(TC.ToLongs(a[1]), TC.ToDouble(a[2]), dt));
+        });
+        Raw("new_tensor", (i, a, kw) => R(TC.ToTensor(a[1], KwDType(kw) ?? TC.Unwrap(a[0]).dtype)));
         Def("numel", new[] { "input" }, p => new BigInteger(p.X(0).numel()));
         Def("nelement", new[] { "input" }, p => new BigInteger(p.X(0).numel()));
         Def("dim", new[] { "input" }, p => new BigInteger(p.X(0).Dimensions));

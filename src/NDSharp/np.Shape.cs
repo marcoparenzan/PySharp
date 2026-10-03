@@ -256,6 +256,42 @@ public static partial class np
         return Reshape(b, outShape);
     }
 
+    /// <summary>numpy <c>pad</c> for the index-mapped modes <c>edge</c>, <c>reflect</c>, <c>symmetric</c> and <c>wrap</c>, axis by axis
+    /// (the extension is periodic for reflect/symmetric/wrap, so pads wider than the array behave like numpy's repeated passes).</summary>
+    public static NDArray PadIndexed(NDArray a, (int before, int after)[] widths, string mode)
+    {
+        if (widths.Length == 1 && a.Ndim > 1) widths = Enumerable.Repeat(widths[0], a.Ndim).ToArray();
+        if (widths.Length != a.Ndim) throw new NDValueException("operands could not be broadcast together with remapped shapes [original->remapped]");
+        var result = a;
+        for (int ax = 0; ax < a.Ndim; ax++)
+        {
+            int n = a.Shape[ax], before = widths[ax].before, after = widths[ax].after;
+            if (before < 0 || after < 0) throw new NDValueException("index can't contain negative values");
+            if (before == 0 && after == 0) continue;
+            if (n == 0) throw new NDValueException($"can't extend empty axis {ax} using modes other than 'constant' or 'empty'");
+            var map = new long[n + before + after];
+            for (int j = 0; j < map.Length; j++)
+            {
+                long src = j - before;
+                map[j] = mode switch
+                {
+                    "edge" => Math.Clamp(src, 0, n - 1),
+                    "wrap" => ((src % n) + n) % n,
+                    "symmetric" => SymIndex(src, n),
+                    "reflect" => n == 1 ? 0 : RefIndex(src, n),
+                    _ => throw new NDValueException($"mode '{mode}' is not supported"),
+                };
+            }
+            var idx = new NDIndex[a.Ndim];
+            for (int d = 0; d < a.Ndim; d++) idx[d] = d == ax ? NDArray.FromArray(map, map.Length) : new Slice();
+            result = result.Get(idx).Copy();
+        }
+        return result;
+
+        static long SymIndex(long src, int n) { long m = ((src % (2L * n)) + 2L * n) % (2L * n); return m < n ? m : 2L * n - 1 - m; }
+        static long RefIndex(long src, int n) { long p = 2L * (n - 1); long m = ((src % p) + p) % p; return m < n ? m : p - m; }
+    }
+
     /// <summary>numpy <c>pad</c> with <c>mode='constant'</c> (value 0 by default).</summary>
     public static NDArray PadConstant(NDArray a, (int before, int after)[] widths, object? value = null)
     {

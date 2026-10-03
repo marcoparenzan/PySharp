@@ -502,8 +502,9 @@ internal static class NumpyFunctions
         {
             var p = new Args("pad", i, a, k, "array", "pad_width", "mode", "constant_values");
             string mode = p.Has(2) ? (string)p[2]! : "constant";
-            if (mode != "constant") throw PyErr.NotImplementedError($"np.pad mode '{mode}' is not implemented");
             var widths = ParsePadWidth(p.Required(1));
+            if (mode is "edge" or "reflect" or "symmetric" or "wrap") return Conv.Wrap(np.PadIndexed(p.ND(0), widths, mode));
+            if (mode != "constant") throw PyErr.NotImplementedError($"np.pad mode '{mode}' is not implemented");
             object? cv = null;
             if (p.Has(3)) cv = Conv.Scalarize(Conv.NDStrong(p[3]!)) is var v ? v : null;
             return Conv.Wrap(np.PadConstant(p.ND(0), widths, cv is null ? null : NativeValue(cv)));

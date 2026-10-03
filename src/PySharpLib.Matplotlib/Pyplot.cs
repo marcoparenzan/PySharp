@@ -32,6 +32,7 @@ public static class MatplotlibRegistration
         importer.RegisterBuiltin("matplotlib.style", _ => Modules.Style());
         importer.RegisterBuiltin("matplotlib.figure", _ => Modules.FigureModule());
         importer.RegisterBuiltin("matplotlib.axes", _ => Modules.AxesModule());
+        importer.RegisterBuiltin("matplotlib.lines", _ => Modules.LinesModule());
         importer.RegisterBuiltin("mpl_toolkits", _ => new PyModule("mpl_toolkits"));
         importer.RegisterBuiltin("mpl_toolkits.mplot3d", _ => Modules.Mplot3d());
         importer.RegisterBuiltin("mpl_toolkits.mplot3d.art3d", _ => Modules.Art3d());
@@ -116,7 +117,7 @@ internal static class Modules
         m.Dict["rcParams"] = State.RcParams;
         m.Dict["Figure"] = Classes.FigureClass;
         m.Dict["Axes"] = Classes.AxesClass;
-        m.Dict["Line2D"] = Classes.Line2DClass;
+        m.Dict["Line2D"] = LinesModule().Dict["Line2D"];
 
         // everything on Axes that has the same name in pyplot targets the current axes
         foreach (var name in new[]
@@ -269,6 +270,8 @@ internal static class Modules
             cls.Dict["__init__"] = new PyBuiltinFunction(name + ".__init__", (_, _, _) => PyNone.Instance);
             m.Dict[name] = cls;
         }
+        // a bare Patch is only ever used as a legend handle: an unplaced rectangle carrying colours and a label
+        Shape("Patch", (a, kw) => new RectPatch(0, 0, 1, 1));
         Shape("Rectangle", (a, kw) =>
         {
             var xy = M.Dbl(a[0]);
@@ -298,7 +301,6 @@ internal static class Modules
             double hw = kw.Dbl(3 * width, "head_width"), hl = kw.Dbl(1.5 * hw, "head_length");
             return FancyArrow.Create(PyOps.AsDouble(a[0]), PyOps.AsDouble(a[1]), PyOps.AsDouble(a[2]), PyOps.AsDouble(a[3]), width, hw, hl, kw.Bool(false, "length_includes_head"));
         });
-        m.Dict["Patch"] = Classes.PatchClass;
         return m;
     }
 
@@ -435,6 +437,33 @@ internal static class Modules
         cls.Dict["__init__"] = new PyBuiltinFunction("Poly3DCollection.__init__", (_, _, _) => PyNone.Instance);
         m.Dict["Poly3DCollection"] = cls;
         return m;
+    }
+
+    private static PyModule? _lines;
+
+    public static PyModule LinesModule()
+    {
+        if (_lines is not null) return _lines;
+        _lines = new PyModule("matplotlib.lines");
+        var cls = new PyClass("Line2D", new List<PyClass> { Classes.Line2DClass });
+        cls.Dict["__module__"] = "matplotlib.lines";
+        cls.Dict["__new__"] = Native.Fn("Line2D.__new__", (i, a, k) =>
+        {
+            var kw = new Kw(k);
+            double[] x = a.Length > 1 ? M.Dbl(a[1]) : new[] { 0.0 }, y = a.Length > 2 ? M.Dbl(a[2]) : new[] { 0.0 };
+            var color = kw.Get("color", "c") is { } co ? M.Color(co) : SkiaSharp.SKColor.Parse("#1f77b4");
+            var l = new Line2D(x, y, color) { LineWidth = kw.Dbl(1.5, "linewidth", "lw"), Alpha = kw.Dbl(1, "alpha") };
+            if (kw.Str("linestyle", "ls") is { } ls) l.LineStyle = M.NormalizeLineStyle(ls);
+            if (kw.Str("marker") is { } mk) l.Marker = mk;
+            l.MarkerSize = kw.Dbl(6, "markersize", "ms");
+            if (kw.Get("markerfacecolor", "mfc") is { } mf) l.MarkerFace = M.Color(mf);
+            if (kw.Get("markeredgecolor", "mec") is { } me) l.MarkerEdge = M.Color(me);
+            if (kw.Str("label") is { } lab) l.Label = lab;
+            return State.Wrap(l, _ => cls);
+        });
+        cls.Dict["__init__"] = new PyBuiltinFunction("Line2D.__init__", (_, _, _) => PyNone.Instance);
+        _lines.Dict["Line2D"] = cls;
+        return _lines;
     }
 
     public static PyModule AxesModule()

@@ -100,12 +100,12 @@ internal static class TorchFormat
         }
     }
 
-    private static double[] Doubles(Tensor flat) => flat.to(ScalarType.Float64).data<double>().ToArray();
-    private static long[] Ints(Tensor flat) => flat.dtype == ScalarType.Bool ? flat.to(ScalarType.Int64).data<long>().ToArray() : flat.to(ScalarType.Int64).data<long>().ToArray();
+    private static double[] Doubles(Tensor flat) => flat.to(ScalarType.Float64).ToArr<double>();
+    private static long[] Ints(Tensor flat) => flat.dtype == ScalarType.Bool ? flat.to(ScalarType.Int64).ToArr<long>() : flat.to(ScalarType.Int64).ToArr<long>();
 
     private static object[] Elements(Tensor t)
     {
-        if (t.dtype == ScalarType.Bool) return t.data<bool>().ToArray().Select(v => (object)v).ToArray();
+        if (t.dtype == ScalarType.Bool) return t.ToArr<bool>().Select(v => (object)v).ToArray();
         if (TC.IsFloat(t.dtype)) return Doubles(t).Select(v => (object)v).ToArray();
         return Ints(t).Select(v => (object)v).ToArray();
     }
