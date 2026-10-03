@@ -49,7 +49,7 @@ writing the script in [samples/](samples/), (b) surfacing what is missing, (c) i
 | 10 | **Django** | _to be created_ | ⚪ Planned | a real, unmodified Django app (Django itself is pure Python — no C extensions in its core, unlike pydantic-core/numpy). Much heavier than scenario 2's FastAPI: WSGI (Django's default; ASGI is opt-in), the ORM (real SQL generation + migrations, heavy metaclass use on `Model`), the template engine, `django.contrib.admin`, class-based views, forms/sessions, `django-admin` management commands, the `settings.py` module-level config pattern |
 | 11 | **ASP.NET Core hosting PySharp** | [samples/AspNetPySharpHost](samples/AspNetPySharpHost/) | ✅ **Done** | the *reverse* direction from every other scenario: not PySharp running Python code that implements a web server (scenario 2), but a real ASP.NET Core (Kestrel) host **embedding PySharp as a .NET library**, calling into real Python plugin scripts from real C# minimal-API request handlers — see ASPNET_HOSTING_PLAN.md |
 | 12 | **Array computing** (numpy shim) | [samples/numpy_demo.py](samples/numpy_demo.py) | ✅ **Done** | a real C# **`numpy`**-shaped shim — since v2.1.0 replaced by the native **NDSharp** library + `PySharp.Numpy` binding ([NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md)) (not real numpy — a compiled CPython C extension a from-scratch interpreter can't load): `float64`/`int64`/`bool` dtypes with real arithmetic promotion, construction, indexing/slicing as real strided views (Phase 12.1), broadcasting, reductions, ufuncs, shape manipulation, basic linear algebra (`dot`/`matmul`/`@`, `np.linalg.norm`, `trace`/`diagonal`), `np.random`, a two-way .NET array interop bridge — see NUMPY_PLAN.md's full 12-phase plan |
-| 13 | **cvintro notebooks** (61 CV/numpy/torch notebooks on PySharp + JupyterNet) | [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) · [NOTEBOOKS_BASELINE.md](NOTEBOOKS_BASELINE.md) | 🔴 **In progress** (Phases 0-1 done: NDSharp + PySharp.Numpy, verified against real numpy; 0/61 run yet — needs cv2/matplotlib) | extract numpy into a standalone native .NET package (NDSharp) + PySharp bindings; `cv2`, `matplotlib`, `torch` bindings; image output in JupyterNet |
+| 13 | **cvintro notebooks** (61 CV/numpy/torch notebooks on PySharp + JupyterNet) | [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) · [NOTEBOOKS_RUN.md](NOTEBOOKS_RUN.md) | ✅ **Done** (61/61 notebooks, 424/424 cells run; Phases 0-9) | a standalone native .NET array library (NDSharp) + PySharp bindings: `numpy`, `cv2`, `pywt`, `matplotlib`, `torch`, `torchvision`; image output in JupyterNet |
 | T | **Native libraries** (cross-cutting) | _per-case_ | ✅ **Done** | `ctypes` supports scalars, strings, real `Structure`/`byref`/`POINTER`/buffers, and real `CFUNCTYPE`/`WINFUNCTYPE` callbacks (verified against real `kernel32` structs/output-pointer APIs and a real `user32!EnumWindows` callback — see CTYPES_PLAN.md); for very rich APIs a dedicated **C# wrapper/shim** is still the fallback |
 
 Legend: ✅ done · 🔴 in progress/next · ⚪ planned · 🟡 partial/close.
@@ -498,6 +498,14 @@ and surfacing five frames away as an unrelated `ZeroDivisionError`. See ORM_PLAN
 full list of real gaps found and fixed getting here (also including a genuine concurrency bug in
 `threading.Condition` and a general zero-arg `super()` fix, neither Postgres-specific). Verified live
 via [src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs](src/PySharp.Tests/M22_Orm/OrmPostgresSmokeTests.cs).
+
+### Scenario 13b — cvintro notebooks (CV / numpy / torch course) ✅
+Driving scenario of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) (the table above numbers it 13; the ORM section below is the other "13"). Run the 61 notebooks of
+`sbirchfield.github.io/cvintro` (numpy -> OpenCV -> PyTorch -> pretrained vision models) on PySharp through the JupyterNet kernel.
+Method: every backend is a native .NET library with no Python dependency plus a thin PySharp binding, verified against the real library through
+`tools/oracle` (CPython 3.12 venv). Delivered: `NDSharp` + `PySharp.Numpy` (supersedes the numpy shim of scenario 12), `NDSharp.Image` + `PySharp.Cv2`
+(OpenCV 4.11), `NDSharp.Wavelets` + `PySharp.Pywt`, `NDSharp.Plot` + `PySharp.Matplotlib`, `PySharp.Torch` (+ torchvision), image output in JupyterNet.
+Result: 61/61 notebooks, 424/424 cells (`NOTEBOOKS_RUN.md`). Known divergences are listed in NOTEBOOKS_PLAN.md.
 
 ### Cross-cutting — Native libraries ✅
 

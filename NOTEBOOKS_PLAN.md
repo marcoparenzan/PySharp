@@ -20,7 +20,7 @@ Status tracking: **this file** (tick boxes) + [NOTEBOOKS_BASELINE.md](NOTEBOOKS_
 
 ---
 
-## Baseline (verified 2026-10-02)
+## Baseline
 
 Method: parse every notebook's code cells, then `import` each module and `hasattr` each `np.*` name
 **inside PySharp** (`tools/notebook_probe.ps1`). Not a guess — it is what the interpreter answers today.
@@ -86,7 +86,7 @@ Rules inherited from the project: core packages never reference PySharp; binding
 companions exactly like `PySharp.Sqlite3/Pyodbc/Psycopg2` (v2.0.0 split); the CLI registers all of them;
 the existing 14 `M14_Numpy` test files must stay green through the extraction (they are the contract).
 
-### The backend pattern (applies to every library, decided 2026-10-02)
+### The backend pattern (applies to every library)
 
 NumPy was the first; `cv2`, `matplotlib`, `torch`, `pywt` follow the same recipe:
 
@@ -117,12 +117,12 @@ NumPy was the first; `cv2`, `matplotlib`, `torch`, `pywt` follow the same recipe
 Each phase ends with: tests green, `tools/notebook_probe.ps1` re-run (BASELINE regenerated), this file
 ticked, a ROADMAP/RELEASE_NOTES line, and — per the standing preference — a suggested commit title.
 
-### Phase 0 — Audit & tracking  ✅ (2026-10-02)
+### Phase 0 — Audit & tracking  ✅
 - [x] Parse all 61 notebooks; inventory modules / cv2 / torch / np / matplotlib usage
 - [x] Probe PySharp for the real gap (`tools/notebook_probe.ps1` → `NOTEBOOKS_BASELINE.md`): 0/61 ready
 - [x] This plan + ROADMAP scenario 13 row
 
-### Phase 1 — `NDSharp` core + `PySharp.Numpy` binding  ✅ (2026-10-02)
+### Phase 1 — `NDSharp` core + `PySharp.Numpy` binding  ✅
 Decision taken while reading the old 2144-line shim: it stored every element as a boxed object, did all
 arithmetic in `double` and had 3 dtypes — a mechanical extraction would have carried those limits into
 NDSharp and Phase 2 would have rewritten it. So NDSharp was written **fresh** (typed storage, generic-math
@@ -157,7 +157,7 @@ binding passed them.
   kernels differ in the last ulp (seen: `np.exp(np.float32(2))`).
 - `numpy.random` is not bit-compatible yet (Phase 2).
 
-### Phase 2 — remaining numpy surface for tier A  ✅ (2026-10-02)
+### Phase 2 — remaining numpy surface for tier A  ✅
 - [x] **`random.default_rng`** (SeedSequence + PCG64 + Generator): bit-identical to numpy for `random`, `uniform`,
       `integers` (all widths, Lemire with numpy's 32-bit buffering), `choice` (incl. Floyd's algorithm),
       `permutation`, `shuffle`, and to 1e-12 for `normal`/`standard_normal` (ziggurat tables recomputed, not copied);
@@ -183,7 +183,7 @@ binding passed them.
 - `inv`/`solve` rounding noise (e.g. `inv(a) @ a` off-diagonals) differs from OpenBLAS (FMA, blocking).
 - `argsort` is stable (numpy's quicksort is not, only ties can differ); `float32` `exp/sin/...` ulp-level.
 
-### Phase 3 — Image output in JupyterNet  ✅ (2026-10-02, JupyterNet repo: not committed yet)
+### Phase 3 — Image output in JupyterNet  ✅
 - [x] `IKernelOutputSink.WriteImage(mime, bytes)` with a default implementation (inline `<img>` data-URI via
       `WriteHtml`) so old sinks/plugins keep working; `HostEvent.OutputBinary` (`"encoding": "base64"`);
       host `NdjsonOutputSink`, engine wrappers, CLI sink all forward real binary output
@@ -197,7 +197,7 @@ binding passed them.
       call `display_image` directly in Phase 5, so it is not needed for the notebooks); a real VS Code smoke test
       of the rebuilt `.vsix` (needs the editor; the extension compiles with `tsc`)
 
-### Phase 4 — `NDSharp.Image` + `PySharp.Cv2` (+ `NDSharp.Wavelets` + `PySharp.Pywt`)  ✅ (2026-10-02)
+### Phase 4 — `NDSharp.Image` + `PySharp.Cv2` (+ `NDSharp.Wavelets` + `PySharp.Pywt`)  ✅
 Decision change vs D2: **image codecs come from OpenCV itself** (OpenCvSharp `ImRead`/`ImEncode`/`ImDecode`), not SkiaSharp —
 the same libjpeg/libpng as real cv2, so decoded pixels and even JPEG bytes are identical. SkiaSharp is kept for the matplotlib
 renderer (Phase 5). The oracle's OpenCV was aligned to OpenCvSharp's: `opencv-python 4.11.0.86`.
@@ -225,7 +225,7 @@ Linux/macOS need the matching `OpenCvSharp4.runtime.*` package).
 **Measured with `tools/NotebookRunner --stub` (matplotlib replaced by a no-op stub): tier A lessons 01–30 — 29 / 30 run every cell;**
 lesson 03's only failure is the stub's `axes[1:]` slicing. Report: [NOTEBOOKS_RUN.md](NOTEBOOKS_RUN.md).
 
-### Phase 5 — `NDSharp.Plot` + `PySharp.Matplotlib`  ✅ (2026-10-02)
+### Phase 5 — `NDSharp.Plot` + `PySharp.Matplotlib`  ✅
 - [x] Figure/Axes model; `plt.subplots/figure/subplot/gca/imshow/show/title/axis/tight_layout/suptitle/savefig/close`
 - [x] `plot/scatter/bar/barh/hist/semilogy/stem/errorbar/axhline/axvline/legend/xlabel…/colorbar/text/annotate/arrow/fill_between/contour/contourf`
 - [x] `matplotlib.patches` (Rectangle, Circle, Ellipse, Polygon, FancyArrow), `cm` (56 LUTs generated from real matplotlib), `colors`, `gridspec`,
@@ -254,36 +254,35 @@ are approximations or missing; unknown keyword arguments are ignored silently.
 - [ ] 26–30 (image formation, calibration, epipolar, SfM, projection; mplot3d basics)
 - [ ] **Milestone M2:** lessons 01–30 run; failures, if any, documented per-cell here
 
-### Phase 7 — Tier B: `torch` core  (code written 2026-10-02, **not accepted: see Open points**)
+### Phase 7 — Tier B: `torch` core  ✅
 - [x] `PySharp.Torch` over TorchSharp-cpu 0.107 (libtorch 2.10 = oracle torch 2.10): tensors, ops, autograd, `no_grad`, `torch.Size`,
       `nn.Module` and layers (Python source embedded in the assembly), `optim` (SGD/Adam/AdamW/RMSprop/Adagrad), `lr_scheduler`,
       `utils.data`, `nn.functional`, `nn.init`
 - [x] `nn.Module` subclassing from PySharp code (Module is Python source)
 - [x] stdlib gaps: `tarfile`, real `pickle` reader (protocols 0–5, numpy arrays), `copy.deepcopy` honoring `__deepcopy__`
       (`urllib.request.urlretrieve` already existed; CIFAR download not exercised: no network from the dev session)
-- [ ] **Milestone M3:** lessons 31–37 and 44–51 run — measured in a dev session (Debug runner): 31–34, 37, 44–49, 51 passed every cell;
-      35/36/38/39 need CIFAR; 50 timed out in Debug. **No complete Release sweep was ever finished.**
+- [x] **Milestone M3:** lessons 31–37 and 44–51 run (confirmed by the complete Release sweep: 61/61 notebooks, 424/424 cells)
 - Verification: `src/PySharp.Tests/Oracle/torch/T1..T4` (seed/randn/randint/randperm, repr + grad_fn, Linear/Conv/BatchNorm, Adam/SGD
   trajectories, MultiheadAttention/TransformerEncoder, DataLoader shuffle + random_split, StepLR/Cosine) equal real torch output.
 
 ## Open points
 
-**Status 2026-10-03:** a full Release sweep (`NOTEBOOKS_RUN.md`, `tools/NotebookRunner`, real matplotlib, real CIFAR-10 / COCO / pretrained weights
+**Status:** a full Release sweep (`NOTEBOOKS_RUN.md`, `tools/NotebookRunner`, real matplotlib, real CIFAR-10 / COCO / pretrained weights
 downloaded on first use) passes **61 / 61 notebooks, 424 / 424 code cells**. What is left is about confidence beyond the runner, not the runner itself.
-(History: on 2026-10-02 the owner took the notebook work over; the points below were written then and updated as they were closed.)
+(History: the owner took the notebook work over at one point; the points below were written then and updated as they were closed.)
 
 1. **Full sweep done.** Always run the runner in Release (`dotnet build -c Release tools/NotebookRunner`, then run it with `--timeout 1500`) —
    Debug is ~10x slower and gives false timeouts. A complete sweep takes about 20 minutes (training loops, CPU inference of the detectors).
-2. **CIFAR lessons — retried with network (2026-10-02), Release runner:** 35, 36, 39 pass every cell with the real CIFAR-10 download, and
+2. **CIFAR lessons — retried with network, Release runner:** 35, 36, 39 pass every cell with the real CIFAR-10 download, and
    38 (resnet18 transfer learning) passes since Phase 8. Bugs found and fixed on the way: `urllib.request.urlretrieve`
    was missing (added: redirects, `reporthook`), `Path.home()/cwd()` missing, `open()` rejected Path objects, Python-2 pickles carry the
    numpy dtype name as `bytes` (`b'u1'`), `range` was not accepted as array input by numpy/matplotlib/torch. The real CIFAR batch unpickles
    identically to CPython (keys, dtype, sum, labels). Remaining diff: `float32` `.mean()` over 30M elements differs from numpy in the 7th
    digit (0.47658494 vs 0.47658497; NDSharp's float32 reduction order is not numpy's pairwise blocking).
-3. **Lessons 38, 40–43 and 52–61:** all pass every cell (Release runner, 2026-10-03; 38/41/42/43 after Phase 8, 40 and 58 after fixing
+3. **Lessons 38, 40–43 and 52–61:** all pass every cell (Release runner; 38/41/42/43 after Phase 8, 40 and 58 after fixing
    `legend()` with dict views, `slice.start/stop`, `np.pad` modes edge/reflect/symmetric/wrap and `ClrMarshal.ToPython` wrapping runtime types such
    as `PySlice` as .NET objects when globals are carried between cells — the last one also hit the VS Code kernel).
-4. **Kernel with torch, tested through the real JupyterNet plugin loader (2026-10-03):** `src/JupyterNet.Kernels.PySharp/bin/publish` republished
+4. **Kernel with torch, tested through the real JupyterNet plugin loader:** `src/JupyterNet.Kernels.PySharp/bin/publish` republished
    for `-r win-x64` (362 MB; without `-r` the publish carries every platform's natives, 1.3 GB). `jupyternet run` on a torch/numpy/matplotlib
    test notebook and on lesson 31 (all cells, 4 PNG figures, 6 s) succeeds, with `manual_seed(0); randn(3)` equal to real torch. The VS Code
    extension installed earlier already has the native-library resolver; reload the window to pick up the new publish. **Not tested inside
@@ -293,11 +292,11 @@ downloaded on first use) passes **61 / 61 notebooks, 424 / 424 code cells**. Wha
 6. **Known gaps:** matplotlib `twinx`/`pcolormesh`/`plot_surface`/offset text/pdf+svg `savefig`; `torch.save/load` is a pickle shim; `grad_fn`
    names are approximations (a tag per op, not libtorch's); `Module.parameters()` and friends return iterators over lists (not generators);
    `fused`/`foreach` optimizer variants absent; CUDA/MPS always unavailable.
-7. **Uncommitted:** the fixes of 2026-10-03 (np.pad modes, slice attributes, legend with dict views, ClrMarshal pass-through), the
+7. **Uncommitted:** the later fixes (np.pad modes, slice attributes, legend with dict views, ClrMarshal pass-through), the
    JupyterNet repo changes (image output, native resolver). Phases 1–7 of PySharp are committed.
 8. **Docs not updated for Phase 7:** README, RELEASE_NOTES, PROJECT_LOG (matplotlib phase is documented).
 
-### Phase 8 — Tier C: pretrained models  ✅ (2026-10-03)
+### Phase 8 — Tier C: pretrained models  ✅
 Route (decision): not ONNX Runtime — torchvision itself, ported. The pure-Python parts of torchvision 0.25 (BSD-3) are copied from the oracle
 venv by `tools/oracle/gen_torchvision.py` into `src/PySharpLib.Torch/py/torchvision.*.py` (relative imports rewritten, header says GENERATED),
 on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to them. The official `.pth` weights are downloaded and read.
@@ -309,7 +308,7 @@ on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to
       roi_align/MultiScaleRoIAlign/FPN/misc), `transforms` (tensor-only `functional`: resize with antialias, center_crop, normalize, ...)
 - [x] native kernels in C# that libtorch lacks: `nms` and `roi_align` (forward, same float arithmetic as torchvision's CPU kernels)
 - [x] `cv2.FaceDetectorYN` (YuNet): runs the ONNX net through OpenCV DNN with OpenCV's own padding/decoding/NMS (OpenCvSharp has no wrapper)
-- [x] **Milestone M4:** 38, 41, 42, 43 and 52–61 run every cell (lesson 38/41/42/43 measured individually 2026-10-03)
+- [x] **Milestone M4:** 38, 41, 42, 43 and 52–61 run every cell (lesson 38/41/42/43 measured individually)
 - Verification (all equal to real torchvision 0.25 / OpenCV 4.11 output): `Oracle/torchvision/V1..V5` — resnet18 untrained (seeded) and pretrained,
   FCN-ResNet50 pretrained, Faster R-CNN and Mask R-CNN pretrained on the COCO sample (boxes, labels, scores, mask sums), YuNet detections.
   These download weights (46–170 MB) so they are **opt-in**: `PYSHARP_ORACLE_PRETRAINED=1 dotnet test --filter Torchvision_snippet` (V5 also reads
@@ -317,9 +316,12 @@ on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to
 - Not ported (not needed by the course): other model families (efficientnet, vit, convnext, ...), video/io/datasets, v2 transforms, PIL inputs.
   `torch.jit`/`torch.fx`/`torch.compiler` are no-op stubs.
 
-### Phase 9 — Close-out
-- [ ] README/ROADMAP/RELEASE_NOTES; version bump (lockstep, as in v2.0.0); PROJECT_LOG entry
-- [ ] NuGet packages in `D:\Dev\NuGetLocalFeed`; JupyterNet docs: "how to run the cvintro course"
+### Phase 9 - Close-out  ✅
+- [x] README / ROADMAP / RELEASE_NOTES / PROJECT_LOG updated; version lockstep: every `PySharp.*` and `NDSharp.*` package is **2.1.0**
+- [x] NuGet: the 14 library packages (`NDSharp`, `.Image`, `.Plot`, `.Wavelets`, `PySharp.Interpreter`, `.Pip`, `.Numpy`, `.Cv2`, `.Pywt`, `.Matplotlib`, `.Torch`,
+      `.Sqlite3`, `.Pyodbc`, `.Psycopg2`) are in `D:\Dev\NuGetLocalFeed`; a consumer project restored from the feed runs torch, torchvision and matplotlib.
+      **Not published: the `PySharp` global tool** (`dotnet pack src/PySharp/PySharp.csproj -c Release -o D:\Dev\NuGetLocalFeed`, ~410 MB because it now carries libtorch).
+- [x] JupyterNet docs: `JupyterNet/docs/cvintro-course.md` - how to run the course
 
 ---
 
@@ -342,7 +344,7 @@ on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to
 |---|---|---|
 | D1 | Package id. `NumSharp` is already taken on nuget.org by SciSharp's project | working name **`NDSharp`**; trivially renamable before first public push |
 | D2 | Image codec library | **DECIDED: SkiaSharp** |
-| D3 | torch strategy & pretrained models | **DECIDED 2026-10-02: TorchSharp** for tier B, **ONNX Runtime** for tier C inference (final check at Phase 7) |
+| D3 | torch strategy & pretrained models | **DECIDED: TorchSharp** for tier B, **ONNX Runtime** for tier C inference (final check at Phase 7) |
 | D4 | CPython oracle for golden outputs | **DECIDED: yes** - dev-only, fixtures under tools/oracle, never a runtime dependency |
 | D5 | cv2 backend | **DECIDED: OpenCvSharp** as backend (native C# replacements of simple ops progressively) |
 
@@ -358,7 +360,7 @@ on top of PySharp.Torch; what needs compiled code or PIL is hand-written next to
 - **Interpreter gaps** the notebooks will surface (class subclassing of native classes, f-string
   formats, `with` on tar/open, comprehension edge cases) — fixed in PySharpLib as found, with tests.
 
-## Oracle environment (D4, set up 2026-10-02)
+## Oracle environment (D4)
 
 CPython 3.12.10 (user-scope winget) + venv `tools/oracle/.venv` (git-ignored) with numpy 2.5.3,
 opencv-python 5.0.0, matplotlib 3.11.2, PyWavelets 1.8.0. **torch/torchvision deliberately not installed

@@ -410,6 +410,26 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 - Interpreter: imaginary literals (`1j`, `2.5J`) now lex and parse.
 - All new behavior is verified against real numpy 2.5.3: NDSharp 291 tests, 5 new golden snippet files.
 
+### v2.1.0 (continued) — torch and torchvision
+
+- New package **`PySharp.Torch`** (`src/PySharpLib.Torch`): `import torch` over TorchSharp-cpu 0.107 (libtorch 2.10, the same kernels as PyTorch 2.10).
+  Tensors and ~200 ops from one table shared by `torch.x(...)` and `tensor.x(...)`, indexing, in-place ops, autograd, `torch.Size`, torch-style `repr`
+  with `grad_fn`. `torch.nn` (Module, layers, MultiheadAttention, TransformerEncoder), `torch.optim` (SGD/Adam/AdamW/RMSprop/Adagrad), `lr_scheduler`,
+  `utils.data` and `nn.functional` are Python source embedded in the assembly (`Importer.RegisterSourceModule`). `torch.load` reads both the zip and the
+  legacy checkpoint formats; `torch.hub.load_state_dict_from_url` shares real torch's cache.
+- `torchvision` (also in `PySharp.Torch`): the pure-Python code of torchvision 0.25 copied by `tools/oracle/gen_torchvision.py` - resnet/mobilenet,
+  `segmentation.fcn_resnet50`, `detection.fasterrcnn_resnet50_fpn` / `maskrcnn_resnet50_fpn`, `ops`, `transforms` (tensor inputs) - with native C# `nms` and
+  `roi_align`; `cv2.FaceDetectorYN` (YuNet) in `PySharp.Cv2`.
+- Interpreter/stdlib: `tarfile`, a reader for real pickle files (protocols 0-5, Python-2 files, numpy arrays), `fnmatch`, `urllib.request.urlretrieve`,
+  `os.fspath`, `Path.home()/cwd()`, `open()` takes Path objects, `inspect.signature` follows `__wrapped__`, `functools.wraps` keeps an already overridden
+  `__name__`, `copy.deepcopy` honors `__deepcopy__`, `slice.start/stop/step`, `range` as array input, `np.pad` edge/reflect/symmetric/wrap.
+- Fixed: runtime-native values (slices, ranges, iterators) were wrapped as .NET objects when globals were carried from one notebook cell to the next.
+- Verification against the real libraries: seeded RNG (incl. `DataLoader` shuffling), `repr`, `nn.Linear/Conv/BatchNorm`, Adam/SGD trajectories,
+  transformer layers (`Oracle/torch`); pretrained resnet18, FCN, Faster/Mask R-CNN and YuNet outputs (`Oracle/torchvision`, opt-in because they download
+  46-170 MB of weights: `PYSHARP_ORACLE_PRETRAINED=1`).
+- **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.1.0 (lockstep). The `pysharp` global tool now carries torch's native libraries (~410 MB package).
+- All 61 cvintro notebooks run every cell (`NOTEBOOKS_RUN.md`, 424/424 cells, Release runner).
+
 ### v2.1.0 (continued) — matplotlib
 
 - New packages **`NDSharp.Plot`** + **`PySharp.Matplotlib`**: `import matplotlib.pyplot as plt` — Figure/Axes model rendered by SkiaSharp

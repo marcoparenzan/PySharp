@@ -12,7 +12,7 @@
     <!-- NuGet package metadata: the pyodbc stdlib module, split out of PySharpLib so the core
          embeddable interpreter doesn't force every consumer to carry Microsoft.Data.SqlClient. -->
     <PackageId>PySharp.Pyodbc</PackageId>
-    <Version>2.0.0</Version>
+    <Version>2.1.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's pyodbc module — a real DB-API 2.0 shim over Microsoft.Data.SqlClient (SQL Server). Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

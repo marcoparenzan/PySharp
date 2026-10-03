@@ -510,6 +510,11 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   (figures, subplots, imshow, plot/scatter/bar/hist/contour, legends, colorbars, `tight_layout`, 3-D basics), `patches`, `cm`, `colors`,
   `gridspec`. Ticks, limits and layout follow matplotlib's own algorithms (verified against real matplotlib); figures go to PNG and, in the
   JupyterNet kernel, to the cell output (`IKernelOutputSink.WriteImage`). Register with `MatplotlibRegistration.Register(importer, sink)`.
+- **torch / torchvision**: opt-in `PySharp.Torch` over TorchSharp/libtorch (the same libtorch as PyTorch 2.10): tensors, autograd, `torch.nn`, `optim`,
+  `utils.data` (written as Python source, like real torch), `torch.load` of both checkpoint formats, plus a port of torchvision's models (resnet, FCN,
+  Faster/Mask R-CNN with their pretrained weights), `ops` and `transforms`. Seeded RNG, `repr`, training trajectories and pretrained inference equal real
+  torch / torchvision (`Oracle/torch`, `Oracle/torchvision`). Register with `TorchRegistration.Register(importer)`. The 61 course notebooks of
+  [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) all run (`tools/NotebookRunner`, report in `NOTEBOOKS_RUN.md`).
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
   `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both

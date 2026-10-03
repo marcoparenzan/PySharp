@@ -10,7 +10,7 @@
 
     <!-- NuGet package metadata: cv2-shaped image operations on NDSharp arrays (OpenCV via OpenCvSharp). -->
     <PackageId>NDSharp.Image</PackageId>
-    <Version>0.1.0</Version>
+    <Version>2.1.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>NDSharp.Image — OpenCV-style image processing (imread, cvtColor, filters, morphology, warps, features) on NDSharp arrays, backed by OpenCvSharp. No Python dependency.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

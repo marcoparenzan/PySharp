@@ -81,3 +81,22 @@ stale "in progress"/"missing" claims in README.md fixed.
 
 - `c63dd21` numpy Phase 12 (views/perf/polish) — 18 new tests
 - `f53cd93` FastAPI Phase 5 (docs)
+
+---
+
+## Scenario 13b - cvintro notebooks (Phases 1-8)
+
+**8 commits · +39792/-4183 across 626 file-touches (summed across commits) · ~0h34m active by the commit-gap rule** (each phase closes with one commit
+after hours of uncommitted work, so single-commit blocks count as 0m and the figure understates the effort).
+
+- `0bbe156` replace the numpy shim with `NDSharp` + `PySharp.Numpy` (verified against real numpy 2.5.3)
+- `cca79b4` numpy Phase 2 (bit-exact `default_rng`, `linalg`, `fft`, complex dtypes)
+- `0bfb8e9`, `b65bfb7` Phase 3: image output in JupyterNet, zlib checksums
+- `2131dd6` Phase 4: `NDSharp.Image` + `PySharp.Cv2`, `NDSharp.Wavelets` + `PySharp.Pywt`, `tools/NotebookRunner`
+- `c74b595` Phase 5: `NDSharp.Plot` + `PySharp.Matplotlib`
+- `839b076` Phase 7: `PySharp.Torch` over TorchSharp/libtorch, `tarfile`, real-pickle reader
+- `35e66f6` Phase 8: torchvision models with pretrained weights, native `nms`/`roi_align`, `cv2.FaceDetectorYN`; all 61 notebooks pass
+
+Phase 9 (version lockstep, packages in the local feed, docs) follows these commits.
+
+*Earlier uncommitted-days (11 commits between the previous entry and this one) are not backfilled; ask if you want them computed from `git log`.*
