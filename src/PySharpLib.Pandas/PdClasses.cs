@@ -45,6 +45,8 @@ internal static class PdClasses
         PdApply.Install();
         PdStats.Install();
         PdGroupBy.Install();
+        PdWindow.Install();
+        PdPlot.Install();
         Conv.Converters.Add(o => o switch
         {
             PyInstance { Native: Series s } => PdArrays.ToNd(s.Values),

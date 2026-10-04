@@ -326,6 +326,18 @@ internal static class PdIO
             var s = PdConv.S(a[0]);
             return Dict(Enumerable.Range(0, s.Length).Select(r => (PdConv.FromLabel(s.Index.Labels[r]), PdConv.FromCell(s.Values, r))));
         });
+        PdClasses.DataFrame.Dict["to_html"] = PdClasses.Fn("to_html", (i, a, k) =>
+        {
+            var p = A("to_html", i, a, k, "buf", "columns", "col_space", "header", "index", "na_rep", "formatters", "float_format");
+            var d = PdConv.D(a[0]);
+            if (p.Has(1)) d = d.TakeColumns(PdConv.Cells(p[1]!).Select(l => d.ColumnPositions(l)[0]).ToList());
+            return Emit(i, Html.ToHtml(d, PdOptions.Display, false, p.Bool(4, true), false), p[0], "w");
+        });
+        PdClasses.DataFrame.Dict["_repr_html_"] = PdClasses.Fn("_repr_html_", (i, a, k) =>
+        {
+            var d = PdConv.D(a[0]);
+            return Html.Supports(d) ? Html.ToHtml(d, PdOptions.Display, true) : PyNone.Instance;
+        });
         PdClasses.DataFrame.Dict["from_dict"] = PdClasses.Fn("from_dict", FromDict);
         PdClasses.DataFrame.Dict["from_records"] = PdClasses.Fn("from_records", (i, a, k) =>
         {

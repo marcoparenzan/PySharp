@@ -86,9 +86,18 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - [x] **Milestone M3:** every in-scope snippet equals pandas' output
 - Fixes found by the sample: a `str` column that meets NaN placeholders stays `str`; `read_csv(index_col=...)` of a regular integer column gives a RangeIndex; bool column labels print like pandas' object index; `unstack(fill_value=)` keeps ints; `stack()` keeps NaN (pandas 3)
 
-### Phase 4 — Close-out
-- [ ] README / ROADMAP / RELEASE_NOTES / PROJECT_LOG, version lockstep, packages in the local feed, JupyterNet docs ("pandas in a notebook")
-- [ ] `df.plot()` over `PySharp.Matplotlib` (line / bar / hist) if time allows
+### Phase 4 — Close-out  ✅
+- [x] **rolling / expanding / rank**: `rolling(window, min_periods, center)` and `expanding(min_periods)` with `sum mean min max count median std var apply agg` — the mean/sum/var
+      kernels are ports of pandas' Kahan-compensated and online algorithms, so results equal pandas bit for bit on random data; `rank` (`average/min/max/first/dense`, `pct`, `na_option`)
+- [x] **plotting**: `df.plot()` / `Series.plot()` / `plot.line|bar|barh|hist|scatter|area` / `hist()` through `PySharp.Matplotlib` (the drawing logic is a small embedded Python module that
+      follows pandas' defaults); `pie`, `box`, `kde`, `hexbin` raise `NotImplementedError`; tests check that every supported kind saves a PNG
+- [x] **notebooks**: `DataFrame._repr_html_` / `to_html` (pandas' HTML layout, verified), the JupyterNet kernel echoes the last expression of a cell (HTML for DataFrames, `repr` otherwise),
+      `display()`, `max_columns = 20`; guide `JupyterNet/docs/pandas-in-notebooks.md`
+- [x] README / ROADMAP / RELEASE_NOTES (v2.2.0) / PROJECT_LOG; version lockstep **2.2.0** for all `PySharp.*` / `NDSharp.*` packages; the 16 library packages are in `D:/Dev/NuGetLocalFeed`
+      (a consumer project restored from the feed runs pandas + groupby + rolling). The `PySharp` global tool is **not** packed (about 410 MB because of libtorch)
+- [x] samples `pandas_demo.py`, `pandas_analysis_demo.py`, `pandas_report_demo.py`, `pandas_rolling_demo.py` — byte-identical to CPython + pandas
+- Bug found by the rolling oracle: `Generator.normal` used a ziggurat table recomputed from the layer areas, which differs from numpy's in the last bit for most draws; the exact `wi_double`
+  table was recovered from numpy's own output and embedded (200000 draws now equal numpy's, tail included)
 
 ---
 
@@ -105,6 +114,7 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
 - MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
 - `read_csv`: no `parse_dates`/`converters`/`chunksize`/URLs; `to_json`/`read_json` are not implemented.
+- Not implemented: `ewm`, `rolling(window='3D')` (offsets), `plot.pie/box/kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
 
 ## Verification environment
 
@@ -113,5 +123,4 @@ Golden files: `tools/oracle/make_golden.py pandas`.
 
 ## Open points
 
-- PROJECT_LOG.md gets its pandas entry (real `git log` metrics) once the phases are committed.
-- Notebook display: DataFrames print as text in the kernel; an HTML `_repr_html_` is a possible Phase 4 addition.
+- PROJECT_LOG.md has the entry for Phases 1-3 (real `git log` metrics); Phase 4 is added once it is committed.

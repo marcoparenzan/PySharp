@@ -515,6 +515,10 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   Faster/Mask R-CNN with their pretrained weights), `ops` and `transforms`. Seeded RNG, `repr`, training trajectories and pretrained inference equal real
   torch / torchvision (`Oracle/torch`, `Oracle/torchvision`). Register with `TorchRegistration.Register(importer)`. The 61 course notebooks of
   [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) all run (`tools/NotebookRunner`, report in `NOTEBOOKS_RUN.md`).
+- **pandas**: opt-in `PySharp.Pandas` over the native `NDSharp.Frame` (pandas 3.0 semantics): `Series`, `DataFrame`, `Index`/`MultiIndex`, `loc`/`iloc`,
+  arithmetic with index alignment, reductions (numpy-exact sums), missing data, `groupby`, `merge`/`join`/`concat`, `pivot_table`/`melt`/`crosstab`,
+  `rolling`/`rank`, the `.str` accessor, `read_csv`/`to_csv`, HTML tables in JupyterNet and `df.plot()` through `PySharp.Matplotlib`. Printing and results
+  equal real pandas (`Oracle/pandas`, the `samples/pandas_*.py` scripts). Register with `PandasRegistration.Register(importer)`. See [PANDAS_PLAN.md](PANDAS_PLAN.md).
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the
   `insertmanyvalues` machinery), and `session.execute(select(...))`/`session.get(...)` — against both

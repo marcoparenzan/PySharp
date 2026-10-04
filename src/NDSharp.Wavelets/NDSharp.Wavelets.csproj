@@ -8,7 +8,7 @@
 
     <!-- NuGet package metadata: discrete wavelet transforms (the pywt functionality) on NDSharp arrays. -->
     <PackageId>NDSharp.Wavelets</PackageId>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>NDSharp.Wavelets — discrete wavelet transforms (dwt, idwt, dwt2, idwt2; haar/db/sym/coif/bior/rbio filter banks) on NDSharp arrays. No Python dependency.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

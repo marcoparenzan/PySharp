@@ -1,5 +1,6 @@
 using JupyterNet.Kernels.Abstractions;
 using PySharpLib;
+using PySharpLib.Parsing;
 using PySharpLib.Runtime;
 
 namespace JupyterNet.Kernels.PySharp;
@@ -28,6 +29,41 @@ public sealed class PySharpKernel : IKernel
         PySharpLib.Pandas.PandasRegistration.Register(_engine.Importer);
         PySharpLib.Matplotlib.MatplotlibRegistration.Register(_engine.Importer);
         PySharpLib.Torch.TorchRegistration.Register(_engine.Importer);
+        // pandas shows at most 20 columns in a notebook (Jupyter's default), unlike a terminal
+        _engine.Run("import pandas as pd\npd.set_option('display.max_columns', 20)\n", "<kernel-init>");
+    }
+
+    /// <summary>Splits a cell into everything before its last statement and that statement, when the last statement is a bare expression
+    /// (the value Jupyter echoes as the cell's result). The expression is null when there is none or it cannot be split cleanly.</summary>
+    private static (string prefix, string? last, int line) SplitLastExpression(string code)
+    {
+        try
+        {
+            var ast = Parser.Parse(code, "<cell>");
+            if (ast.Body.Count == 0 || ast.Body[^1] is not ExprStmt) return (code, null, 0);
+            int ln = ast.Body[^1].Line;
+            if (ast.Body.Count > 1 && ast.Body[^2].Line >= ln) return (code, null, 0);
+            var lines = code.Split('\n');
+            if (ln < 1 || ln > lines.Length) return (code, null, 0);
+            return (string.Join("\n", lines.Take(ln - 1)), string.Join("\n", lines.Skip(ln - 1)), ln);
+        }
+        catch (Exception)
+        {
+            return (code, null, 0);
+        }
+    }
+
+    /// <summary>Shows a value like Jupyter does: its <c>_repr_html_</c> if it has one, else its repr.</summary>
+    private void Show(IKernelOutputSink sink, object value)
+    {
+        if (value is PyNone) return;
+        var interp = _engine.Interp;
+        if (value is PyInstance pi && pi.Class.Mro.Any(c => c.Dict.ContainsKey("_repr_html_")))
+        {
+            var html = interp.CallMethod(value, "_repr_html_", Array.Empty<object>());
+            if (html is string h) { sink.WriteHtml(h); return; }
+        }
+        sink.WriteText(PyOps.Repr(interp, value) + "\n");
     }
 
     public Task ExecuteAsync(string code, IKernelOutputSink sink, CancellationToken cancellationToken)
@@ -52,16 +88,28 @@ public sealed class PySharpKernel : IKernel
         }));
         // matplotlib: figures shown by plt.show() or still open when the cell ends go to this cell's output (inline backend)
         PySharpLib.Matplotlib.MatplotlibRegistration.SetShowSink(png => sink.WriteImage("image/png", png));
+        // display(obj, ...): explicit rich output
+        _engine.SetVariable("display", new PyBuiltinFunction("display", (_, a, _) => { foreach (var v in a) Show(sink, v); return PyNone.Instance; }));
         _stdout.GetStringBuilder().Clear();
 
         try
         {
-            var module = _engine.Run(code, "<cell>");
+            var (prefix, last, line) = SplitLastExpression(code);
+            var module = _engine.Run(prefix, "<cell>");
             CarryGlobalsForward(module);
-            PySharpLib.Matplotlib.MatplotlibRegistration.FlushFigures();
-
+            object? echoed = null;
+            if (last is not null)
+            {
+                // line numbers in a traceback stay those of the cell: pad with the lines that were split off
+                var tail = _engine.Run(new string('\n', line - 1) + "__jn_echo__ = (" + last + "\n)", "<cell>");
+                if (tail.Dict.TryGet("__jn_echo__", out var v)) echoed = v;
+                tail.Dict.Remove("__jn_echo__");
+                CarryGlobalsForward(tail);
+            }
             var text = _stdout.ToString();
             if (text.Length > 0) sink.WriteText(text);
+            if (echoed is not null) Show(sink, echoed);
+            PySharpLib.Matplotlib.MatplotlibRegistration.FlushFigures();
         }
         catch (PyRaise ex)
         {

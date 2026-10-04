@@ -9,7 +9,7 @@
 
     <!-- NuGet package metadata: matplotlib-shaped plotting (figures, axes, images, lines, scatter, ...) rendered to PNG by SkiaSharp. -->
     <PackageId>NDSharp.Plot</PackageId>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>NDSharp.Plot — a matplotlib-style plotting model (Figure/Axes/imshow/plot/scatter/bar/hist/legend/colorbar, tight_layout) rendered to PNG with SkiaSharp. Bundles the DejaVu Sans font (Bitstream Vera license). No Python dependency.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

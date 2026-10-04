@@ -210,6 +210,9 @@ public static class Formatter
         _ => Escape(ObjectStr(v)),
     };
 
+    /// <summary>Row/column labels as display text (what the index column of a repr shows).</summary>
+    public static string[] IndexLabelText(Index index, DisplayOptions o) => LabelCells(index, o);
+
     private static string[] LabelCells(Index index, DisplayOptions o)
     {
         var l = index.Labels;

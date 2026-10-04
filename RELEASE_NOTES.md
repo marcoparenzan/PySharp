@@ -448,3 +448,34 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
   `multivariate_normal`; `zlib.crc32/adler32`; `round()` honors `__round__`.
 - `tools/NotebookRunner`: runs the cvintro notebooks cell by cell and reports failures (`NOTEBOOKS_RUN.md`).
 
+---
+
+## v2.2.0 — pandas
+
+**`import pandas as pd` on PySharp** — scenario 14 ([PANDAS_PLAN.md](PANDAS_PLAN.md)). Same method as numpy / cv2 / torch: a native .NET library with no Python
+dependency, a thin binding, and verification against the real library. Target semantics are **pandas 3.0** (default `str` dtype, always-on copy-on-write).
+
+- New packages **`NDSharp.Frame`** (immutable typed columns, `Index`/`RangeIndex`/MultiIndex, `Series`, `DataFrame`, the formatter, groupby/merge/reshape/CSV
+  engines) and **`PySharp.Pandas`** (`pd.Series`, `pd.DataFrame`, `pd.Index`, `pd.MultiIndex`, `pd.read_csv`, `pd.merge`, `pd.concat`, `pd.pivot_table`, ...).
+  Register with `PandasRegistration.Register(importer)`; the `pysharp` CLI, the JupyterNet kernel and the notebook runner do.
+- **Printing is pandas'**: `repr`/`str` of Series, DataFrame, Index and MultiIndex are ports of `io/formats/format.py` (float trimming and scientific switch,
+  `max_rows`/`min_rows`/`max_columns`/`width`, column dropping and wrapping, sparsified MultiIndex levels, `info()`, `describe()`, `to_string`, `to_html`).
+- **Selection and assignment**: `[]`, attribute access, `loc`/`iloc`/`at`/`iat` (labels, positions, masks, slices, MultiIndex partial keys), enlargement,
+  `drop`, `rename`, `assign`, `insert`, `set_index`, `reset_index`, `sort_values`, `sort_index`, `astype`.
+- **Computation**: operators with index alignment and pandas' dtype rules, reductions that reproduce numpy's pairwise sums digit for digit, missing data
+  (`fillna`, `dropna`, `where`, `replace`, ...), `apply`/`map`/`agg`, the `.str` accessor, `rolling`/`expanding` (pandas' Kahan-compensated algorithms ported),
+  `rank`, `corr`/`cov`, numpy ufuncs on Series/DataFrame.
+- **Shaping and IO**: `groupby` (agg, named aggregation, transform, apply, filter, cumulative ops), `merge`/`join`/`concat`, `pivot_table`, `pivot`, `melt`,
+  `crosstab`, `stack`/`unstack`, `get_dummies`, `read_csv`/`to_csv`, `to_dict`/`from_dict`/`from_records`.
+- **Plotting**: `df.plot()` / `df.plot.<line|bar|barh|hist|scatter|area>()` / `df.hist()` draw through `PySharp.Matplotlib` and follow pandas' defaults.
+- **JupyterNet**: a cell whose last statement is an expression now shows its value like Jupyter does (DataFrames as HTML tables, other objects by `repr`), and
+  `display(obj)` is available; pandas shows up to 20 columns in a notebook. See [JupyterNet/docs/pandas-in-notebooks.md](../JupyterNet/docs/pandas-in-notebooks.md).
+- **Interpreter/numpy fixes found on the way**: `str(KeyError('x'))` is `'x'`; `np.random.default_rng().normal` uses numpy's exact ziggurat table (the old
+  recomputed table differed in the last bit for most draws); `Conv.Converters` / `Conv.UfuncWrappers` / `Conv.DeferToOther` let other bindings take part in
+  numpy interop.
+- **Verification**: 30 golden snippets under `Oracle/pandas` (about 3000 lines of expected output produced by real pandas 3.0.6) plus the four samples
+  `pandas_demo.py`, `pandas_analysis_demo.py`, `pandas_report_demo.py`, `pandas_rolling_demo.py`, whose output is byte-identical to CPython + pandas;
+  18 native tests in `NDSharp.Frame.Tests`.
+- **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.2.0 (lockstep); the 16 library packages are in the local feed.
+- Known gaps (see the plan): datetime/categorical/nullable dtypes, `to_json`/`read_json`, `eval`/`query`, ewm, `plot.pie/box/kde`, `read_csv(parse_dates=...)`.
+

@@ -15,7 +15,11 @@ namespace PySharpLib.Pandas;
 /// <summary>Opt-in registration of the <c>pandas</c> module (Series / DataFrame / Index over NDSharp.Frame).</summary>
 public static class PandasRegistration
 {
-    public static void Register(Importer importer) => importer.RegisterBuiltin("pandas", _ => PandasModule.Create());
+    public static void Register(Importer importer)
+    {
+        importer.RegisterSourceModule("_pandas_plot", PdPlot.Source);
+        importer.RegisterBuiltin("pandas", interp => { PdPlot.Remember(interp, importer); return PandasModule.Create(); });
+    }
 }
 
 internal static class PandasModule
