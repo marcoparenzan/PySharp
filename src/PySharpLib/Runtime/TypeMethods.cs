@@ -59,6 +59,7 @@ public static class TypeMethods
             PySet => SetMethods.Table,
             PyFrozenSet => FrozenSetMethods.Table,
             PyBytes => BytesMethods.Table,
+            double => FloatMethods.Table,
             PyByteArray => ByteArrayMethods.Table,
             PyGenerator => GeneratorMethods.Table,
             PyIterator => IteratorMethods.Table,
@@ -1081,6 +1082,29 @@ public static class ListMethods
         private readonly Interp _interp;
         public InterpComparer(Interp interp) => _interp = interp;
         public int Compare(object? x, object? y) => _interp.Compare(x!, y!);
+    }
+}
+
+/// <summary>The few float methods real code reaches for: <c>is_integer</c>, and the numpy-scalar <c>round</c> / <c>item</c>
+/// (PySharp's float64 results are plain Python floats, so they answer for np.float64 too).</summary>
+public static class FloatMethods
+{
+    public static readonly Dictionary<string, PyBuiltinFunction> Table = Build();
+
+    private static Dictionary<string, PyBuiltinFunction> Build()
+    {
+        var t = new Dictionary<string, PyBuiltinFunction>();
+        void Add(string name, BuiltinFn fn) => t[name] = new PyBuiltinFunction($"float.{name}", fn);
+        Add("is_integer", (_, a, _) => (double)a[0] is var d && !double.IsNaN(d) && !double.IsInfinity(d) && d == Math.Floor(d));
+        Add("item", (_, a, _) => a[0]);
+        Add("round", (_, a, _) =>
+        {
+            double d = (double)a[0];
+            int digits = a.Length > 1 && a[1] is System.Numerics.BigInteger b ? (int)b : 0;
+            if (double.IsNaN(d) || double.IsInfinity(d) || digits > 15) return d;
+            return digits >= 0 ? Math.Round(d, digits, MidpointRounding.ToEven) : Math.Round(d / Math.Pow(10, -digits), MidpointRounding.ToEven) * Math.Pow(10, -digits);
+        });
+        return t;
     }
 }
 

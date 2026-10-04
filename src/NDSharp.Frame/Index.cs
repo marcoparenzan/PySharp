@@ -45,6 +45,9 @@ public sealed class Index
         set { if (_levelNames is null) _name = value; }
     }
 
+    /// <summary>The frequency string of a regular datetime index (<c>D</c>, <c>ME</c>, <c>2h</c>, ...), shown as <c>freq=</c> and in a Series footer; null when irregular.</summary>
+    public string? Freq { get; set; }
+
     public bool IsMulti => _levels > 0;
     public int NLevels => _levels > 0 ? _levels : 1;
 
@@ -114,6 +117,8 @@ public sealed class Index
 
     private Index CopyNamed(Column labels) => _levelNames is null ? new Index(labels, _name) : new Index(labels, null, _levels, _levelNames);
 
+    public Index WithFreq(string? freq) => new Index(Labels, _name) { Freq = freq };
+
     private Index(int start, int stop, int step, object? name)
     {
         int n = step > 0 ? Math.Max(0, (stop - start + step - 1) / step) : Math.Max(0, (start - stop - step - 1) / -step);
@@ -129,7 +134,7 @@ public sealed class Index
     public static Index Of(IReadOnlyList<object?> labels, object? name = null) => new(Column.Infer(labels), name);
     public static Index OfStrings(IEnumerable<string> labels, object? name = null) => new(Column.FromStrings(labels.Cast<string?>().ToArray()), name);
 
-    public Index WithName(object? name) => IsRange ? new Index((int)RangeStart, (int)RangeStop, (int)RangeStep, name) : IsMulti ? this : new Index(Labels, name);
+    public Index WithName(object? name) => IsRange ? new Index((int)RangeStart, (int)RangeStop, (int)RangeStep, name) : IsMulti ? this : new Index(Labels, name) { Freq = Freq };
 
     public Index WithNames(IReadOnlyList<object?> names) => IsMulti ? new Index(Labels, null, _levels, names.ToArray()) : WithName(names.Count > 0 ? names[0] : null);
 
@@ -145,7 +150,20 @@ public sealed class Index
             if (regular && pos[0] >= 0 && pos.All(p => p >= 0))
                 return new Index((int)(RangeStart + RangeStep * pos[0]), (int)(RangeStart + RangeStep * pos[0] + RangeStep * step * pos.Count), (int)(RangeStep * step), _name);
         }
-        return CopyNamed(Labels.Take(pos));
+        var taken = CopyNamed(Labels.Take(pos));
+        if (Freq is not null)
+        {
+            if (pos.Count == 0) taken.Freq = Freq;
+            else if (pos.Count == 1 || pos[1] != pos[0])
+            {
+                int step = pos.Count > 1 ? pos[1] - pos[0] : 1;
+                if (step != 0 && Enumerable.Range(1, pos.Count - 1).All(k => pos[k] - pos[k - 1] == step) && pos[0] >= 0)
+                {
+                    try { taken.Freq = step == 1 ? Freq : DateOffsetSpec.Parse(Freq).WithN(DateOffsetSpec.Parse(Freq).N * step).FreqString; } catch (FrameException) { }
+                }
+            }
+        }
+        return taken;
     }
 
     public bool IsUnique => Lookup.Values.All(l => l.Count == 1);
@@ -168,7 +186,14 @@ public sealed class Index
 
     /// <summary>Positions of a label (empty if absent).</summary>
     public IReadOnlyList<int> Locs(object? key)
-        => Lookup.TryGetValue(Column.Key(key) ?? Column.NaNKey, out var l) ? l : Array.Empty<int>();
+    {
+        if (key is string text && !IsMulti)
+        {
+            if (Labels.Kind == Kind.DateTime) { var kb = TimeSeries.KeyBounds(text, Labels); if (kb is { } b && !b.partial) key = new Ts(b.lo, Labels.Unit); else if (kb is { } b2) return Enumerable.Range(0, Length).Where(i => Labels.Ticks[i] >= b2.lo && Labels.Ticks[i] <= b2.hi).ToArray(); }
+            else if (Labels.Kind == Kind.Timedelta && DateTimeCore.TryParseTimedelta(text, out var tk, out var tu)) key = new Td(tk, tu);
+        }
+        return Lookup.TryGetValue(Column.Key(key) ?? Column.NaNKey, out var l) ? l : Array.Empty<int>();
+    }
 
     public int Loc(object? key)
     {

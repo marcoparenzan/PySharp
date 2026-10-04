@@ -24,6 +24,8 @@ internal static class PdOps
     {
         null => double.NaN,
         long l => new BigInteger(l),
+        Ts t => PdTime.Wrap(t),
+        Td t => PdTime.Wrap(t),
         _ => v,
     };
 
@@ -31,8 +33,14 @@ internal static class PdOps
 
     // ================================================================== operands
 
-    private static object Arith(BinOp op, object self, object other, bool reversed)
+    internal static object Arith(BinOp op, object self, object other, bool reversed)
     {
+        if (other is PyInstance { Native: DateOffsetSpec spec } && op is BinOp.Add or BinOp.Sub && !(reversed && op == BinOp.Sub))
+        {
+            var sp = op == BinOp.Sub ? spec.WithN(-spec.N) : spec;
+            if (self is PyInstance { Native: Series so }) return PdConv.Wrap(new Series(PdTime.ApplyOffset(so.Values, sp), so.Index, so.Name));
+            if (self is PyInstance { Native: DataFrame dof }) return PdConv.Wrap(new DataFrame(dof.Data.Select(c => PdTime.ApplyOffset(c, sp)), dof.Columns, dof.Index));
+        }
         if (self is PyInstance { Native: Series s })
         {
             switch (other)
@@ -67,7 +75,7 @@ internal static class PdOps
         return PdConv.Wrap(Ops.Binary(op, d, PdConv.ToCell(other), reversed));
     }
 
-    private static bool IsScalarOperand(object o) => o is bool or BigInteger or double or string or PyNone || o is PyInstance { Native: ScalarBox };
+    private static bool IsScalarOperand(object o) => o is bool or BigInteger or double or string or PyNone || o is PyInstance { Native: ScalarBox } || o is PyInstance && PdTime.TryCell(o, out _);
 
     // ================================================================== install
 

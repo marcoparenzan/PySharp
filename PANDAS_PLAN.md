@@ -125,11 +125,11 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - Not implemented: `CategoricalIndex`-specific methods, `Categorical.map` keeping the dtype, `groupby` with several categorical keys and `observed=False` combined with `as_index=False` corner cases, `IntervalIndex` methods
   (`overlaps`, `from_breaks`), `pd.interval_range`, `Series.cat` on non-category data raises like pandas; numpy's `Generator.gamma/exponential/...` are still missing
 
-### Phase 7 — Datetime  (planned)
-- [ ] `Kind.DateTime` (datetime64 with the unit pandas 3 infers), `Timestamp`/`Timedelta` scalars, `NaT`, `pd.to_datetime` (formats, `errors`, `dayfirst`, ISO parsing), `pd.to_timedelta`
-- [ ] `DatetimeIndex`, `pd.date_range`, `pd.Timedelta`, arithmetic (datetime ± timedelta, differences), comparisons, printing of datetime/timedelta columns and indexes
-- [ ] `.dt` accessor (`year month day hour minute second dayofweek day_name month_name date normalize floor/ceil/round strftime isocalendar`), `resample` (common rules and aggregations), `shift(freq=)`, `rolling('3D')`, `read_csv(parse_dates=)`, `to_csv`/`to_json` date formats, `groupby(pd.Grouper(freq=))`
-- [ ] oracle snippets `P7_*`
+### Phase 7 — Datetime  ✅
+- [x] `Kind.DateTime`/`Kind.Timedelta` (datetime64/timedelta64 with the unit pandas 3 infers: `us` by default, `s`/`ms`/`ns` where pandas picks them), `Timestamp`/`Timedelta` scalars, `NaT`, `pd.to_datetime` (formats, format guessing, `errors`, `dayfirst`, `unit`, DataFrame of year/month/day), `pd.to_timedelta`
+- [x] `DatetimeIndex`/`TimedeltaIndex` (with `freq`), `pd.date_range`/`timedelta_range`/`bdate_range`, date offsets (`Day`, `Hour`, `Week`, `MonthEnd`/`MonthBegin`, `QuarterEnd`..., `YearEnd`..., `BDay`, `DateOffset(...)`), arithmetic, comparisons (strings are parsed against Series, not against scalars), pandas-identical printing of datetime/timedelta columns, indexes and arrays
+- [x] `.dt` accessor and DatetimeIndex attributes (`year month day hour ... dayofweek quarter is_*_start/end day_name month_name date time normalize floor/ceil/round strftime isocalendar total_seconds days seconds`), partial-string indexing and slicing (`s['2020-03']`, `s['2020-01':'2020-02']`), `resample` (tick, week, month, quarter, year, business-day rules; `closed`/`label`; `sum mean first last min max count size median std agg apply ohlc asfreq ffill bfill`), `asfreq`, `reindex(method=)`, `shift(freq=)`, `rolling('3D')`, `read_csv(parse_dates=, date_format=)`, `to_csv(date_format=)`, `to_json`/`read_json` dates, `groupby(pd.Grouper(key=, freq=))`, `pivot_table` with array keys
+- [x] oracle snippets `P7_scalars`, `P7_range`, `P7_dt`, `P7_index`, `P7_resample`, `P7_io`, `P7_misc`, `P7_edge`; 16 more native tests (`DateTimeTests`); sample `pandas_timeseries_demo.py` byte-identical to CPython + pandas; `df.plot()` with a datetime index (days-since-epoch x axis, date tick labels)
 
 ---
 
@@ -137,7 +137,7 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 
 - `np.asarray(series_of_str)` / `.values` of `str` and `object` columns: NDSharp has no object arrays, so these raise `NotImplementedError` (numeric and bool columns convert).
 - `Series.dtype` of a `str` column is a stand-in object (`str(dtype) == 'str'`, `repr` as pandas); there is no `StringDtype` class hierarchy.
-- Nullable dtypes, `pd.NA`, datetime and categorical dtypes: out of scope (see above).
+- Nullable dtypes and `pd.NA`: out of scope. Time zones (`tz=`, `utc=True`, `tz_localize`) and `Period`/`PeriodIndex` are not implemented and raise `NotImplementedError`.
 - A frame/Series element read from a `float32` column comes back as a Python float (pandas returns `np.float32`); reductions return plain Python `int`/`float` (the numpy binding's convention), not `np.int64`/`np.float64`.
 - `Series.unique()` of a `str`/`object` Series returns a Python list (pandas returns an extension array).
 - `sort_values` is always stable (pandas' default quicksort is not stable on large inputs, so tie order can differ there).
@@ -145,8 +145,9 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - A binary operation between two Series with *different* duplicate labels raises (pandas joins them).
 - `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
 - MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
-- `read_csv`: no `parse_dates`/`converters`/`chunksize`/URLs; `orient='table'` JSON and datetime-aware JSON are not implemented (Phase 7).
-- Not implemented: `rolling(window='3D')` (offsets, Phase 7), `plot.kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
+- `read_csv`: no `converters`/`chunksize`/URLs and no combined-column `parse_dates=[[...]]`; `orient='table'` JSON is not implemented; `read_json` converts dates only for the default date-like column names or an explicit `convert_dates` list.
+- Datetimes: `.values`/`np.asarray` of a datetime column raise (NDSharp has no datetime64 arrays); `resample(origin=, offset=)` raises; `isocalendar()` columns are int64 where pandas has UInt32; `Series.unique()` returns a `DatetimeArray`/`TimedeltaArray` stand-in with `len`, iteration, indexing and `tolist`; numpy `Generator.poisson` is missing.
+- Not implemented: `plot.kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
 
 ## Verification environment
 

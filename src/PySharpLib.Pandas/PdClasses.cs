@@ -75,6 +75,7 @@ internal static class PdClasses
         "KeyError" => PyErr.Raise(PyErr.KeyErrorClass, ex.Message),
         "IndexError" => PyErr.IndexError(ex.Message),
         "NotImplementedError" => PyErr.NotImplementedError(ex.Message),
+        "DateParseError" => PyErr.Raise(PdTime.DateParseErrorClass, ex.Message),
         _ => PyErr.ValueError(ex.Message),
     };
 

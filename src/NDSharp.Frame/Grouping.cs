@@ -20,7 +20,10 @@ public sealed class Grouping
 
     public int Count => Rows.Count;
 
-    public Grouping(IReadOnlyList<Column> keyColumns, IReadOnlyList<object?> keyNames, int nRows, bool sort = true, bool dropNa = true, bool observed = true)
+    /// <summary>Frequency of a resample/Grouper key, carried to the result index.</summary>
+    public string? Freq { get; set; }
+
+    public Grouping(IReadOnlyList<Column> keyColumns, IReadOnlyList<object?> keyNames, int nRows, bool sort = true, bool dropNa = true, bool observed = true, IReadOnlyList<object?[]>? forcedKeys = null)
     {
         KeyColumns = keyColumns; KeyNames = keyNames; NRows = nRows;
         GroupOfRow = new int[nRows];
@@ -50,6 +53,12 @@ public sealed class Grouping
                 if (!ids.ContainsKey(k)) { ids[k] = rows.Count; rows.Add(new List<int>()); first.Add(-1); keyValues.Add(combo); }
             }
         }
+        if (forcedKeys is not null)
+            foreach (var combo in forcedKeys)
+            {
+                object k = keyColumns.Count == 1 ? (Column.Key(combo[0]) ?? Column.NaNKey) : new LabelTuple(combo);
+                if (!ids.ContainsKey(k)) { ids[k] = rows.Count; rows.Add(new List<int>()); first.Add(-1); keyValues.Add(combo); }
+            }
         var order = Enumerable.Range(0, rows.Count).ToArray();
         if (sort && rows.Count > 1)
         {
@@ -77,6 +86,8 @@ public sealed class Grouping
             for (int i = 0; i < source.Categories.Length; i++) lookup[Column.Key(source.Categories[i]) ?? Column.NaNKey] = i;
             return Column.FromCodes(values.Select(v => v is null ? -1 : lookup.TryGetValue(Column.Key(v)!, out var c) ? c : -1).ToArray(), source.Categories, source.Ordered);
         }
+        if (source.Kind == Kind.DateTime) return Column.FromDateTime(values.Select(v => v is Ts t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit);
+        if (source.Kind == Kind.Timedelta) return Column.FromTimedelta(values.Select(v => v is Td t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit);
         var inferred = Column.Infer(values);
         return source.Kind == Kind.Str && inferred.Kind != Kind.Str ? Column.FromStrings(values.Select(v => v as string).ToArray()) : inferred;
     }
@@ -93,7 +104,7 @@ public sealed class Grouping
     public Index ResultIndex()
     {
         var keyCols = ResultKeyColumns();
-        if (KeyColumns.Count == 1) return new Index(keyCols[0], KeyNames[0]);
+        if (KeyColumns.Count == 1) return new Index(keyCols[0], KeyNames[0]) { Freq = Freq };
         return Index.Multi(keyCols, KeyNames);
     }
 

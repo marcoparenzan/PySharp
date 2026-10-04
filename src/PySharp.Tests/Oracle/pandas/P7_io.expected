@@ -1,0 +1,156 @@
+when        str
+city        str
+temp    float64
+dtype: object
+when    datetime64[us]
+city               str
+temp           float64
+dtype: object
+        when  city  temp
+0 2021-03-01  Rome  12.5
+1 2021-03-02  Rome  13.0
+2 2021-03-03  Oslo  -1.5
+3 2021-03-04  Oslo   0.5
+            city  temp
+when                  
+2021-03-01  Rome  12.5
+2021-03-02  Rome  13.0
+2021-03-03  Oslo  -1.5
+2021-03-04  Oslo   0.5
+DatetimeIndex(['2021-03-01', '2021-03-02', '2021-03-03', '2021-03-04'], dtype='datetime64[us]', name='when', freq=None)
+datetime64[us]
+city    Rome
+temp    13.0
+Name: 2021-03-02 00:00:00, dtype: object
+d      str
+v    int64
+dtype: object
+d    datetime64[us]
+v             int64
+dtype: object
+                    d  v
+0 2021-03-01 10:00:00  1
+1 2021-03-02 11:30:00  2
+t,dur,x
+2020-01-01 10:00:00,0 days 01:00:00,1
+2020-01-01 11:00:00,0 days 02:00:00,2
+2020-01-01 12:00:00,0 days 03:00:00,3
+
+t,dur,x
+01/01/2020 10:00,0 days 01:00:00,1
+01/01/2020 11:00,0 days 02:00:00,2
+01/01/2020 12:00,0 days 03:00:00,3
+
+t,dur,x
+2020-01-01 10:00:00,0 days 01:00:00,1
+2020-01-01 11:00:00,0 days 02:00:00,2
+2020-01-01 12:00:00,0 days 03:00:00,3
+
+{"t":{"0":1577872800000,"1":1577876400000,"2":1577880000000},"dur":{"0":3600000,"1":7200000,"2":10800000},"x":{"0":1,"1":2,"2":3}}
+{"t":{"0":"2020-01-01T10:00:00.000","1":"2020-01-01T11:00:00.000","2":"2020-01-01T12:00:00.000"},"dur":{"0":"P0DT1H0M0S","1":"P0DT2H0M0S","2":"P0DT3H0M0S"},"x":{"0":1,"1":2,"2":3}}
+[{"t":"2020-01-01T10:00:00.000","dur":"P0DT1H0M0S","x":1},{"t":"2020-01-01T11:00:00.000","dur":"P0DT2H0M0S","x":2},{"t":"2020-01-01T12:00:00.000","dur":"P0DT3H0M0S","x":3}]
+{"columns":["t","dur","x"],"index":[0,1,2],"data":[[1577872800,3600,1],[1577876400,7200,2],[1577880000,10800,3]]}
+{"0":1577836800000,"1":1577923200000}
+{'t': Timestamp('2020-01-01 10:00:00'), 'dur': Timedelta('0 days 01:00:00'), 'x': 1}
+                    t             dur  x
+0 2020-01-01 10:00:00 0 days 01:00:00  1
+1 2020-01-01 11:00:00 0 days 02:00:00  2
+2 2020-01-01 12:00:00 0 days 03:00:00  3
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>t</th>
+      <th>dur</th>
+      <th>x</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2020-01-01 10:00:00</td>
+      <td>0 days 01:00:00</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2020-01-01 11:00:00</td>
+      <td>0 days 02:00:00</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2020-01-01 12:00:00</td>
+      <td>0 days 03:00:00</td>
+      <td>3</td>
+    </tr>
+  </tbody>
+</table>
+t      datetime64[us]
+dur    timedelta64[s]
+x               int64
+dtype: object
+d    datetime64[us]
+v             int64
+dtype: object
+           d  v
+0 2020-01-02  1
+1 2020-02-03  2
+           a               b
+0 2020-01-01 1 days 00:00:00
+1        NaT             NaT
+2 2020-01-03 0 days 02:00:00
+       a      b
+0  False  False
+1   True   True
+2  False  False
+[Timestamp('2020-01-01 00:00:00'), Timestamp('2000-01-01 00:00:00'), Timestamp('2020-01-03 00:00:00')]
+0    2020.0
+1       NaN
+2    2020.0
+Name: a, dtype: float64
+,a,b
+0,2020-01-01,1 days 00:00:00
+1,,
+2,2020-01-03,0 days 02:00:00
+
+                         a                       b
+count                    2                       2
+mean   2020-01-02 00:00:00         0 days 13:00:00
+min    2020-01-01 00:00:00         0 days 02:00:00
+25%    2020-01-01 12:00:00         0 days 07:30:00
+50%    2020-01-02 00:00:00         0 days 13:00:00
+75%    2020-01-02 12:00:00         0 days 18:30:00
+max    2020-01-03 00:00:00         1 days 00:00:00
+std                    NaN  0 days 15:33:22.857069
+a    2
+b    2
+dtype: int64
+           a               b
+0 2020-01-01 1 days 00:00:00
+2 2020-01-03 0 days 02:00:00
+(6, 2)
+           a               b
+2 2020-01-03 0 days 02:00:00
+0 2020-01-01 1 days 00:00:00
+1        NaT             NaT
+
+['2020-01-01 00:00:00', 'NaT', '2020-01-03 00:00:00']
+0   2020-05-05
+1   2020-05-06
+Name: dates, dtype: datetime64[us]
+0   1 days
+1   2 days
+dtype: timedelta64[us]
+d    datetime64[us]
+dtype: object
+
+[5, 6]
+0   2020-01-05
+1          NaT
+dtype: datetime64[us]
+DatetimeIndex(['2020-01-05 10:00:00', '2020-01-06 11:30:00'], dtype='datetime64[us]', freq=None)
+DatetimeIndex(['2020-01-05', '2020-02-06'], dtype='datetime64[us]', freq=None)
+DatetimeIndex(['2020-01-05 10:00:00.123456789'], dtype='datetime64[ns]', freq=None)
+2020-01-05 00:00:00
+Sunday 05 January 2020, week 01, day 005

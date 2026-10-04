@@ -83,6 +83,8 @@ internal static class PandasModule
         m.Dict["notnull"] = m.Dict["notna"];
         m.Dict["nan"] = double.NaN;
         PdCategorical.Install(m);
+        PdTime.Install(m);
+        PdDates.Install(m);
         PdMerge.Install(m);
         PdReshape.Install(m);
         PdIO.Install(m);

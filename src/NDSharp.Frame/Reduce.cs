@@ -34,6 +34,30 @@ public static class Reduce
 
     public static object? Scalar(string name, Column c, bool skipna = true, int ddof = 1, int minCount = 0)
     {
+        if (c.Kind is Kind.DateTime or Kind.Timedelta)
+        {
+            bool isDt = c.Kind == Kind.DateTime;
+            object Wrap(long ticks) => isDt ? new Ts(ticks, c.Unit) : new Td(ticks, c.Unit);
+            var valid = c.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
+            switch (name)
+            {
+                case "count": return (long)valid.Length;
+                case "nunique": return (long)valid.Distinct().Count();
+                case "min": case "max":
+                    if (valid.Length < c.Length && !skipna || valid.Length == 0) return Wrap(DateTimeCore.NaT);
+                    return Wrap(name == "min" ? valid.Min() : valid.Max());
+                case "mean": case "median": case "sum" when !isDt: case "std" when !isDt:
+                {
+                    if (valid.Length < c.Length && !skipna || valid.Length == 0) return Wrap(DateTimeCore.NaT);
+                    if (name == "sum") return Wrap(valid.Aggregate(0L, (x, y) => x + y));
+                    if (name == "mean") return Wrap((long)((System.Numerics.BigInteger)valid.Aggregate(System.Numerics.BigInteger.Zero, (x, y) => x + y) / valid.Length));
+                    if (name == "median") { var sorted = valid.OrderBy(x => x).ToArray(); return Wrap(sorted.Length % 2 == 1 ? sorted[sorted.Length / 2] : (sorted[sorted.Length / 2 - 1] + sorted[sorted.Length / 2]) / 2); }
+                    var asDouble = Column.FromDoubles(valid.Select(x => (double)x).ToArray());
+                    return new Td((long)Convert.ToDouble(Scalar("std", asDouble, true, ddof)), c.Unit);
+                }
+                default: throw new FrameException($"'{(isDt ? "DatetimeArray" : "TimedeltaArray")}' with dtype {c.DTypeName} does not support reduction '{name}'", "TypeError");
+            }
+        }
         if (c.Kind == Kind.Category)
         {
             switch (name)
@@ -128,6 +152,7 @@ public static class Reduce
 
     private static int CompareCells(Column c, int i, int j) => c.Kind switch
     {
+        Kind.DateTime or Kind.Timedelta => c.Ticks[i].CompareTo(c.Ticks[j]),
         Kind.Category => c.Codes[i].CompareTo(c.Codes[j]),
         Kind.Int => c.LongAt(i).CompareTo(c.LongAt(j)),
         Kind.Float => c.DoubleAt(i).CompareTo(c.DoubleAt(j)),
@@ -148,6 +173,20 @@ public static class Reduce
         return best;
     }
 
+    /// <summary>Linear-interpolated quantile of datetime/timedelta ticks, as the same kind of value.</summary>
+    public static object QuantileTime(Column c, double q)
+    {
+        var valid = c.Ticks.Where(t => t != DateTimeCore.NaT).OrderBy(t => t).Select(t => (double)t).ToArray();
+        long result = DateTimeCore.NaT;
+        if (valid.Length > 0)
+        {
+            double pos = (valid.Length - 1) * q;
+            int lo = (int)Math.Floor(pos), hi = (int)Math.Ceiling(pos);
+            result = (long)(valid[lo] + (valid[hi] - valid[lo]) * (pos - lo));
+        }
+        return c.Kind == Kind.DateTime ? new Ts(result, c.Unit) : new Td(result, c.Unit);
+    }
+
     public static double Quantile(Column c, double q, bool skipna = true)
     {
         if (q < 0 || q > 1) throw new FrameException("percentiles should all be in the interval [0, 1]");
@@ -161,6 +200,22 @@ public static class Reduce
     public static Column Cumulative(string name, Column c, bool skipna = true)
     {
         int n = c.Length;
+        if (c.Kind is Kind.DateTime or Kind.Timedelta)
+        {
+            bool ok = name is "cummax" or "cummin" || c.Kind == Kind.Timedelta && name == "cumsum";
+            if (!ok) throw new FrameException($"Cannot perform reduction '{name}' with non-numeric dtype", "TypeError");
+            var tk = new long[n];
+            long acc = 0; bool have = false, dead = false;
+            for (int i = 0; i < n; i++)
+            {
+                long tv = c.Ticks[i];
+                if (tv == DateTimeCore.NaT) { tk[i] = DateTimeCore.NaT; if (!skipna) dead = true; continue; }
+                if (dead) { tk[i] = DateTimeCore.NaT; continue; }
+                acc = !have ? tv : name switch { "cumsum" => acc + tv, "cummax" => Math.Max(acc, tv), _ => Math.Min(acc, tv) };
+                have = true; tk[i] = acc;
+            }
+            return c.Kind == Kind.DateTime ? Column.FromDateTime(tk, c.Unit) : Column.FromTimedelta(tk, c.Unit);
+        }
         if (c.Kind is Kind.Int or Kind.Bool && name is "cumsum" or "cumprod" or "cummax" or "cummin")
         {
             var src = c.Kind == Kind.Bool ? c.Bools.Select(b => b ? 1L : 0L).ToArray() : c.Longs;

@@ -32,7 +32,9 @@ public static class Ops
         public Operand(object? s, int n) { Col = null; Scalar = s; Length = n; }
 
         public bool IsScalar => Col is null;
-        public Kind Kind => Col?.Kind ?? Scalar switch { bool => Kind.Bool, long => Kind.Int, double => Kind.Float, string => Kind.Str, _ => Kind.Object };
+        public Kind Kind => Col?.Kind ?? Scalar switch { bool => Kind.Bool, long => Kind.Int, double => Kind.Float, string => Kind.Str, Ts => Kind.DateTime, Td => Kind.Timedelta, _ => Kind.Object };
+        public DateUnit Unit => Col is not null ? Col.Unit : Scalar is Ts t ? t.Unit : Scalar is Td d ? d.Unit : DateUnit.Micro;
+        public long Tk(int i) => Col is not null ? Col.Ticks[i] : Scalar is Ts t ? t.Ticks : Scalar is Td d ? d.Ticks : DateTimeCore.NaT;
         public bool IsNa(int i) => Col is not null ? Col.IsNa(i) : Scalar is null || (Scalar is double d && double.IsNaN(d));
         public double D(int i) => Col is not null ? Col.DoubleAt(i) : Column.ToDouble(Scalar!);
         public long L(int i) => Col is not null ? (Col.Kind == Kind.Bool ? (Col.BoolAt(i) ? 1 : 0) : Col.LongAt(i)) : Column.ToLong(Scalar!);
@@ -91,8 +93,75 @@ public static class Ops
         return Column.FromBools(r);
     }
 
+    /// <summary>datetime64 / timedelta64 arithmetic and comparison (units are aligned to the finer one; NaT propagates).</summary>
+    private static Column TimeOp(BinOp op, Operand a, Operand b, int n)
+    {
+        Kind ka = a.Kind, kb = b.Kind;
+        bool dtA = ka == Kind.DateTime, dtB = kb == Kind.DateTime, tdA = ka == Kind.Timedelta, tdB = kb == Kind.Timedelta;
+        // a string next to a datetime is parsed as one (df['d'] > '2020-03-01')
+        if (IsComparison(op) && (dtA && b.IsScalar && b.Scalar is string || dtB && a.IsScalar && a.Scalar is string))
+        {
+            string str = (string)(dtA ? b.Scalar! : a.Scalar!);
+            if (!DateTimeCore.TryParseIso(str, out var tk, out var tu)) throw new FrameException($"Invalid comparison between dtype=datetime64 and str", "TypeError");
+            var parsed = new Operand(new Ts(tk, tu), n);
+            return dtA ? TimeOp(op, a, parsed, n) : TimeOp(op, parsed, b, n);
+        }
+        if (IsComparison(op))
+        {
+            if ((dtA || tdA) && (dtB || tdB) && ka == kb)
+            {
+                var u = DateTimeCore.Finer(a.Unit, b.Unit);
+                var r = new bool[n];
+                for (int i = 0; i < n; i++)
+                {
+                    long x = a.Tk(i), y = b.Tk(i);
+                    if (x == DateTimeCore.NaT || y == DateTimeCore.NaT) { r[i] = op == BinOp.Ne; continue; }
+                    r[i] = CompareL(op, DateTimeCore.Compare(x, a.Unit, y, b.Unit), 0);
+                }
+                return Column.FromBools(r);
+            }
+            if (op is BinOp.Eq or BinOp.Ne) return Column.FromBools(Enumerable.Repeat(op == BinOp.Ne, n).ToArray());
+            throw TypeErr(op, a, b);
+        }
+        DateUnit unit = DateTimeCore.Finer(dtA || tdA ? a.Unit : DateUnit.Second, dtB || tdB ? b.Unit : DateUnit.Second);
+        long Get(Operand o, int i) => o.Tk(i) == DateTimeCore.NaT ? DateTimeCore.NaT : DateTimeCore.Scale(o.Tk(i), o.Unit, unit);
+        long[] Build(Func<int, long> f) { var r = new long[n]; for (int i = 0; i < n; i++) r[i] = f(i); return r; }
+        switch (op)
+        {
+            case BinOp.Add when dtA && tdB || tdA && dtB:
+                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x + y); }), unit);
+            case BinOp.Add when tdA && tdB:
+                return Column.FromTimedelta(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x + y); }), unit);
+            case BinOp.Sub when dtA && tdB:
+                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x - y); }), unit);
+            case BinOp.Sub when dtA && dtB || tdA && tdB:
+                return Column.FromTimedelta(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x - y); }), unit);
+            case BinOp.Mul when tdA && (kb is Kind.Int or Kind.Float or Kind.Bool) || tdB && (ka is Kind.Int or Kind.Float or Kind.Bool):
+            {
+                var td = tdA ? a : b; var num = tdA ? b : a;
+                return Column.FromTimedelta(Build(i => td.Tk(i) == DateTimeCore.NaT || num.IsNa(i) ? DateTimeCore.NaT : (long)(td.Tk(i) * num.D(i))), td.Unit);
+            }
+            case BinOp.Div when tdA && (kb is Kind.Int or Kind.Float):
+                return Column.FromTimedelta(Build(i => a.Tk(i) == DateTimeCore.NaT || b.IsNa(i) ? DateTimeCore.NaT : (long)(a.Tk(i) / b.D(i))), a.Unit);
+            case BinOp.FloorDiv when tdA && kb is Kind.Int:
+                return Column.FromTimedelta(Build(i => a.Tk(i) == DateTimeCore.NaT || b.IsNa(i) ? DateTimeCore.NaT : DateTimeCore.FloorDiv(a.Tk(i), b.L(i))), a.Unit);
+            case BinOp.Div when tdA && tdB:
+                return Column.FromDoubles(Enumerable.Range(0, n).Select(i => Get(a, i) == DateTimeCore.NaT || Get(b, i) == DateTimeCore.NaT ? double.NaN : (double)Get(a, i) / Get(b, i)).ToArray());
+            case BinOp.FloorDiv when tdA && tdB:
+            {
+                bool any = Enumerable.Range(0, n).Any(i => Get(a, i) == DateTimeCore.NaT || Get(b, i) == DateTimeCore.NaT || Get(b, i) == 0);
+                if (any) return Column.FromDoubles(Enumerable.Range(0, n).Select(i => Get(a, i) == DateTimeCore.NaT || Get(b, i) == DateTimeCore.NaT || Get(b, i) == 0 ? double.NaN : Math.Floor((double)Get(a, i) / Get(b, i))).ToArray());
+                return Column.FromLongs(Enumerable.Range(0, n).Select(i => DateTimeCore.FloorDiv(Get(a, i), Get(b, i))).ToArray());
+            }
+            case BinOp.Mod when tdA && tdB:
+                return Column.FromTimedelta(Build(i => Get(a, i) == DateTimeCore.NaT || Get(b, i) == DateTimeCore.NaT || Get(b, i) == 0 ? DateTimeCore.NaT : DateTimeCore.FloorMod(Get(a, i), Get(b, i))), unit);
+        }
+        throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(dtA ? "datetime64" : tdA ? "timedelta64" : Name(a))}' and '{(dtB ? "datetime64" : tdB ? "timedelta64" : Name(b))}'", "TypeError");
+    }
+
     private static Column Run(BinOp op, Operand a, Operand b, int n)
     {
+        if (a.Kind is Kind.DateTime or Kind.Timedelta || b.Kind is Kind.DateTime or Kind.Timedelta) return TimeOp(op, a, b, n);
         if (a.Kind == Kind.Category || b.Kind == Kind.Category) return CategoryOp(op, a, b, n);
         Kind ka = a.Kind, kb = b.Kind;
         bool numA = ka is Kind.Bool or Kind.Int or Kind.Float, numB = kb is Kind.Bool or Kind.Int or Kind.Float;
@@ -296,6 +365,7 @@ public static class Ops
 
     public static Column Negate(Column c) => c.Kind switch
     {
+        Kind.Timedelta => Column.FromTimedelta(c.Ticks.Select(t => t == DateTimeCore.NaT ? t : -t).ToArray(), c.Unit),
         Kind.Int => Column.FromLongs(c.Longs.Select(x => -x).ToArray(), c.Num!.Value),
         Kind.Float => Column.FromDoubles(c.Doubles.Select(x => -x).ToArray(), c.Num!.Value),
         Kind.Bool => throw new FrameException("The numpy boolean negative, the `-` operator, is not supported, use the `~` operator or the logical_not function instead.", "TypeError"),
@@ -304,6 +374,7 @@ public static class Ops
 
     public static Column Abs(Column c) => c.Kind switch
     {
+        Kind.Timedelta => Column.FromTimedelta(c.Ticks.Select(t => t == DateTimeCore.NaT ? t : Math.Abs(t)).ToArray(), c.Unit),
         Kind.Int => Column.FromLongs(c.Longs.Select(Math.Abs).ToArray(), c.Num!.Value),
         Kind.Float => Column.FromDoubles(c.Doubles.Select(Math.Abs).ToArray(), c.Num!.Value),
         Kind.Bool => c,
@@ -321,6 +392,8 @@ public static class Ops
 
     public static int CompareLabels(object? a, object? b)
     {
+        if (a is Ts ta2 && b is Ts tb2) return DateTimeCore.Compare(ta2.Ticks, ta2.Unit, tb2.Ticks, tb2.Unit);
+        if (a is Td da && b is Td db) return DateTimeCore.Compare(da.Ticks, da.Unit, db.Ticks, db.Unit);
         if (a is LabelTuple ta && b is LabelTuple tb)
         {
             for (int i = 0; i < Math.Min(ta.Parts.Length, tb.Parts.Length); i++)
@@ -343,8 +416,11 @@ public static class Ops
         var all = new List<object?>();
         foreach (var l in x.Items().Concat(y.Items()))
             if (seen.Add(Column.Key(l) ?? Column.NaNKey)) all.Add(l);
-        try { all = all.OrderBy(l => l, Comparer<object?>.Create(CompareLabels)).ToList(); } catch (Exception ex) when (ex is FrameException or InvalidOperationException) { }
         object? name = Equals(x.Name, y.Name) ? x.Name : null;
+        var inferred = Column.Infer(all);
+        if (inferred.Kind is Kind.DateTime or Kind.Timedelta or Kind.Int or Kind.Float or Kind.Str)
+            return new Index(inferred.Take(FrameOps.SortPositions(new[] { inferred }, new[] { true }, true)), name);
+        try { all = all.OrderBy(l => l, Comparer<object?>.Create(CompareLabels)).ToList(); } catch (Exception ex) when (ex is FrameException or InvalidOperationException) { }
         return new Index(Column.Infer(all), name);
     }
 

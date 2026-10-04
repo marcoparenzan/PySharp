@@ -1,0 +1,151 @@
+when
+1     30
+2     70
+3    110
+Name: amt, dtype: int64
+      sum  count
+when            
+2020  210      6
+when
+2020-01-15    10
+2020-01-20    20
+2020-02-03    30
+Name: amt, dtype: int64
+who
+a   2020-01-15
+b   2020-01-20
+Name: when, dtype: datetime64[us]
+who
+a   2020-03-01
+b   2020-03-15
+Name: when, dtype: datetime64[us]
+           min        max
+who                      
+a   2020-01-15 2020-03-01
+b   2020-01-20 2020-03-15
+         first  total
+who                  
+a   2020-01-15     90
+b   2020-01-20    120
+who    a   b
+when        
+1     10  20
+2     30  40
+3     50  60
+        when who  amt     month
+0 2020-01-15   a   10   January
+1 2020-01-20   b   20   January
+2 2020-02-03   a   30  February
+        when who  amt  year  dow
+0 2020-01-15   a   10  2020    2
+1 2020-01-20   b   20  2020    0
+2 2020-02-03   a   30  2020    0
+3 2020-02-10   b   40  2020    0
+4 2020-03-01   a   50  2020    6
+5 2020-03-15   b   60  2020    6
+1999-12-31 00:00:00 datetime64[us]
+0   2001-01-01 10:00:00
+1   2020-01-20 00:00:00
+Name: when, dtype: datetime64[us]
+[False, True, False, False, False, False]
+0   2001-01-01 10:00:00
+1   1970-01-01 00:00:00
+2   2020-02-03 00:00:00
+Name: when, dtype: datetime64[us]
+[True, False, True, False, False, False]
+[False, True, True, False, False, False]
+<DatetimeArray>
+['2001-01-01 10:00:00', '1970-01-01 00:00:00', '2020-02-03 00:00:00',
+ '2020-02-10 00:00:00', '2020-03-01 00:00:00', '1999-12-31 00:00:00']
+Length: 6, dtype: datetime64[us]
+when
+2001-01-01 10:00:00    1
+1970-01-01 00:00:00    1
+Name: count, dtype: int64
+[20, 60, 10, 30, 40, 50]
+[Timestamp('2020-03-01 00:00:00'), Timestamp('2020-02-10 00:00:00')]
+[3.0, 1.0, 4.0, 5.0, 6.0, 2.0]
+[Timestamp('2001-01-01 10:00:00'), Timestamp('2000-01-01 00:00:00')]
+[NaT, NaT, Timestamp('2020-02-03 00:00:00'), Timestamp('2020-02-10 00:00:00')]
+[False, False, False, False, False, False]
+4 1
+(1, 6)
+['01', '70', '20', '20', '20', '99']
+[2001, 1970, 2020, 2020, 2020, 1999]
+
+[Timestamp('2001-01-01 10:00:00'), Timestamp('1970-01-01 00:00:00')]
+6
+18322 days 00:00:00
+[NaT, Timedelta('-11324 days +14:00:00'), Timedelta('18295 days 00:00:00')]
+[-6939, -18262, 33, 40, 60, -7306]
+[nan, -11324.0, 18295.0, 7.0, 20.0, -7366.0]
+TimedeltaIndex(['0 days 01:30:00', '0 days 00:30:00', '0 days 02:30:00'], dtype='timedelta64[s]', freq=None)
+0   0 days 01:30:00
+1   0 days 02:00:00
+2   0 days 04:30:00
+dtype: timedelta64[s]
+0 days 04:30:00 0 days 01:30:00
+0    1.5
+1    0.5
+2    2.5
+dtype: float64
+[Timedelta('0 days 01:30:00'), Timedelta('0 days 00:30:00'), Timedelta('0 days 02:30:00')]
+Index([5400.0, 1800.0, 9000.0], dtype='float64')
+Index([0, 0, 0], dtype='int64') Index([5400, 1800, 9000], dtype='int32')
+0 days 04:30:00
+2020-01-02 00:00:00
+1 days 00:00:00
+True
+True
+2020-01-01 05:00:00
+0   2020-01-01 00:00:00
+1   2020-01-02 03:04:00
+dtype: datetime64[us]
+object
+           a
+0        NaT
+1 2020-01-01
+2 2020-01-02
+       a
+0    NaT
+1 1 days
+2 1 days
+a   2020-01-03
+dtype: datetime64[us]
+                     0                    1                    2
+a  2020-01-01 00:00:00  2020-01-02 00:00:00  2020-01-03 00:00:00
+b                    1                    2                    3
+b    6
+dtype: int64
+
+2020-01-01    2
+2020-02-01    3
+2020-03-01    1
+dtype: int64
+False
+KeyError 'Value based partial slicing on non-monotonic DatetimeIndexes with non-existing keys is not allowed.'
+DatetimeIndex(['2020-01-01', '2020-02-01', '2020-03-01'], dtype='datetime64[us]', freq=None)
+[1, 2, 0]
+2020-02-01 00:00:00 2020-03-01 00:00:00
+[3, 1, 2]
+           d  0
+0 2020-03-01  1
+1 2020-01-01  2
+2 2020-02-01  3
+2020    6
+dtype: int64
+
+2021-02-28 00:00:00
+2020-02-29 00:00:00
+2020-06-30 00:00:00
+2020-12-31 00:00:00
+2020-03-29 00:00:00
+2020-03-15 05:00:00
+2020-03-16 00:00:00
+2020-03-13 00:00:00
+2020-03-17 02:00:00
+DatetimeIndex(['2020-01-31', '2020-02-29', '2020-03-31'], dtype='datetime64[us]', freq='ME')
+DatetimeIndex(['2020-01-01', '2020-02-01', '2020-03-01'], dtype='datetime64[us]', freq='<DateOffset: months=1>')
+DatetimeIndex(['2020-01-01 00:00:00', '2020-01-01 06:00:00',
+               '2020-01-01 12:00:00'],
+              dtype='datetime64[us]', freq='6h')

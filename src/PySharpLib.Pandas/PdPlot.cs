@@ -52,6 +52,20 @@ def _is_numeric_index(index):
     return index.dtype != 'str' and index.dtype != 'object'
 
 
+def _is_dt(dtype):
+    return str(dtype).startswith('datetime64')
+
+
+def _date_numbers(idx):
+    import pandas as pd
+    return np.array(list((idx - pd.Timestamp('1970-01-01')).total_seconds() / 86400.0))
+
+
+def _date_labels(idx):
+    midnight = bool((idx == idx.normalize()).all())
+    return list(idx.strftime('%Y-%m-%d' if midnight else '%Y-%m-%d %H:%M:%S'))
+
+
 def _pie(ax, obj, y, autopct, startangle, color, labels=None):
     if hasattr(obj, 'columns'):
         if y is None:
@@ -187,11 +201,18 @@ def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, le
         ax.set_ylabel('Frequency')
     else:
         index = obj.index
+        dt_index = x is None and _is_dt(index.dtype)
         numeric_x = _is_numeric_index(index) if x is None else True
+        if dt_index:
+            numeric_x = False
         if x is not None:
             xs_all = _values(obj, x)
+            if _is_dt(obj[x].dtype):
+                xs_all = _date_numbers(obj[x])
             cols = [cc for cc in cols if cc != x]
             n = len(cols)
+        elif dt_index and kind in ('line', 'area'):
+            xs_all = _date_numbers(index)
         else:
             xs_all = index.to_numpy() if numeric_x else list(range(len(index)))
         if kind == 'line':
@@ -241,7 +262,7 @@ def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, le
                         ax.barh(shifted, ys, bw if n > 1 else w, label=lab, **kw)
                     else:
                         ax.bar(shifted, ys, bw if n > 1 else w, label=lab, **kw)
-            labels = [str(v) for v in index]
+            labels = _date_labels(index) if dt_index else [str(v) for v in index]
             if horizontal:
                 ax.set_yticks(pos)
                 ax.set_yticklabels(labels)
@@ -254,7 +275,11 @@ def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, le
             ax.set_xlabel(str(x))
         if not is_frame and obj.name is not None and kind in ('line', 'bar', 'barh', 'area') and False:
             ax.set_ylabel(str(obj.name))
-        if not numeric_x and kind in ('line', 'area'):
+        if dt_index and kind in ('line', 'area'):
+            step = max(1, (len(index) + 6) // 7)
+            ax.set_xticks(list(xs_all[::step]))
+            ax.set_xticklabels(_date_labels(index)[::step], rotation=30 if rot is None else rot)
+        elif not numeric_x and kind in ('line', 'area'):
             ax.set_xticks(xs_all)
             ax.set_xticklabels([str(v) for v in index], rotation=0 if rot is None else rot)
     if logx:

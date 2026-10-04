@@ -17,6 +17,26 @@ namespace PySharpLib.Pandas;
 internal static class PdReshape
 {
     private static Args A(string fn, Interp i, object[] a, Dictionary<string, object>? k, params string[] names) => new(fn, i, a.Skip(1).ToArray(), k, names);
+    /// <summary>pivot_table keys may be arrays (a Series, Index or list of values with one entry per row) instead of column labels: they become temporary columns.</summary>
+    private static (DataFrame, List<object?>) ExternalKeys(DataFrame df, object? spec)
+    {
+        if (spec is null or PyNone) return (df, new List<object?>());
+        var items = spec is PyList pl ? pl.Items : new List<object> { spec };
+        bool IsArray(object o) => o is PyInstance { Native: Series or FIndex or NDSharp.NDArray { Ndim: 1 } } || (o is PyList or PyTuple && false);
+        if (!items.Any(IsArray)) return (df, Labels(spec));
+        var data = df.Data.ToList(); var names = df.Columns.Items().ToList(); var keys = new List<object?>();
+        foreach (var it in items)
+        {
+            if (!IsArray(it)) { keys.AddRange(Labels(it)); continue; }
+            var col = PdConv.ToColumn(it);
+            if (col.Length != df.NRows) throw PyErr.ValueError($"Length mismatch: key has {col.Length} elements, frame has {df.NRows} rows");
+            var nm = it is PyInstance { Native: Series sr } ? sr.Name : null;
+            object? label = nm is not null && !names.Any(x => Equals(Column.Key(x), Column.Key(nm))) ? nm : "__pt_key" + names.Count + (nm is null ? "" : "|" + Formatter.ObjectStr(nm));
+            data.Add(col); names.Add(label); keys.Add(label);
+        }
+        return (new DataFrame(data, new FIndex(Column.Infer(names), df.Columns.Name), df.Index), keys);
+    }
+
     private static List<object?> Labels(object? v) => v is null or PyNone ? new List<object?>() : PdConv.IsListLike(v) ? PdConv.Cells(v) : new List<object?> { PdConv.ToCell(v) };
     private static string FuncName(object f) => f switch { string s => s, PyFunction pf => pf.Name, PyBuiltinFunction bf => bf.Name, _ => "<lambda>" };
 
@@ -225,7 +245,15 @@ internal static class PdReshape
                 : new[] { "data", "values", "index", "columns", "aggfunc", "fill_value", "margins", "dropna", "margins_name", "observed", "sort" });
             int o = isMethod ? 0 : 1;
             var df = isMethod ? PdConv.D(a[0]) : PdConv.D(p.Required(0));
-            return PdConv.Wrap(PivotTable(i, df, p[o], Labels(p[o + 1]), Labels(p[o + 2]), p[o + 3], p[o + 4], p.Bool(o + 5, false), p.Has(o + 7) ? (string)p[o + 7]! : "All", p.Bool(o + 6, true), observed: p.Bool(o + 8, true)));
+            var (df2, idxKeys) = ExternalKeys(df, p[o + 1]);
+            var (df3, colKeys) = ExternalKeys(df2, p[o + 2]);
+            var res = PivotTable(i, df3, p[o], idxKeys, colKeys, p[o + 3], p[o + 4], p.Bool(o + 5, false), p.Has(o + 7) ? (string)p[o + 7]! : "All", p.Bool(o + 6, true), observed: p.Bool(o + 8, true));
+            if (df3.NCols != df.NCols)
+            {
+                object? Clear(object? n) => n is string sn && sn.StartsWith("__pt_key") ? (sn.IndexOf('|') is var bar and >= 0 ? sn.Substring(bar + 1) : null) : n;
+                res = new DataFrame(res.Data, res.Columns.WithNames(res.Columns.Names.Select(Clear).ToList()), res.Index.WithNames(res.Index.Names.Select(Clear).ToList()));
+            }
+            return PdConv.Wrap(res);
         };
         m.Dict["pivot_table"] = PdClasses.Fn("pivot_table", pivotTable);
         PdClasses.DataFrame.Dict["pivot_table"] = PdClasses.Fn("pivot_table", pivotTable);

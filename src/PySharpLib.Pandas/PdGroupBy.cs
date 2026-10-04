@@ -26,11 +26,13 @@ internal sealed class GroupByState
     public bool KeysAreColumns { get; init; }
     public List<int> KeyColPositions { get; init; } = new();
     public bool DropNa { get; init; } = true;
+    /// <summary>The original timestamps of a resample (to reindex upsampled results).</summary>
+    public Column? TimeSource { get; init; }
 
     public GroupByState With(List<int> valueCols, bool isSeries) => new()
     {
         Frame = Frame, G = G, ValueCols = valueCols, AsIndex = AsIndex, IsSeries = isSeries, SingleSelected = isSeries, SeriesName = isSeries ? Frame.Columns.Labels[valueCols[0]] : null,
-        KeysAreColumns = KeysAreColumns, KeyColPositions = KeyColPositions, DropNa = DropNa,
+        KeysAreColumns = KeysAreColumns, KeyColPositions = KeyColPositions, DropNa = DropNa, TimeSource = TimeSource,
     };
 }
 
@@ -55,6 +57,8 @@ internal static class PdGroupBy
         var keyNames = new List<object?>();
         var keyPos = new List<int>();
         bool keysAreColumns = false;
+        string? grouperFreq = null;
+        List<object?[]>? forced = null;
         if (p.Has(2))
         {
             var lv = p[2]!;
@@ -68,6 +72,14 @@ internal static class PdGroupBy
             var items = by is PyList bl && !IsValueList(frame, bl) ? bl.Items : new List<object> { by };
             foreach (var item in items)
             {
+                if (item is PyInstance { Class: var gcls, Native: PyDict gd } && gcls == PdDates.GrouperClass)
+                {
+                    var (gcol, gname, glabels, gfreq, gpos) = PdDates.GrouperKey(frame, gd);
+                    keyCols.Add(gcol); keyNames.Add(gname);
+                    if (gpos >= 0) { keyPos.Add(gpos); keysAreColumns = true; }
+                    if (glabels is not null && items.Count == 1) { forced = glabels; grouperFreq = gfreq; }
+                    continue;
+                }
                 if (item is PyInstance { Native: Series ks })
                 {
                     keyCols.Add(PdSelect.SameLabels(ks.Index, rows) ? ks.Values : ks.Values.Take(Ops.Reindexer(ks.Index, rows)));
@@ -102,7 +114,7 @@ internal static class PdGroupBy
                 }
             }
         }
-        var g = new Grouping(keyCols, keyNames, frame.NRows, p.Bool(4, true), p.Bool(7, true), p.Bool(6, true));
+        var g = new Grouping(keyCols, keyNames, frame.NRows, p.Bool(4, true), p.Bool(7, true), p.Bool(6, true), forced) { Freq = grouperFreq };
         var valueCols = Enumerable.Range(0, frame.NCols).Where(j => !keyPos.Contains(j)).ToList();
         return Wrap(new GroupByState
         {
@@ -116,12 +128,68 @@ internal static class PdGroupBy
     private static bool IsValueList(DataFrame frame, PyList l)
         => l.Items.Count == frame.NRows && !l.Items.All(x => frame.HasColumn(PdConv.ToCell(x))) && !l.Items.All(x => x is PyInstance { Native: Series } || PdConv.IsListLike(x));
 
-    private static DataFrame SeriesFrame(Series s) => new(new[] { s.Values }, new FIndex(Column.Infer(new[] { s.Name })), s.Index);
+    internal static DataFrame SeriesFrame(Series s) => new(new[] { s.Values }, new FIndex(Column.Infer(new[] { s.Name })), s.Index);
+
+    // ================================================================== resample support
+
+    internal static object FromGrouping(object self, DataFrame frame, Grouping g, List<int> keyPos, bool isSeries, Column timeSource)
+    {
+        var valueCols = Enumerable.Range(0, frame.NCols).Where(j => !keyPos.Contains(j)).ToList();
+        return Wrap(new GroupByState
+        {
+            Frame = frame, G = g, ValueCols = valueCols, AsIndex = true, IsSeries = isSeries, SingleSelected = isSeries,
+            SeriesName = isSeries ? ((Series)((PyInstance)self).Native!).Name : null,
+            KeysAreColumns = false, KeyColPositions = keyPos, DropNa = true, TimeSource = timeSource,
+        });
+    }
+
+    internal static object ResampleFill(Interp i, object self, string name, object[] args, Dictionary<string, object>? kw)
+    {
+        var st = St(self);
+        var times = st.TimeSource ?? throw PyErr.NotImplementedError($"{name}() is only available on resample objects");
+        var target = st.G.ResultIndex().Labels;
+        var unit = DateTimeCore.Finer(times.Unit, target.Unit);
+        var src = times.WithUnit(unit).Ticks;
+        var tgt = target.WithUnit(unit).Ticks;
+        var order = Enumerable.Range(0, src.Length).Where(r => src[r] != DateTimeCore.NaT).OrderBy(r => src[r]).ToArray();
+        var pos = new int[tgt.Length];
+        for (int n = 0; n < tgt.Length; n++)
+        {
+            long t = tgt[n];
+            int lo = 0, hi = order.Length;                 // first sorted position with src >= t
+            while (lo < hi) { int mid = (lo + hi) / 2; if (src[order[mid]] < t) lo = mid + 1; else hi = mid; }
+            bool exact = lo < order.Length && src[order[lo]] == t;
+            pos[n] = name switch
+            {
+                "asfreq" => exact ? order[lo] : -1,
+                "ffill" or "pad" => exact ? order[lo] : lo > 0 ? order[lo - 1] : -1,
+                "bfill" or "backfill" => lo < order.Length ? order[lo] : -1,
+                _ => exact ? order[lo] : lo == 0 ? (order.Length > 0 ? order[0] : -1) : lo >= order.Length ? order[^1]
+                    : (t - src[order[lo - 1]] <= src[order[lo]] - t ? order[lo - 1] : order[lo]),
+            };
+        }
+        if (st.IsSeries) return AssembleSeries(st, st.Frame.Data[st.ValueCols[0]].Take(pos), st.SeriesName);
+        return AssembleFrame(st, st.ValueCols.Select(j => st.Frame.Data[j].Take(pos)).ToList(), ValueLabels(st));
+    }
+
+    internal static object Ohlc(Interp i, object self)
+    {
+        var st = St(self);
+        var names = new[] { "open", "high", "low", "close" };
+        var aggs = new[] { "first", "max", "min", "last" };
+        if (st.IsSeries)
+            return AssembleFrame(st, aggs.Select(a => AggColumn(st, st.Frame.Data[st.ValueCols[0]], a)).ToList(), new FIndex(Column.FromStrings(names)));
+        var cols = new List<Column>(); var labels = new List<object?>();
+        foreach (var j in st.ValueCols)
+            for (int x = 0; x < 4; x++) { cols.Add(AggColumn(st, st.Frame.Data[j], aggs[x])); labels.Add(new LabelTuple(new[] { st.Frame.Columns.Labels[j], names[x] })); }
+        return AssembleFrame(st, cols, new FIndex(Column.Infer(labels)));
+    }
 
     // ================================================================== helpers
 
     private static Column InferLike(Column original, List<object?> cells)
     {
+        if (cells.Count == 0) return Column.Empty(original.Kind == Kind.Category ? Kind.Object : original.Kind);
         if (original.Kind == Kind.Str && cells.All(c => c is string or null || c is double d && double.IsNaN(d)))
             return Column.FromStrings(cells.Select(c => c as string).ToArray());
         if (original.Kind == Kind.Bool && cells.All(c => c is bool)) return Column.FromBools(cells.Select(c => (bool)c!).ToArray());

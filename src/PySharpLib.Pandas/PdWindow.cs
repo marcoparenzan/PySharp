@@ -22,7 +22,7 @@ internal static class PdWindow
 
     private sealed record EwmState(object Source, double Alpha, int MinPeriods, bool Adjust, bool IgnoreNa);
 
-    private sealed record WindowState(object Source, int Window, int MinPeriods, bool Center, bool IsExpanding);
+    private sealed record WindowState(object Source, int Window, int MinPeriods, bool Center, bool IsExpanding, long? TimeNanos = null, object? On = null, string Closed = "right");
 
     private static Args A(string fn, Interp i, object[] a, Dictionary<string, object>? k, params string[] names) => new(fn, i, a.Skip(1).ToArray(), k, names);
     private static WindowState St(object o) => (WindowState)((PyInstance)o).Native!;
@@ -31,7 +31,17 @@ internal static class PdWindow
     {
         if (st.Source is PyInstance { Native: Series s }) return PdConv.Wrap(new Series(f(s.Values, s), s.Index, s.Name));
         var d = PdConv.D(st.Source);
-        return PdConv.Wrap(new DataFrame(d.Data.Select((c, j) => f(c, d.GetColumn(j))), d.Columns, d.Index));
+        int onPos = st.On is not null ? d.ColumnPositions(st.On)[0] : -1;
+        return PdConv.Wrap(new DataFrame(d.Data.Select((c, j) => j == onPos ? c : f(c, d.GetColumn(j))), d.Columns, d.Index));
+    }
+
+    /// <summary>Window bounds of an offset window (<c>rolling('3D')</c>) over the index (or the <c>on</c> column).</summary>
+    private static (int[] start, int[] end) TimeWindow(WindowState st)
+    {
+        Column times = st.Source is PyInstance { Native: Series s } ? s.Index.Labels
+            : st.On is not null ? PdConv.D(st.Source).Data[PdConv.D(st.Source).ColumnPositions(st.On)[0]] : PdConv.D(st.Source).Index.Labels;
+        if (times.Kind != Kind.DateTime) throw PyErr.ValueError("window must be an integer 0 or greater");
+        return Window.TimeBounds(times.Ticks, st.TimeNanos!.Value / DateTimeCore.NanosPerTick(times.Unit), st.Closed);
     }
 
     private static string NameOf(object f) => f switch { string s => s, PyFunction pf => pf.Name, PyBuiltinFunction bf => bf.Name, _ => "<lambda>" };
@@ -43,7 +53,13 @@ internal static class PdWindow
             owner.Dict["rolling"] = PdClasses.Fn("rolling", (i, a, k) =>
             {
                 var p = A("rolling", i, a, k, "window", "min_periods", "center", "win_type", "on", "axis", "closed", "step", "method");
-                if (!PdConv.IsInt(p.Required(0))) throw PyErr.NotImplementedError("rolling with an offset or custom window");
+                if (!PdConv.IsInt(p.Required(0)))
+                {
+                    if (p.Has(3)) throw PyErr.NotImplementedError("rolling(win_type=)");
+                    var spec = PdDates.OffsetArg(p[0]) as DateOffsetSpec.TickOffset ?? throw PyErr.ValueError("window must be a fixed frequency such as '3D' or '2h'");
+                    int tminp = p.Has(1) ? PdConv.ToInt(p[1]!) : 1;
+                    return new PyInstance(Rolling) { Native = new WindowState(a[0], 0, tminp, false, false, spec.Nanos * spec.N, p.Has(4) ? PdConv.ToCell(p[4]) : null, p.Has(6) ? (string)p[6]! : "right") };
+                }
                 if (p.Has(3) || p.Has(4)) throw PyErr.NotImplementedError("rolling(win_type=/on=)");
                 int w = PdConv.ToInt(p[0]!);
                 if (w < 0) throw PyErr.ValueError("window must be an integer 0 or greater");
@@ -99,6 +115,7 @@ internal static class PdWindow
                     var p = A(nm, i, a, k, "numeric_only", "ddof", "engine", "engine_kwargs");
                     int ddof = p.Int(1, 1);
                     int minp = st.MinPeriods;
+                    if (st.TimeNanos is not null) { var (ts, te) = TimeWindow(st); return Run(st, (c, _) => Window.ApplyBounds(nm, c, ts, te, minp, ddof)); }
                     return Run(st, (c, _) => Window.Apply(nm, c, st.Window, minp, st.Center, st.IsExpanding, ddof));
                 });
             }
@@ -111,7 +128,7 @@ internal static class PdWindow
                 return Run(st, (c, owner) =>
                 {
                     int n = c.Length;
-                    var (start, end) = Window.Bounds(n, st.Window, st.Center, st.IsExpanding);
+                    var (start, end) = st.TimeNanos is not null ? TimeWindow(st) : Window.Bounds(n, st.Window, st.Center, st.IsExpanding);
                     var res = new double[n];
                     for (int r = 0; r < n; r++)
                     {

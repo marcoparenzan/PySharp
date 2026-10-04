@@ -91,9 +91,33 @@ internal static class PdSelect
         => (s.Start is PyNone || PdConv.IsInt(s.Start)) && (s.Stop is PyNone || PdConv.IsInt(s.Stop));
 
     /// <summary>Label slice: both ends inclusive.</summary>
+    private static (long lo, long hi)? TimeBound(object o, Column labels)
+    {
+        if (o is string text) return TimeSeries.KeyBounds(text, labels) is { } kb ? (kb.lo, kb.hi) : throw PyErr.KeyError(o);
+        if (PdTime.TryTs(o, out var ts)) { long v = DateTimeCore.Scale(ts.Ticks, ts.Unit, labels.Unit); return (v, v); }
+        return null;
+    }
+
+    private static int[] DateTimeSlice(PySlice s, FIndex index, int step)
+    {
+        var col = index.Labels; var ticks = col.Ticks; int n = ticks.Length;
+        for (int i = 1; i < n; i++) if (ticks[i] != DateTimeCore.NaT && ticks[i - 1] != DateTimeCore.NaT && ticks[i] < ticks[i - 1])
+            throw PyErr.KeyError("Value based partial slicing on non-monotonic DatetimeIndexes with non-existing keys is not allowed.");
+        int start = 0, stop = n - 1;
+        if (s.Start is not PyNone) { var b = TimeBound(s.Start, col)!.Value; start = 0; while (start < n && ticks[start] < b.lo) start++; }
+        if (s.Stop is not PyNone) { var b = TimeBound(s.Stop, col)!.Value; stop = n - 1; while (stop >= 0 && ticks[stop] > b.hi) stop--; }
+        var r = new List<int>();
+        for (int i = start; i <= stop; i += step) r.Add(i);
+        return r.ToArray();
+    }
+
     public static int[] LabelSlice(PySlice s, FIndex index)
     {
         int step = s.Step is PyNone ? 1 : PdConv.ToInt(s.Step);
+        if (index.Labels.Kind == Kind.DateTime && step > 0 && !index.IsMulti
+            && (s.Start is PyNone || TimeBound(s.Start, index.Labels) is not null) && (s.Stop is PyNone || TimeBound(s.Stop, index.Labels) is not null)
+            && !(s.Start is PyNone && s.Stop is PyNone))
+            return DateTimeSlice(s, index, step);
         int Bound(object o, bool isStop)
         {
             var key = PdConv.ToCell(o);
@@ -213,6 +237,7 @@ internal static class PdSelect
         var cell = PdConv.ToCell(key);
         var l = index.Locs(cell);
         if (l.Count == 0) throw PdConv.KeyErr(key);
+        if (cell is string && index.Labels.Kind == Kind.DateTime && TimeSeries.KeyBounds((string)cell, index.Labels) is { partial: true }) return (l.ToArray(), false);
         return (l.ToArray(), l.Count == 1);
     }
 }

@@ -124,13 +124,13 @@ public static class Merge
             }
             outCols.Add(col);
             bool overlap = rightSet.Contains(Column.Key(leftNames[c]) ?? Column.NaNKey);
-            outNames.Add(overlap ? Suffix(leftNames[c], spec.SuffixLeft, spec.KeepAllColumns) : leftNames[c]);
+            outNames.Add(overlap ? Suffix(leftNames[c], spec.SuffixLeft, spec.SuffixRight) : leftNames[c]);
         }
         foreach (var (l, j) in rightNames)
         {
             outCols.Add(right.Data[j].Take(rpos));
             bool overlap = leftSet.Contains(Column.Key(l) ?? Column.NaNKey);
-            outNames.Add(overlap ? Suffix(l, spec.SuffixRight, spec.KeepAllColumns) : l);
+            outNames.Add(overlap ? Suffix(l, spec.SuffixRight, spec.SuffixLeft) : l);
         }
         if (spec.Indicator)
         {
@@ -146,10 +146,13 @@ public static class Merge
         return new DataFrame(outCols, new Index(Column.Infer(outNames)), index);
     }
 
-    private static object? Suffix(object? name, string suffix, bool join)
+    private static object? Suffix(object? name, string suffix, string otherSuffix)
     {
         if (suffix is null or "")
-            throw new FrameException($"columns overlap but no suffix specified: Index(['{name}'], dtype='str')");
+        {
+            if (otherSuffix is null or "") throw new FrameException($"columns overlap but no suffix specified: Index(['{name}'], dtype='str')");
+            return name;
+        }
         return Convert.ToString(name) + suffix;
     }
 

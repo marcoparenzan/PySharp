@@ -140,6 +140,25 @@ public static class Formatter
                 return FormatFloats(c.Doubles, o, leadingSpace);
             case Kind.Category:
                 return FormatCategory(c, o, leadingSpace);
+            case Kind.DateTime:
+            {
+                bool dateOnly = DateTimeCore.AllMidnight(c.Ticks, c.Unit);
+                int digits = dateOnly ? 0 : DateTimeCore.FractionDigits(c.Ticks, c.Unit);
+                for (int i = 0; i < r.Length; i++)
+                    r[i] = c.Ticks[i] == DateTimeCore.NaT ? "NaT" : dateOnly ? DateTimeCore.FormatDate(DateTimeCore.Decompose(c.Ticks[i], c.Unit)) : DateTimeCore.FormatDateTime(DateTimeCore.Decompose(c.Ticks[i], c.Unit), digits);
+                break;
+            }
+            case Kind.Timedelta:
+            {
+                long dayTicks = 86400L * DateTimeCore.PerSecond(c.Unit);
+                bool evenDays = c.Ticks.All(t => t == DateTimeCore.NaT || t % dayTicks == 0);
+                for (int i = 0; i < r.Length; i++)
+                {
+                    long t = c.Ticks[i];
+                    r[i] = t == DateTimeCore.NaT ? "NaT" : evenDays ? $"{DateTimeCore.FloorDiv(t, dayTicks)} days" : DateTimeCore.FormatTimedelta(t, c.Unit);
+                }
+                break;
+            }
             case Kind.Str:
                 for (int i = 0; i < r.Length; i++) r[i] = sp + (c.StrAt(i) is { } s ? Escape(s) : "NaN");
                 break;
@@ -292,6 +311,7 @@ public static class Formatter
             var padded = raw.Select(x => x.PadRight(w)).ToArray();
             return padded.Select(x => x[1..]).ToArray();
         }
+        if (l.Kind is Kind.DateTime or Kind.Timedelta) return FormatCells(l, o, false);
         if (l.Kind == Kind.Category)
         {
             if (l.Categories.Kind == Kind.Object && l.Categories.Length > 0 && l.Categories[0] is IntervalValue)
@@ -384,7 +404,8 @@ public static class Formatter
         string footerBase = (s.Name is null ? "" : $"Name: {Pp(s.Name)}");
         if (s.Length == 0)
         {
-            string f = footerBase + (footerBase.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
+            string fqE = s.Index.Freq is { } fr ? $"Freq: {fr}" : "";
+            string f = (fqE.Length > 0 ? fqE + ", " : "") + footerBase + (footerBase.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
             return $"Series([], {f})";
         }
         bool trunc = o.MaxRows > 0 && s.Length > o.MaxRows;
@@ -409,7 +430,7 @@ public static class Formatter
         }
         string body = Adjoin(3, new[] { idx, vals });
         if (idxHeader is not null) body = idxHeader + "\n" + body;
-        string footer = footerBase;
+        string footer = s.Index.Freq is { } fq ? "Freq: " + fq + (footerBase.Length > 0 ? ", " : "") + footerBase : footerBase;
         if (trunc) footer += (footer.Length > 0 ? ", " : "") + $"Length: {s.Length}";
         footer += (footer.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
         if (s.Values.Kind == Kind.Category) footer += "\n" + CategoriesLine(s.Values, o);
@@ -591,6 +612,7 @@ public static class Formatter
         var o = options ?? DisplayOptions.Current;
         string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
         if (ix.IsMulti) return MultiIndexRepr(ix, o);
+        if (ix.Labels.Kind is Kind.DateTime or Kind.Timedelta) return TimeIndexRepr(ix, o);
         if (ix.Labels.Kind == Kind.Category) return CategoricalIndexRepr(ix, o);
         if (ix.Labels.Kind == Kind.Object && ix.Length > 0 && ix.Labels[0] is IntervalValue) return IntervalIndexRepr(ix);
         if (ix.IsRange)
@@ -619,6 +641,32 @@ public static class Formatter
         // like pandas, the attributes move to their own line once the values wrapped
         tail = "],\n" + new string(' ', "Index(".Length) + tail[3..];
         return sb.Append(tail).ToString();
+    }
+
+    private static string TimeIndexRepr(Index ix, DisplayOptions o)
+    {
+        var l = ix.Labels;
+        string cls = l.Kind == Kind.DateTime ? "DatetimeIndex" : "TimedeltaIndex";
+        var cells = FormatCells(l, o, false);
+        if (l.Kind == Kind.DateTime && !DateTimeCore.AllMidnight(l.Ticks, l.Unit))
+            cells = l.Ticks.Select(t => t == DateTimeCore.NaT ? "NaT" : DateTimeCore.FormatTimestamp(t, l.Unit)).ToArray();
+        var items = Enumerable.Range(0, l.Length).Select(i => "'" + (l.IsNa(i) ? "NaT" : cells[i]) + "'").ToList();
+        string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
+        string tail = $"], dtype='{l.DTypeName}'{nameArg}, freq={(ix.Freq is null ? "None" : "'" + ix.Freq + "'")})";
+        string head = cls + "([";
+        string joined = string.Join(", ", items);
+        if (head.Length + joined.Length < o.Width) return head + joined + tail;
+        var sb = new StringBuilder(head);
+        string pad = new string(' ', head.Length);
+        int lineLen = head.Length;
+        for (int i = 0; i < items.Count; i++)
+        {
+            string it = items[i] + (i < items.Count - 1 ? "," : "");
+            if (lineLen + it.Length + (lineLen > head.Length ? 1 : 0) > o.Width && lineLen > head.Length) { sb.Append('\n').Append(pad); lineLen = pad.Length; }
+            else if (i > 0) { sb.Append(' '); lineLen++; }
+            sb.Append(it); lineLen += it.Length;
+        }
+        return sb.Append("],\n").Append(' ', cls.Length + 1).Append(tail[3..]).ToString();
     }
 
     private static string CategoricalIndexRepr(Index ix, DisplayOptions o)

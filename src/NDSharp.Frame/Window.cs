@@ -40,9 +40,33 @@ public static class Window
 
     public static Column Apply(string name, Column col, int window, int minPeriods, bool center, bool expanding, int ddof = 1)
     {
+        var (start, end) = Bounds(col.Length, window, center, expanding);
+        return ApplyBounds(name, col, start, end, minPeriods, ddof);
+    }
+
+    /// <summary>Window bounds of a time-offset window (<c>rolling('3D')</c>): rows whose timestamp lies within <paramref name="windowTicks"/> of the current one; the index must be increasing.</summary>
+    public static (int[] start, int[] end) TimeBounds(long[] ticks, long windowTicks, string closed = "right")
+    {
+        int n = ticks.Length;
+        for (int i = 1; i < n; i++) if (ticks[i] < ticks[i - 1]) throw new FrameException("index must be monotonic");
+        var start = new int[n]; var end = new int[n];
+        bool leftInclusive = closed is "both" or "left", rightInclusive = closed is "right" or "both";
+        int s = 0, e = 0;
+        for (int i = 0; i < n; i++)
+        {
+            long t = ticks[i];
+            while (e < n && (rightInclusive ? ticks[e] <= t : ticks[e] < t)) e++;
+            if (e <= i && rightInclusive) e = i + 1;
+            while (s < n && (leftInclusive ? ticks[s] < t - windowTicks : ticks[s] <= t - windowTicks)) s++;
+            start[i] = Math.Min(s, e); end[i] = e;
+        }
+        return (start, end);
+    }
+
+    public static Column ApplyBounds(string name, Column col, int[] start, int[] end, int minPeriods, int ddof = 1)
+    {
         var v = Doubles(col);
         int n = v.Length;
-        var (start, end) = Bounds(n, window, center, expanding);
         var res = new double[n];
         switch (name)
         {

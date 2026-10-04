@@ -18,6 +18,8 @@ public static class FrameOps
     {
         var pos = Enumerable.Range(0, c.Length).Where(c.IsNa).ToArray();
         if (pos.Length == 0) return c;
+        if (c.Kind == Kind.DateTime && value is not (Ts or string) || c.Kind == Kind.Timedelta && value is not (Td or string))
+            c = Column.FromObjects(c.ToObjects());       // an incompatible fill value turns the column into object, like pandas
         return c.WithValues(pos, new object?[] { value });
     }
 
@@ -121,6 +123,7 @@ public static class FrameOps
                 }
                 int r = c.Kind switch
                 {
+                    Kind.DateTime or Kind.Timedelta => c.Ticks[a].CompareTo(c.Ticks[b]),
                     Kind.Category => c.Codes[a].CompareTo(c.Codes[b]),
                     Kind.Int => c.LongAt(a).CompareTo(c.LongAt(b)),
                     Kind.Float => c.DoubleAt(a).CompareTo(c.DoubleAt(b)),
@@ -215,6 +218,7 @@ public static class FrameOps
 
     public static Column Diff(Column c, int periods)
     {
+        if (c.Kind is Kind.DateTime or Kind.Timedelta) return Ops.Binary(BinOp.Sub, c, Shift(c, periods));
         if (!Reduce.IsNumeric(c)) throw new FrameException("unsupported operand type(s) for -", "TypeError");
         var f = c.Kind == Kind.Bool ? Column.FromLongs(c.Bools.Select(b => b ? 1L : 0L).ToArray()) : c;
         var prev = Shift(f, periods);
@@ -247,6 +251,17 @@ public static class FrameOps
             foreach (var q in percentiles) { labels.Add(PercentileLabel(q)); vals.Add(Reduce.Quantile(c, q)); }
             labels.Add("max"); vals.Add(Convert.ToDouble(Reduce.Scalar("max", c)));
             return new Series(Column.FromDoubles(vals.ToArray()), new Index(Column.Infer(labels)), s.Name);
+        }
+        if (c.Kind is Kind.DateTime or Kind.Timedelta)
+        {
+            var qs = percentiles;
+            var labelsT = new List<object?> { "count", "mean" };
+            var cellsT = new List<object?> { (long)Reduce.Scalar("count", c)!, Reduce.Scalar("mean", c) };
+            if (c.Kind == Kind.Timedelta) { labelsT.Add("std"); cellsT.Add(Reduce.Scalar("std", c)); }
+            labelsT.Add("min"); cellsT.Add(Reduce.Scalar("min", c));
+            foreach (var q in qs) { labelsT.Add(PercentileLabel(q)); cellsT.Add(Reduce.QuantileTime(c, q)); }
+            labelsT.Add("max"); cellsT.Add(Reduce.Scalar("max", c));
+            return new Series(Column.FromObjects(cellsT.ToArray()), new Index(Column.Infer(labelsT)), s.Name);
         }
         var (firstPos, counts) = ValueCounts(c);
         var cells = new object?[]

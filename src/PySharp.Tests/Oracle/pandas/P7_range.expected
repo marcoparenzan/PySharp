@@ -1,0 +1,72 @@
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03', '2020-01-04',
+               '2020-01-05'],
+              dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-01', '2020-01-04', '2020-01-07', '2020-01-10'], dtype='datetime64[us]', freq='3D')
+DatetimeIndex(['2020-01-01 00:00:00', '2020-01-01 01:00:00',
+               '2020-01-01 02:00:00', '2020-01-01 03:00:00'],
+              dtype='datetime64[us]', freq='h')
+DatetimeIndex(['2020-01-01 00:00:00', '2020-01-01 00:30:00',
+               '2020-01-01 01:00:00'],
+              dtype='datetime64[us]', freq='30min')
+DatetimeIndex(['2020-01-31', '2020-02-29', '2020-03-31', '2020-04-30'], dtype='datetime64[us]', freq='ME')
+DatetimeIndex(['2020-01-01', '2020-02-01', '2020-03-01', '2020-04-01'], dtype='datetime64[us]', freq='MS')
+DatetimeIndex(['2020-01-05', '2020-01-12', '2020-01-19'], dtype='datetime64[us]', freq='W-SUN')
+DatetimeIndex(['2020-01-06', '2020-01-13', '2020-01-20'], dtype='datetime64[us]', freq='W-MON')
+DatetimeIndex(['2020-03-31', '2020-06-30', '2020-09-30', '2020-12-31'], dtype='datetime64[us]', freq='QE-DEC')
+DatetimeIndex(['2020-12-31', '2021-12-31', '2022-12-31'], dtype='datetime64[us]', freq='YE-DEC')
+DatetimeIndex(['2020-01-01', '2021-01-01', '2022-01-01'], dtype='datetime64[us]', freq='YS-JAN')
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03', '2020-01-06',
+               '2020-01-07', '2020-01-08', '2020-01-09', '2020-01-10'],
+              dtype='datetime64[us]', freq='B')
+DatetimeIndex(['2020-01-08', '2020-01-09', '2020-01-10'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03'], dtype='datetime64[us]', name='when', freq='D')
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03', '2020-01-04'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-01 00:00:00', '2020-01-01 12:00:00',
+               '2020-01-02 00:00:00'],
+              dtype='datetime64[us]', freq=None)
+<Day> D datetime64[us] 3
+2020-01-01 00:00:00 2020-01-03 00:00:00 DatetimeIndex(['2020-01-02', '2020-01-03'], dtype='datetime64[us]', freq='D')
+Index([2020, 2020, 2020], dtype='int32') Index([1, 1, 1], dtype='int32') Index([1, 2, 3], dtype='int32')
+Index([2, 3, 4], dtype='int32')
+[ True False False]
+Index(['Wednesday', 'Thursday', 'Friday'], dtype='str')
+Index(['01/01', '02/01', '03/01'], dtype='str')
+DatetimeIndex(['2020-01-03', '2020-01-04', '2020-01-05'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-02', '2020-01-03', '2020-01-04'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-02', '2020-01-03', '2020-01-04'], dtype='datetime64[us]', freq='D')
+TimedeltaIndex(['1 days', '2 days', '3 days'], dtype='timedelta64[us]', freq='D')
+2020-01-01 00:00:00 2020-01-03 00:00:00
+2020-01-01   2020-01-01
+2020-01-02   2020-01-02
+2020-01-03   2020-01-03
+Freq: D, dtype: datetime64[us]
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03'], dtype='datetime64[us]', freq='D')
+DatetimeIndex(['2020-01-01', '2020-01-02', '2020-01-03'], dtype='datetime64[us]', freq=None)
+DatetimeIndex(['2020-01-01', '2020-01-02'], dtype='datetime64[us]', freq=None)
+DatetimeIndex(['2020-01-01', '2020-01-03'], dtype='datetime64[us]', name='d', freq=None)
+DatetimeIndex(['2020-01-01', 'NaT'], dtype='datetime64[us]', freq=None)
+TimedeltaIndex(['1 days', '2 days', '3 days'], dtype='timedelta64[us]', freq='D')
+TimedeltaIndex(['0 days 00:00:00', '0 days 00:00:05', '0 days 00:00:10'], dtype='timedelta64[us]', freq='5s')
+2020-03-04 00:00:00
+2020-03-04 00:00:00 2020-04-03 00:00:00
+2020-03-04 10:11:12
+DatetimeIndex(['2020-01-01', '2020-02-01'], dtype='datetime64[us]', freq=None)
+DatetimeIndex(['2020-01-01', 'NaT'], dtype='datetime64[us]', freq=None)
+2020-03-04 00:00:00
+DatetimeIndex(['2020-03-01', '2020-04-01'], dtype='datetime64[us]', freq=None)
+0   2020-01-01
+1   2020-01-02
+dtype: datetime64[us]
+DatetimeIndex(['1970-01-02', '1970-01-03', '1970-01-04'], dtype='datetime64[s]', freq=None)
+DatetimeIndex(['2020-01-01'], dtype='datetime64[s]', freq=None)
+2020-01-01 00:00:00
+2020-01-01 00:00:00
+0   2020-01-03
+1   2021-02-04
+dtype: datetime64[us]
+TimedeltaIndex(['1 days 00:00:00', '0 days 02:00:00'], dtype='timedelta64[us]', freq=None)
+TimedeltaIndex(['0 days 00:00:01', '0 days 00:00:02'], dtype='timedelta64[s]', freq=None)
+1 days 06:05:01
+0 days 01:30:00
+ValueError time data "bad" doesn't match format "%Y-%m-%d". You might w

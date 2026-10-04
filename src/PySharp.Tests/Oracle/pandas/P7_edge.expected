@@ -1,0 +1,133 @@
+year 1500 -> 1500-03-04 05:06:07
+year 9999 -> 9999-12-31 23:59:59.999999
+year 2262 unit -> us
+ns precision -> 2020-01-01 00:00:00.000000001
+ns repr -> Timestamp('2020-01-01 00:00:00.000000001')
+date_range no args -> raised ValueError Of the four parameters: start, end, periods, and freq, exactly three must be specified
+date_range bad freq -> raised ValueError Invalid frequency: X. Failed to parse with error message: ValueError("Invalid frequency: X. Failed to parse wi
+date_range old M -> raised ValueError Invalid frequency: M. Failed to parse with error message: ValueError("'M' is no longer supported for offsets. 
+date_range old H -> raised ValueError Invalid frequency: H. Failed to parse with error message: ValueError("Invalid frequency: H. Failed to parse wi
+date_range old T -> raised ValueError Invalid frequency: T. Failed to parse with error message: ValueError("Invalid frequency: T. Failed to parse wi
+date_range empty -> DatetimeIndex([], dtype='datetime64[us]', freq='D')
+to_datetime bad -> raised DateParseError Unknown datetime string format, unable to parse: hello
+to_datetime int bool -> raised TypeError <class 'bool'> is not convertible to datetime
+Timestamp bad -> raised DateParseError Unknown datetime string format, unable to parse: hello
+Timedelta bad -> raised ValueError unit abbreviation w/o a number
+Timedelta bad unit -> raised ValueError invalid unit abbreviation: q
+freq string -> DatetimeIndex(['2020-01-01 00:00:00', '2020-01-01 02:30:00'], dtype='datetime64[us]', freq='150min')
+freq 15min -> 15min
+freq neg -> DatetimeIndex(['2020-01-10', '2020-01-09', '2020-01-08'], dtype='datetime64[us]', freq='-1D')
+ts + int -> raised TypeError Addition/subtraction of integers and integer-arrays with Timestamp is no longer supported.  Instead of adding/
+ts + ts -> raised TypeError unsupported operand type(s) for +: 'Timestamp' and 'Timestamp'
+td * td -> raised TypeError unsupported operand type(s) for *: 'Timedelta' and 'Timedelta'
+td / 0 -> raised ZeroDivisionError division by zero
+td // td -> 3
+td % td -> 0 days 03:00:00
+ts cmp int -> raised TypeError '<' not supported between instances of 'Timestamp' and 'int'
+ts eq str -> False
+NaT cmp -> (False, False, True)
+NaT arith -> (NaT, NaT, NaT)
+NaT type -> NaTType
+isna scalars -> (True, False, False, False)
+series nat -> [Timestamp('2020-01-01 00:00:00'), Timestamp('2020-01-02 00:00:00'), NaT]
+series nat first -> [NaT, Timestamp('2020-01-01 00:00:00'), Timestamp('2020-01-02 00:00:00')]
+series nat min -> 2020-01-02 00:00:00
+series all nat -> datetime64[s]
+series all nat max -> NaT
+empty dt series -> datetime64[s]
+dt on int -> raised AttributeError Can only use .dt accessor with datetimelike values
+dt on str -> raised AttributeError Can only use .dt accessor with datetimelike values
+resample no dt -> raised TypeError Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex, but got an instance of 'RangeIndex'
+rolling no dt -> raised ValueError window must be an integer 0 or greater
+index slice miss -> raised KeyError '2021-01-01'
+index slice miss2 -> raised KeyError '2021'
+index slice range -> Series([], Freq: D, dtype: int64)
+loc ts miss -> raised KeyError Timestamp('2021-01-01 00:00:00')
+partial exact day -> 2
+partial month day-index -> [1, 2, 3]
+df loc day -> [2]
+df bracket str -> raised KeyError '2020-01-02'
+resample origin -> 2020-01-01 00:00:00    1.0
+2020-01-01 00:10:00    2.0
+Freq: 10min, dtype: float64
+resample W closed -> 2019-12-29     6
+2020-01-05    22
+Freq: W-SUN, dtype: int64
+resample ME label -> 2019-12-31     3
+2020-01-31    25
+Freq: ME, dtype: int64
+resample empty -> Series([], Freq: D, dtype: float64)
+resample 1ms -> 2020-01-01 00:00:00.001    1
+2020-01-01 00:00:00.002    2
+2020-01-01 00:00:00.003    0
+2020-01-01 00:00:00.004    3
+Freq: ms, dtype: int64
+resample QE -> 2020-03-31     3
+2020-06-30    12
+Freq: QE-DEC, dtype: int64
+resample QS -> 2020-01-01     3
+2020-04-01    12
+Freq: QS-JAN, dtype: int64
+resample YS -> 2020-01-01    15
+Freq: YS-JAN, dtype: int64
+resample B -> 2020-01-01    0
+2020-01-02    1
+2020-01-03    9
+2020-01-06    5
+2020-01-07    6
+2020-01-08    7
+2020-01-09    8
+2020-01-10    9
+Freq: B, dtype: int64
+resample median -> 2020-01-01    1.5
+2020-01-05    5.5
+2020-01-09    8.5
+Freq: 4D, dtype: float64
+resample std -> 2020-01-01    1.290994
+2020-01-05    1.290994
+2020-01-09    0.707107
+Freq: 4D, dtype: float64
+resample nunique -> 2020-01-01    2
+2020-01-04    1
+Freq: 3D, dtype: int64
+resample indexes -> DatetimeIndex(['2020-01-01', '2020-01-04'], dtype='datetime64[us]', freq='3D')
+rolling closed -> [nan, 0.0, 1.0, 3.0, 5.0]
+rolling minp -> [nan, nan, 1.0, 2.0, 3.0]
+shift freq M -> 2020-02-29    0
+2020-03-31    1
+2020-04-30    2
+Freq: ME, dtype: int64
+timedelta fmt -> [Timedelta('0 days 01:30:00'), Timedelta('0 days 00:00:45'), Timedelta('2 days 03:00:00'), Timedelta('-1 days +23:00:00')]
+timedelta series -> 0     0 days 01:30:00
+1     0 days 00:00:45
+2     2 days 03:00:00
+3   -1 days +23:00:00
+dtype: timedelta64[us]
+timedelta ms -> 0   0 days 00:00:00.500000
+1   0 days 00:00:01.250000
+dtype: timedelta64[us]
+datetime ms -> 0   2020-01-01 00:00:00.500
+1   2020-01-01 00:00:01.250
+dtype: datetime64[us]
+datetime ns -> raised ValueError time data "2020-01-01" doesn't match format "%Y-%m-%d %H:%M:%S.%f". You might want to try: |     - passing `form
+datetime mixed midnight -> 0   2020-01-01 00:00:00
+1   2020-01-02 10:00:00
+dtype: datetime64[us]
+iso8601 -> DatetimeIndex(['2020-01-01 00:00:00', '2020-01-02 10:00:00',
+               '2020-01-03 11:12:13.500000'],
+              dtype='datetime64[us]', freq=None)
+dayfirst -> DatetimeIndex(['2020-01-13', '2020-03-02'], dtype='datetime64[us]', freq=None)
+strftime codes -> Sun Jul 04 21 03:09:08 PM 012345 185 27 0 %
+weekofyear -> [datetime.IsoCalendarDate(year=2020, week=53, weekday=4), datetime.IsoCalendarDate(year=2020, week=53, weekday=5), datetime.IsoCalendarDate(year=2021, week=1, weekday=1)]
+quarter ends -> [True, False]
+leap -> [False, True, True]
+days in month -> [29, 28, 30]
+dayofyear -> [366, 365]
+floor ms -> 2020-01-01 10:20:30.456000
+round ties -> [Timestamp('2020-01-01 00:00:00'), Timestamp('2020-01-01 02:00:00')]
+td round -> [Timedelta('0 days 00:00:00'), Timedelta('0 days 02:00:00'), Timedelta('0 days 02:00:00')]
+offsets repr -> ['<MonthEnd>', '<2 * BusinessDays>', '<Week: weekday=0>', '<DateOffset: months=2, years=1>', '<3 * Hours>']
+offset eq -> (True, False)
+offset n -> (3, '2ME')
+rollforward -> (Timestamp('2020-01-31 00:00:00'), Timestamp('2019-12-31 00:00:00'))
+is_on_offset -> (True, False)

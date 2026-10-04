@@ -10,7 +10,7 @@ namespace NDSharp.Frame;
 
 /// <summary>The storage families of a column. pandas 3 default dtypes: <c>bool</c>, <c>int64</c>, <c>float64</c>,
 /// <c>str</c> (missing = NaN) and <c>object</c> (anything else).</summary>
-public enum Kind : byte { Bool, Int, Float, Str, Object, Category }
+public enum Kind : byte { Bool, Int, Float, Str, Object, Category, DateTime, Timedelta }
 
 /// <summary>An immutable, typed, one-dimensional block of values. pandas 3 is always copy-on-write, so a column is never
 /// mutated: every update builds a new column and swaps it into its frame.
@@ -30,12 +30,29 @@ public sealed class Column
     private readonly int[]? _codes;
     private readonly Column? _cats;
     private readonly bool _ordered;
+    private readonly DateUnit _unit;
 
     private Column(Kind kind, DType? num, int length, long[]? i = null, double[]? f = null, bool[]? b = null, string?[]? s = null, object?[]? o = null,
-        int[]? codes = null, Column? cats = null, bool ordered = false)
+        int[]? codes = null, Column? cats = null, bool ordered = false, DateUnit unit = DateUnit.Micro)
     {
-        Kind = kind; Num = num; Length = length; _i = i; _f = f; _b = b; _s = s; _o = o; _codes = codes; _cats = cats; _ordered = ordered;
+        Kind = kind; Num = num; Length = length; _i = i; _f = f; _b = b; _s = s; _o = o; _codes = codes; _cats = cats; _ordered = ordered; _unit = unit;
     }
+
+    // ------------------------------------------------------------------------------------------ datetime64 / timedelta64
+
+    /// <summary>The unit of a datetime/timedelta column.</summary>
+    public DateUnit Unit => _unit;
+    /// <summary>Raw ticks (in <see cref="Unit"/>) of a datetime/timedelta column; <see cref="DateTimeCore.NaT"/> marks missing values.</summary>
+    public long[] Ticks => _i!;
+
+    public static Column FromDateTime(long[] ticks, DateUnit unit = DateUnit.Micro) => new(Kind.DateTime, null, ticks.Length, i: ticks, unit: unit);
+    public static Column FromTimedelta(long[] ticks, DateUnit unit = DateUnit.Micro) => new(Kind.Timedelta, null, ticks.Length, i: ticks, unit: unit);
+
+    /// <summary>The same column re-expressed in another unit.</summary>
+    public Column WithUnit(DateUnit unit)
+        => unit == _unit ? this : Kind == Kind.DateTime ? FromDateTime(_i!.Select(t => DateTimeCore.Scale(t, _unit, unit)).ToArray(), unit) : FromTimedelta(_i!.Select(t => DateTimeCore.Scale(t, _unit, unit)).ToArray(), unit);
+
+    private static bool IsNaTLike(object? v) => v is null || v is double d && double.IsNaN(d);
 
     // ------------------------------------------------------------------------------------------ categorical
 
@@ -106,7 +123,7 @@ public sealed class Column
     public static Column Infer(IReadOnlyList<object?> values)
     {
         int n = values.Count;
-        bool anyBool = false, anyInt = false, anyFloat = false, anyStr = false, anyNone = false, anyOther = false;
+        bool anyBool = false, anyInt = false, anyFloat = false, anyStr = false, anyNone = false, anyOther = false, anyTs = false, anyTd = false;
         foreach (var v in values)
         {
             switch (v)
@@ -116,10 +133,22 @@ public sealed class Column
                 case long or int or short or sbyte or byte or ushort or uint or System.Numerics.BigInteger: anyInt = true; break;
                 case double or float: anyFloat = true; break;
                 case string: anyStr = true; break;
+                case Ts: anyTs = true; anyOther = true; break;
+                case Td: anyTd = true; anyOther = true; break;
                 default: anyOther = true; break;
             }
         }
         if (n == 0) return FromObjects(Array.Empty<object?>());
+        if ((anyTs || anyTd) && !(anyTs && anyTd) && !anyBool && !anyInt && !anyStr && values.All(v => v is Ts or Td || IsNaTLike(v)))
+        {
+            if (anyTs)
+            {
+                var unit = values.OfType<Ts>().Select(t => t.Unit).Aggregate(DateUnit.Second, DateTimeCore.Finer);
+                return FromDateTime(values.Select(v => v is Ts t ? DateTimeCore.Scale(t.Ticks, t.Unit, unit) : DateTimeCore.NaT).ToArray(), unit);
+            }
+            var tunit = values.OfType<Td>().Select(t => t.Unit).Aggregate(DateUnit.Second, DateTimeCore.Finer);
+            return FromTimedelta(values.Select(v => v is Td t ? DateTimeCore.Scale(t.Ticks, t.Unit, tunit) : DateTimeCore.NaT).ToArray(), tunit);
+        }
         int families = (anyBool ? 1 : 0) + ((anyInt || anyFloat) ? 1 : 0) + (anyStr ? 1 : 0) + (anyOther ? 1 : 0);
         if (families == 0) return FromObjects(values.ToArray()); // all None
         // a string column with NaN placeholders (e.g. a missing name read back as float NaN) is still a str column
@@ -153,6 +182,8 @@ public sealed class Column
 
     public string DTypeName => Kind switch
     {
+        Kind.DateTime => "datetime64[" + DateTimeCore.UnitName(_unit) + "]",
+        Kind.Timedelta => "timedelta64[" + DateTimeCore.UnitName(_unit) + "]",
         Kind.Category => "category",
         Kind.Str => "str",
         Kind.Object => "object",
@@ -180,11 +211,14 @@ public sealed class Column
         Kind.Bool => _b![i],
         Kind.Str => _s![i],
         Kind.Category => _codes![i] < 0 ? null : _cats![_codes[i]],
+        Kind.DateTime => _i![i] == DateTimeCore.NaT ? null : new Ts(_i[i], _unit),
+        Kind.Timedelta => _i![i] == DateTimeCore.NaT ? null : new Td(_i[i], _unit),
         _ => _o![i],
     };
 
     public bool IsNa(int i) => Kind switch
     {
+        Kind.DateTime or Kind.Timedelta => _i![i] == DateTimeCore.NaT,
         Kind.Category => _codes![i] < 0,
         Kind.Float => double.IsNaN(_f![i]),
         Kind.Str => _s![i] is null,
@@ -209,6 +243,8 @@ public sealed class Column
         for (int k = 0; k < n; k++) if (pos[k] < 0) { anyMissing = true; break; }
         switch (Kind)
         {
+            case Kind.DateTime: { var r = new long[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? DateTimeCore.NaT : _i![pos[k]]; return FromDateTime(r, _unit); }
+            case Kind.Timedelta: { var r = new long[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? DateTimeCore.NaT : _i![pos[k]]; return FromTimedelta(r, _unit); }
             case Kind.Category: { var r = new int[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? -1 : _codes![pos[k]]; return FromCodes(r, _cats!, _ordered); }
             case Kind.Int when !anyMissing: { var r = new long[n]; for (int k = 0; k < n; k++) r[k] = _i![pos[k]]; return FromLongs(r, Num!.Value); }
             case Kind.Int: { var r = new double[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? double.NaN : _i![pos[k]]; return FromDoubles(r); }
@@ -230,6 +266,29 @@ public sealed class Column
         if (!broadcast && vals.Count != pos.Count) throw new FrameException($"Length of values ({vals.Count}) does not match length of index ({pos.Count})");
         object? V(int k) => vals[broadcast ? 0 : k];
         int n = pos.Count;
+        if (Kind is Kind.DateTime or Kind.Timedelta && Enumerable.Range(0, n).All(k => V(k) is Ts or Td or null || V(k) is double dd && double.IsNaN(dd) || V(k) is string))
+        {
+            var r = (long[])_i!.Clone();
+            for (int k = 0; k < n; k++)
+            {
+                var v = V(k);
+                if (v is string str)
+                {
+                    if (Kind == Kind.DateTime && DateTimeCore.TryParseIso(str, out var tk, out var tu)) v = new Ts(tk, tu);
+                    else if (Kind == Kind.Timedelta && DateTimeCore.TryParseTimedelta(str, out var dk, out var du)) v = new Td(dk, du);
+                    else throw new FrameException($"Invalid value '{str}' for dtype '{DTypeName}'", "TypeError");
+                }
+                r[pos[k]] = v switch
+                {
+                    Ts t when Kind == Kind.DateTime => DateTimeCore.Scale(t.Ticks, t.Unit, _unit),
+                    Td t when Kind == Kind.Timedelta => DateTimeCore.Scale(t.Ticks, t.Unit, _unit),
+                    null => DateTimeCore.NaT,
+                    double => DateTimeCore.NaT,
+                    _ => throw new FrameException($"Invalid value '{v}' for dtype '{DTypeName}'", "TypeError"),
+                };
+            }
+            return Kind == Kind.DateTime ? FromDateTime(r, _unit) : FromTimedelta(r, _unit);
+        }
         if (Kind == Kind.Category)
         {
             var lookup = new Dictionary<object, int>();
@@ -292,6 +351,8 @@ public sealed class Column
             case double d: return FromDoubles(Enumerable.Repeat(d, n).ToArray());
             case bool b: return FromBools(Enumerable.Repeat(b, n).ToArray());
             case string s: return FromStrings(Enumerable.Repeat<string?>(s, n).ToArray());
+            case Ts t: return FromDateTime(Enumerable.Repeat(t.Ticks, n).ToArray(), t.Unit);
+            case Td t: return FromTimedelta(Enumerable.Repeat(t.Ticks, n).ToArray(), t.Unit);
             case null: return FromObjects(new object?[n]);
             default: return FromObjects(Enumerable.Repeat(value, n).ToArray());
         }
@@ -305,6 +366,12 @@ public sealed class Column
         if (parts.All(p => p.Kind == Kind.Category) && parts.All(p => SameCategories(p._cats!, parts[0]._cats!) && p._ordered == parts[0]._ordered))
             return FromCodes(parts.SelectMany(p => p._codes!).ToArray(), parts[0]._cats!, parts[0]._ordered);
         if (parts.Any(p => p.Kind == Kind.Category)) parts = parts.Select(p => p.Decategorized()).ToList();
+        if (parts.All(p => p.Kind == parts[0].Kind) && parts[0].Kind is Kind.DateTime or Kind.Timedelta)
+        {
+            var unit = parts.Select(p => p._unit).Aggregate(DateUnit.Second, DateTimeCore.Finer);
+            var ticks = parts.SelectMany(p => p.WithUnit(unit)._i!).ToArray();
+            return parts[0].Kind == Kind.DateTime ? FromDateTime(ticks, unit) : FromTimedelta(ticks, unit);
+        }
         var kinds = parts.Select(p => p.Kind).Distinct().ToList();
         if (kinds.Count == 1)
         {
@@ -334,6 +401,8 @@ public sealed class Column
 
     public static object? Key(object? v) => v switch
     {
+        Ts t => t.Ticks == DateTimeCore.NaT ? NaNKey : ("ts", DateTimeCore.ToNanos(t.Ticks, t.Unit)),
+        Td t => t.Ticks == DateTimeCore.NaT ? NaNKey : ("td", DateTimeCore.ToNanos(t.Ticks, t.Unit)),
         null => NaNKey,
         double d when double.IsNaN(d) => NaNKey,
         double d when d == Math.Floor(d) && Math.Abs(d) < 9e15 => (long)d,

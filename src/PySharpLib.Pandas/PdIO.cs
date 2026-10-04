@@ -44,7 +44,7 @@ internal static class PdIO
     {
         "filepath_or_buffer", "sep", "delimiter", "header", "names", "index_col", "usecols", "dtype", "skiprows", "nrows", "na_values", "keep_default_na", "comment",
         "decimal", "thousands", "quotechar", "escapechar", "skipinitialspace", "encoding", "parse_dates", "converters", "engine", "low_memory", "true_values", "false_values",
-        "on_bad_lines", "lineterminator", "chunksize", "iterator", "na_filter",
+        "on_bad_lines", "lineterminator", "chunksize", "iterator", "na_filter", "date_format", "dayfirst",
     };
 
     private static object ReadCsv(Interp i, object[] a, Dictionary<string, object>? k, char defaultSep)
@@ -53,7 +53,6 @@ internal static class PdIO
         int X(string n) => Array.IndexOf(ReadCsvNames, n);
         object? G(string n) => p[X(n)];
         bool H(string n) => p.Has(X(n));
-        if (H("parse_dates") && G("parse_dates") is not (false or PyNone)) throw PyErr.NotImplementedError("read_csv(parse_dates=...) — datetime dtypes are not supported");
         if (H("converters") || H("true_values") || H("false_values")) throw PyErr.NotImplementedError("read_csv(converters/true_values/false_values)");
         if (H("chunksize") || p.Bool(X("iterator"), false)) throw PyErr.NotImplementedError("read_csv(chunksize/iterator)");
         string text = ReadSource(i, p.Required(0));
@@ -108,6 +107,33 @@ internal static class PdIO
             }
             cols = keep.Select(c => cols[c]).ToList(); names = keep.Select(c => names[c]).ToList();
         }
+        // parse_dates: list of columns (names or positions), or True for the index column
+        if (H("parse_dates") && G("parse_dates") is not (false or PyNone))
+        {
+            var pd = G("parse_dates")!;
+            var targets = new List<int>();
+            if (pd is true)
+            {
+                if (H("index_col") && G("index_col") is not (false or PyNone))
+                    foreach (var w in PdConv.IsListLike(G("index_col")!) ? PdConv.Cells(G("index_col")!) : new List<object?> { PdConv.ToCell(G("index_col")) })
+                        targets.Add(w is long wl && !names.Contains(w) ? (int)wl : names.FindIndex(n => Equals(Column.Key(n), Column.Key(w))));
+            }
+            else if (PdConv.IsListLike(pd))
+                foreach (var w in PdConv.Cells(pd))
+                {
+                    if (w is LabelTuple) throw PyErr.NotImplementedError("read_csv(parse_dates=[[...]]): combining columns");
+                    targets.Add(w is long wl && !names.Contains(w) ? (int)wl : names.FindIndex(n => Equals(Column.Key(n), Column.Key(w))));
+                }
+            else if (pd is PyDict) throw PyErr.NotImplementedError("read_csv(parse_dates={...})");
+            foreach (var c in targets.Where(x => x >= 0 && x < cols.Count))
+            {
+                var col = cols[c];
+                if (col.Kind != Kind.Str && col.Kind != Kind.Object) continue;
+                try { cols[c] = PdDates.ToDatetimeColumn(col.Kind == Kind.Object ? Column.FromStrings(col.Objects.Select(o => o as string).ToArray()) : col, "raise", p.Bool(X("dayfirst"), false), H("date_format") ? (string)G("date_format")! : null, null); }
+                catch (FrameException) { }
+                catch (PyRaise) { }
+            }
+        }
         // implicit index (data rows with one more field than the header, or Names shorter than the data)
         FIndex? index = null;
         var implicitPos = names.Select((n, c) => (n, c)).Where(x => x.n is string s && s.StartsWith("__implicit_index_")).Select(x => x.c).ToList();
@@ -159,6 +185,22 @@ internal static class PdIO
         var m2 = System.Text.RegularExpressions.Regex.Match(fmt, @"^\{:\.(\d+)f\}$");
         if (m2.Success) return d.ToString("F" + m2.Groups[1].Value, CultureInfo.InvariantCulture);
         throw PyErr.NotImplementedError($"to_csv(float_format={fmt})");
+    }
+
+    /// <summary>Datetime/timedelta columns as the text to_csv writes (the display format of the whole column, or <c>date_format</c>).</summary>
+    private static Column TimeText(Column c, string? dateFormat)
+    {
+        if (c.Kind == Kind.DateTime && dateFormat is not null)
+            return Column.FromStrings(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : DateTimeCore.Strftime(t, c.Unit, dateFormat)).ToArray());
+        var cells = Formatter.FormatCells(c, PdOptions.Display, false);
+        return Column.FromStrings(Enumerable.Range(0, c.Length).Select(i => c.IsNa(i) ? null : cells[i]).ToArray());
+    }
+
+    private static DataFrame TimesAsText(DataFrame d, string? dateFormat)
+    {
+        if (!d.Data.Any(c => c.Kind is Kind.DateTime or Kind.Timedelta) && !(d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta)) return d;
+        var idx = d.Index.IsMulti ? d.Index : d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta ? new FIndex(TimeText(d.Index.Labels, dateFormat), d.Index.Name) : d.Index;
+        return new DataFrame(d.Data.Select(c => c.Kind is Kind.DateTime or Kind.Timedelta ? TimeText(c, dateFormat) : c), d.Columns, idx);
     }
 
     private static string CellText(Column c, int r, string naRep, string? floatFormat)
@@ -310,14 +352,14 @@ internal static class PdIO
 
         PdClasses.DataFrame.Dict["to_csv"] = PdClasses.Fn("to_csv", (i, a, k) =>
         {
-            var p = A("to_csv", i, a, k, "path_or_buf", "sep", "na_rep", "float_format", "columns", "header", "index", "index_label", "mode", "encoding", "quoting", "quotechar", "lineterminator");
-            return Emit(i, ToCsv(i, PdConv.D(a[0]), p, 1, 2, 3, 4, 5, 6, 7, 11, 12), p[0], p.Has(8) ? (string)p[8]! : "w");
+            var p = A("to_csv", i, a, k, "path_or_buf", "sep", "na_rep", "float_format", "columns", "header", "index", "index_label", "mode", "encoding", "quoting", "quotechar", "lineterminator", "date_format");
+            return Emit(i, ToCsv(i, TimesAsText(PdConv.D(a[0]), p.Has(13) ? (string)p[13]! : null), p, 1, 2, 3, 4, 5, 6, 7, 11, 12), p[0], p.Has(8) ? (string)p[8]! : "w");
         });
         PdClasses.Series.Dict["to_csv"] = PdClasses.Fn("to_csv", (i, a, k) =>
         {
-            var p = A("to_csv", i, a, k, "path_or_buf", "sep", "na_rep", "float_format", "header", "index", "index_label", "mode", "encoding", "quoting", "quotechar", "lineterminator");
+            var p = A("to_csv", i, a, k, "path_or_buf", "sep", "na_rep", "float_format", "header", "index", "index_label", "mode", "encoding", "quoting", "quotechar", "lineterminator", "date_format");
             var s = PdConv.S(a[0]);
-            var d = new DataFrame(new[] { s.Values }, new FIndex(Column.Infer(new object?[] { s.Name ?? 0L })), s.Index);
+            var d = TimesAsText(new DataFrame(new[] { s.Values }, new FIndex(Column.Infer(new object?[] { s.Name ?? 0L })), s.Index), p.Has(12) ? (string)p[12]! : null);
             return Emit(i, ToCsvSeries(i, d, p), p[0], p.Has(7) ? (string)p[7]! : "w");
         });
         PdClasses.DataFrame.Dict["to_dict"] = PdClasses.Fn("to_dict", (i, a, k) => ToDict(PdConv.D(a[0]), A("to_dict", i, a, k, "orient", "into", "index").Has(0) ? (string)A("to_dict", i, a, k, "orient")[0]! : "dict"));
@@ -331,14 +373,16 @@ internal static class PdIO
             var p = A("to_json", i, a, k, "path_or_buf", "orient", "date_format", "double_precision", "force_ascii", "date_unit", "default_handler", "lines", "compression", "index", "indent", "mode");
             string orient = p.Has(1) ? (string)p[1]! : "columns";
             if (orient == "table") throw PyErr.NotImplementedError("to_json(orient='table')");
-            string text = Json.ToJson(PdConv.D(a[0]), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(7, false), p.Bool(4, true), d => PyOps.ReprDouble(d));
+            string text = Json.ToJson(JsonTimes(PdConv.D(a[0]), p.Has(2) && (string)p[2]! == "iso", p.Has(5) ? (string)p[5]! : "ms"), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(7, false), p.Bool(4, true), d => PyOps.ReprDouble(d));
             return Emit(i, text, p[0], p.Has(11) ? (string)p[11]! : "w");
         });
         PdClasses.Series.Dict["to_json"] = PdClasses.Fn("to_json", (i, a, k) =>
         {
             var p = A("to_json", i, a, k, "path_or_buf", "orient", "date_format", "double_precision", "force_ascii", "date_unit", "default_handler", "lines", "compression", "index", "indent", "mode");
             string orient = p.Has(1) ? (string)p[1]! : "index";
-            string text = Json.ToJson(PdConv.S(a[0]), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(4, true), d => PyOps.ReprDouble(d));
+            var js = PdConv.S(a[0]);
+            var jd = JsonTimes(new DataFrame(new[] { js.Values }, new FIndex(Column.Infer(new object?[] { js.Name })), js.Index), p.Has(2) && (string)p[2]! == "iso", p.Has(5) ? (string)p[5]! : "ms");
+            string text = Json.ToJson(new Series(jd.Data[0], jd.Index, js.Name), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(4, true), d => PyOps.ReprDouble(d));
             return Emit(i, text, p[0], p.Has(11) ? (string)p[11]! : "w");
         });
         m.Dict["read_json"] = PdClasses.Fn("read_json", (i, a, k) =>
@@ -347,7 +391,25 @@ internal static class PdIO
             string text = ReadSource(i, p.Required(0));
             string? orient = p.Has(1) ? (string)p[1]! : null;
             if (p.Has(2) && (string)p[2]! == "series") return PdConv.Wrap(Json.ReadSeries(text, orient));
-            return PdConv.Wrap(Json.ReadFrame(text, orient, p.Bool(10, false)));
+            var frame = Json.ReadFrame(text, orient, p.Bool(10, false));
+            bool keepDefaults = p.Bool(6, true);
+            var want = new List<object?>();
+            bool convertAll = !p.Has(5) || p[5] is true;
+            if (p.Has(5) && p[5] is not (true or false)) want.AddRange(PdConv.Cells(p[5]!));
+            bool IsDateName(object? n) => n is string s && (s.EndsWith("_at") || s.EndsWith("_time") || s.StartsWith("timestamp") || s is "modified" or "date" or "datetime");
+            string unit = p.Has(8) ? (string)p[8]! : "ms";
+            var cols = new List<Column>();
+            for (int j = 0; j < frame.NCols; j++)
+            {
+                var c = frame.Data[j]; var label = frame.Columns.Labels[j];
+                bool convert = p.Has(5) && p[5] is false ? false : want.Any(w => Equals(Column.Key(w), Column.Key(label))) || (convertAll && keepDefaults && IsDateName(label));
+                if (convert && c.Kind is Kind.Str or Kind.Int or Kind.Float)
+                {
+                    try { c = PdDates.ToDatetimeColumn(c, "coerce", false, null, c.Kind == Kind.Str ? null : unit); } catch (PyRaise) { } catch (FrameException) { }
+                }
+                cols.Add(c);
+            }
+            return PdConv.Wrap(new DataFrame(cols, frame.Columns, frame.Index));
         });
         PdClasses.DataFrame.Dict["to_html"] = PdClasses.Fn("to_html", (i, a, k) =>
         {
@@ -374,6 +436,35 @@ internal static class PdIO
             }
             return PdConv.Wrap(df);
         });
+    }
+
+    private static Column JsonTimeColumn(Column c, bool iso, string unit)
+    {
+        var u = unit switch { "s" => DateUnit.Second, "ms" => DateUnit.Milli, "us" => DateUnit.Micro, "ns" => DateUnit.Nano, _ => throw PyErr.ValueError($"Invalid value '{unit}' for option 'date_unit'") };
+        int digits = u switch { DateUnit.Second => 0, DateUnit.Milli => 3, DateUnit.Micro => 6, _ => 9 };
+        if (iso)
+        {
+            if (c.Kind == Kind.DateTime)
+                return Column.FromStrings(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : DateTimeCore.FormatIso(DateTimeCore.Scale(t, c.Unit, u), u, digits)).ToArray());
+            return Column.FromStrings(c.Ticks.Select(t =>
+            {
+                if (t == DateTimeCore.NaT) return null;
+                long per = DateTimeCore.PerSecond(c.Unit);
+                long total = DateTimeCore.FloorDiv(t, per), sub = t - total * per;
+                long days = DateTimeCore.FloorDiv(total, 86400), sod = total - days * 86400;
+                string frac = sub == 0 ? "" : "." + (sub * DateTimeCore.NanosPerTick(c.Unit)).ToString("D9", CultureInfo.InvariantCulture).TrimEnd('0');
+                return $"P{days}DT{sod / 3600}H{sod % 3600 / 60}M{sod % 60}{frac}S";
+            }).ToArray());
+        }
+        return Column.FromObjects(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : (object?)DateTimeCore.Scale(t, c.Unit, u)).ToArray());
+    }
+
+    private static DataFrame JsonTimes(DataFrame d, bool iso, string unit)
+    {
+        bool Is(Column c) => c.Kind is Kind.DateTime or Kind.Timedelta;
+        if (!d.Data.Any(Is) && !Is(d.Index.Labels)) return d;
+        var idx = Is(d.Index.Labels) && !d.Index.IsMulti ? new FIndex(JsonTimeColumn(d.Index.Labels, iso, unit), d.Index.Name) : d.Index;
+        return new DataFrame(d.Data.Select(c => Is(c) ? JsonTimeColumn(c, iso, unit) : c), d.Columns, idx);
     }
 
     private static string ToCsvSeries(Interp i, DataFrame d, Args p)

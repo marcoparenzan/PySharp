@@ -30,6 +30,7 @@ internal static class PdConv
             case PyNone: return null;
             case PyTuple tup: return new LabelTuple(tup.Items.Select(ToCell).ToArray());
             case PyInstance { Native: IntervalValue iv }: return iv;
+            case PyInstance when PdTime.TryCell(v, out var tcell): return tcell;
             case bool or double or string: return v;
             case BigInteger bi: return bi >= long.MinValue && bi <= long.MaxValue ? (long)bi : (object)(double)bi;
             case PyInstance { Native: ScalarBox }:
@@ -45,9 +46,11 @@ internal static class PdConv
     /// <summary>A frame cell as a Python value for the column it came from (missing str → NaN, missing object → None).</summary>
     public static object FromCell(object? v, Kind kind) => v switch
     {
-        null => kind is Kind.Str or Kind.Category ? double.NaN : PyNone.Instance,
+        null => kind is Kind.DateTime or Kind.Timedelta ? PdTime.NaT : kind is Kind.Str or Kind.Category ? double.NaN : PyNone.Instance,
         long l => new BigInteger(l),
         IntervalValue iv => PdCategorical.WrapInterval(iv),
+        Ts t => PdTime.Wrap(t),
+        Td t => PdTime.Wrap(t),
         bool or double or string => v,
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         _ => v,
@@ -60,6 +63,8 @@ internal static class PdConv
         null => PyNone.Instance,
         long l => new BigInteger(l),
         IntervalValue iv => PdCategorical.WrapInterval(iv),
+        Ts t => PdTime.Wrap(t),
+        Td t => PdTime.Wrap(t),
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         double d when double.IsNaN(d) => d,
         _ => v,
@@ -123,8 +128,22 @@ internal static class PdConv
             case PyInstance { Native: FIndex ix }: return ix.Labels;
             case PyInstance { Native: NDArray nd }: return FromNd(nd);
             case PyInstance { Native: INdArrayConvertible c }: return FromNd(c.ToNDArray());
+            case PyList or PyTuple when AllNaT(data is PyList l ? l.Items : ((PyTuple)data).Items):
+                return Column.FromDateTime(Enumerable.Repeat(DateTimeCore.NaT, data is PyList l2 ? l2.Items.Count : ((PyTuple)data).Items.Length).ToArray(), DateUnit.Second);
             default: return Column.Infer(Cells(data));
         }
+    }
+
+    /// <summary>A list made only of NaT (and None) is a datetime64[s] column; None alone stays object.</summary>
+    private static bool AllNaT(IEnumerable<object> items)
+    {
+        bool any = false;
+        foreach (var it in items)
+        {
+            if (it is PyInstance { Native: NaTMarker }) any = true;
+            else if (it is not PyNone) return false;
+        }
+        return any;
     }
 
     // ------------------------------------------------------------------ dtypes
@@ -136,6 +155,9 @@ internal static class PdConv
         if (name == "category") return Column.ToCategory(c);
         if (c.Kind == Kind.Category) c = c.Decategorized();
         int n = c.Length;
+        if (name.StartsWith("datetime64") || name.StartsWith("timedelta64")) return TimeAsType(c, name);
+        if (c.Kind is Kind.DateTime or Kind.Timedelta && name is "int64")
+            return Column.FromLongs(c.Ticks.Select(t => t == DateTimeCore.NaT ? throw PyErr.ValueError("Cannot convert NaT values to integer") : t).ToArray());
         switch (name)
         {
             case "str":
@@ -174,8 +196,25 @@ internal static class PdConv
         }
     }
 
+    private static Column TimeAsType(Column c, string name)
+    {
+        bool dt = name.StartsWith("datetime64");
+        int b = name.IndexOf('[');
+        DateUnit? unit = b < 0 ? null : PdDates.UnitNames.TryGetValue(name.Substring(b + 1, name.Length - b - 2), out var u) ? u : throw PyErr.TypeError($"data type '{name}' not understood");
+        if (c.Kind == (dt ? Kind.DateTime : Kind.Timedelta)) return unit is { } uu ? c.WithUnit(uu) : c;
+        if (c.Kind is Kind.Int)
+        {
+            var uu = unit ?? DateUnit.Nano;
+            return dt ? Column.FromDateTime(c.Ticks, uu) : Column.FromTimedelta(c.Ticks, uu);
+        }
+        var r = dt ? PdDates.ToDatetimeColumn(c, "raise", false, null, null) : PdDates.ToTimedeltaColumn(c, "raise", null);
+        return unit is { } u2 ? r.WithUnit(u2) : r;
+    }
+
     private static string Fmt(Column c, int i) => c.Kind switch
     {
+        Kind.DateTime => DateTimeCore.FormatTimestamp(c.Ticks[i], c.Unit),
+        Kind.Timedelta => DateTimeCore.FormatTimedelta(c.Ticks[i], c.Unit),
         Kind.Float => PyOps.ReprDouble(c.DoubleAt(i)),
         Kind.Bool => c.BoolAt(i) ? "True" : "False",
         Kind.Int => c.LongAt(i).ToString(),
@@ -239,6 +278,7 @@ internal static class PdConv
         Kind.Str => PdDType.StrInstance,
         Kind.Object => PdDType.ObjectInstance,
         Kind.Category => PdCategorical.WrapDType(c),
+        Kind.DateTime or Kind.Timedelta => PdDType.Time(c.DTypeName),
         _ => Classes.DTypeObject(c.Num!.Value),
     };
 
@@ -268,17 +308,21 @@ internal sealed class PdDType
 
     public static readonly PyClass StringDtypeClass = new("StringDtype", new List<PyClass>());
     public static readonly PyClass ObjectDtypeClass = new("dtype", new List<PyClass>());
+    public static readonly PyClass TimeDtypeClass = new("dtype", new List<PyClass>());
+    public static PyInstance Time(string name) => new(TimeDtypeClass) { Native = new PdDType(name) };
     public static readonly PyInstance StrInstance;
     public static readonly PyInstance ObjectInstance;
+
+    private static string TimeRepr(string name) => "dtype('<" + (name.StartsWith("datetime") ? "M8" : "m8") + name.Substring(name.IndexOf('['), name.Length - name.IndexOf('[')) + "')";
 
     static PdDType()
     {
         StrInstance = new PyInstance(StringDtypeClass) { Native = new PdDType("str") };
         ObjectInstance = new PyInstance(ObjectDtypeClass) { Native = new PdDType("object") };
-        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(storage='python', na_value=nan)>"), (ObjectDtypeClass, "dtype('O')") })
+        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(storage='python', na_value=nan)>"), (ObjectDtypeClass, "dtype('O')"), (TimeDtypeClass, (string?)null) })
         {
             var r = repr;
-            cls.Dict["__repr__"] = new PyBuiltinFunction("dtype.__repr__", (_, _, _) => r);
+            cls.Dict["__repr__"] = new PyBuiltinFunction("dtype.__repr__", (_, a, _) => r ?? TimeRepr(((PdDType)((PyInstance)a[0]).Native!).Name));
             cls.Dict["__str__"] = new PyBuiltinFunction("dtype.__str__", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name);
             cls.Dict["__hash__"] = new PyBuiltinFunction("dtype.__hash__", (_, a, _) => new BigInteger(((PdDType)((PyInstance)a[0]).Native!).Name.GetHashCode()));
             cls.Dict["__eq__"] = new PyBuiltinFunction("dtype.__eq__", (_, a, _) =>
@@ -292,7 +336,7 @@ internal sealed class PdDType
                 try { return PdConv.DTypeName(a[1]) != me; } catch (PyRaise) { return true; }
             });
             cls.Dict["name"] = new PyProperty { Getter = new PyBuiltinFunction("name", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name) };
-            cls.Dict["kind"] = new PyProperty { Getter = new PyBuiltinFunction("kind", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name == "str" ? "T" : "O") };
+            cls.Dict["kind"] = new PyProperty { Getter = new PyBuiltinFunction("kind", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name is var nm && nm == "str" ? "T" : nm.StartsWith("datetime") ? "M" : nm.StartsWith("timedelta") ? "m" : "O") };
         }
     }
 }

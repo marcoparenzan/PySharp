@@ -790,7 +790,7 @@ public class DateTimeTests
 
     [Fact]
     public void Min_and_max_class_constants()
-        => Assert.Equal("0001-01-01 00:00:00\n9999-12-31 23:59:59", Run("""
+        => Assert.Equal("0001-01-01 00:00:00\n9999-12-31 23:59:59.999999", Run("""
             import datetime
             print(datetime.datetime.min)
             print(datetime.datetime.max)

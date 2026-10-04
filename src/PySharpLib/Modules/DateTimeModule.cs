@@ -272,6 +272,8 @@ public static class DateTimeModule
 
     // ------------------------------------------------------------------ time (of day)
 
+    private static string MicroSuffix(long ticks) => ticks % TimeSpan.TicksPerSecond / 10 is var us and not 0 ? "." + us.ToString("D6", CultureInfo.InvariantCulture) : "";
+
     private static PyClass BuildTimeClass()
     {
         var cls = new PyClass("time", new List<PyClass>());
@@ -298,9 +300,15 @@ public static class DateTimeModule
         // correct) formula below.
         cls.Dict["microsecond"] = new PyProperty { Getter = new PyBuiltinFunction("time.microsecond", (_, a, _) => new BigInteger(Value(a[0]).Ticks % TimeSpan.TicksPerSecond / 10)) };
 
-        Add("isoformat", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture));
-        Add("__str__", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture));
-        Add("__repr__", (_, a, _) => $"datetime.time({Value(a[0]).Hours}, {Value(a[0]).Minutes}, {Value(a[0]).Seconds})");
+        Add("isoformat", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks));
+        Add("__str__", (_, a, _) => Value(a[0]).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks));
+        Add("__repr__", (_, a, _) =>
+        {
+            var v = Value(a[0]);
+            long us = v.Ticks % TimeSpan.TicksPerSecond / 10;
+            string args = $"{v.Hours}, {v.Minutes}" + (v.Seconds != 0 || us != 0 ? $", {v.Seconds}" : "") + (us != 0 ? $", {us}" : "");
+            return $"datetime.time({args})";
+        });
         Add("strftime", (_, a, _) => Strftime(DateTime.MinValue + Value(a[0]), (string)a[1]));
         Add("__eq__", (_, a, _) => a[1] is PyInstance i && i.Class == TimeClass && Value(a[0]) == Value(a[1]));
         Add("__lt__", (_, a, _) => Value(a[0]) < Value((PyInstance)a[1]));
@@ -381,9 +389,9 @@ public static class DateTimeModule
         Add("isoformat", (_, a, kwargs) =>
         {
             string sep = kwargs is not null && kwargs.TryGetValue("sep", out var s) ? (string)s : "T";
-            return Value(a[0]).ToString($"yyyy-MM-dd{sep}HH:mm:ss", CultureInfo.InvariantCulture);
+            return Value(a[0]).ToString($"yyyy-MM-dd{sep}HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks);
         });
-        Add("__str__", (_, a, _) => Value(a[0]).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+        Add("__str__", (_, a, _) => Value(a[0]).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks));
         Add("__repr__", (_, a, _) =>
         {
             var v = Value(a[0]);
