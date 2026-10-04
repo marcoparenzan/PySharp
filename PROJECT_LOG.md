@@ -125,3 +125,9 @@ block counts as 0m, so the figure understates the effort: each phase closes with
 - `7f57b8b` Phase 6: categorical dtype, `Interval`, `pd.cut`/`pd.qcut`, numpy `Generator.choice(p=)`
 - `8cfa374` Phase 7: datetime/timedelta dtypes, `Timestamp`/`Timedelta`, `to_datetime`/`date_range`, `.dt`, `resample`, time-window `rolling`, `parse_dates`
 - `8c170b1` Phase 8: `Period`/`PeriodIndex`, time zones, `query`/`eval`, `plot.kde`, bit-exact numpy exponential/gamma/poisson, pandas-exact Index repr wrapping
+
+## Scenario 14c - pandas (Phase 9)
+
+**1 commit - +2466/-128 across 51 files - ~0h00m active by the commit-gap rule** (a single-commit block counts as 0m; the commit came 171 minutes after the 2.3.0 packaging commit, which bounds the effort).
+
+- `2fddb53` Phase 9: nullable dtypes and `pd.NA`, `describe(include=)`/`select_dtypes`, `interpolate`, `resample(origin=/offset=/kind='period')`, period multiples, numpy `datetime64`/`timedelta64` arrays
