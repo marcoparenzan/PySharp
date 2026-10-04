@@ -450,6 +450,16 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 
 ---
 
+## v2.4.0 — pandas Phase 9
+
+- **Nullable dtypes and `pd.NA`**: `Int8`–`Int64`, `UInt8`–`UInt64`, `Float32/64`, `boolean`, `string` (Series, DataFrame, `pd.array`, `convert_dtypes`, `astype`), Kleene logic, masked reductions, sort/`value_counts`/groupby/describe/info, `.str` on `string`.
+- `describe(include=/exclude=)`, `select_dtypes`, `interpolate` (`linear`/`index`/`values`/`time`, `limit`, `limit_direction`, `limit_area`).
+- `resample(origin=, offset=, kind='period')`; Period frequencies with a multiple (`'2M'`); business-day periods (`'B'`) are not supported.
+- **numpy `datetime64` / `timedelta64` arrays** (units `D`…`ns`), so `.values` of a datetime column and datetime frames now convert.
+- **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.4.0 (lockstep); the 17 packages are in the local feed.
+
+---
+
 ## v2.3.0 — pandas (complete)
 
 **`import pandas as pd` on PySharp** — scenario 14 ([PANDAS_PLAN.md](PANDAS_PLAN.md)). Same method as numpy / cv2 / torch: a native .NET library with no Python

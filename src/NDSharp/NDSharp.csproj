@@ -11,7 +11,7 @@
     <!-- NuGet package metadata: a native .NET n-dimensional array library (numpy semantics),
          with no Python dependency. PySharp.Numpy binds it to the PySharp interpreter. -->
     <PackageId>NDSharp</PackageId>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>NDSharp — a native .NET n-dimensional array library with numpy semantics (typed dtypes, strided views, broadcasting, ufuncs, reductions, linalg). No Python dependency.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

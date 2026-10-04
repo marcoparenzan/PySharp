@@ -12,7 +12,7 @@
     <!-- NuGet package metadata: the psycopg2 stdlib module, split out of PySharpLib so the core
          embeddable interpreter doesn't force every consumer to carry Npgsql. -->
     <PackageId>PySharp.Psycopg2</PackageId>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's psycopg2 module — a real DB-API 2.0 shim over Npgsql (Postgres). Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

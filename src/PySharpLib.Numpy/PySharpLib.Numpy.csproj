@@ -13,7 +13,7 @@
     <!-- NuGet package metadata: the numpy module, as a thin Python-facing binding over the native
          NDSharp array library. Opt-in companion to PySharp.Interpreter. -->
     <PackageId>PySharp.Numpy</PackageId>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's numpy module — a Python binding over the native .NET NDSharp array library (not real numpy). Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

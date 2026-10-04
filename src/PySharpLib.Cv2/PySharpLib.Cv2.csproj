@@ -13,7 +13,7 @@
 
     <!-- NuGet package metadata: the cv2 module, a Python binding over NDSharp.Image (OpenCV via OpenCvSharp). -->
     <PackageId>PySharp.Cv2</PackageId>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's cv2 module — a Python binding over NDSharp.Image (OpenCV through OpenCvSharp). Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
