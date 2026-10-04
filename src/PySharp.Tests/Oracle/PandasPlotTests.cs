@@ -38,13 +38,16 @@ public class PandasPlotTests
     [InlineData("df.plot.scatter(x='a', y='b')")]
     [InlineData("df.plot.area()")]
     [InlineData("df.hist()")]
+    [InlineData("df['a'].plot.pie(autopct='%1.1f%%')")]
+    [InlineData("df.plot.box()")]
+    [InlineData("df.plot(kind='pie', y='a')")]
     [InlineData("pd.Series([1.0, 2.0, 4.0], index=[1, 2, 3]).plot(color='red', marker='o')")]
     public void Supported_kinds_draw_a_png(string body) => Assert.True(long.Parse(Render(body)) > 1000);
 
     [Fact]
     public void Unsupported_kind_raises_a_clear_error()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => Py.Run("import pandas as pd\npd.DataFrame({'a': [1, 2]}).plot.pie()"));
+        var ex = Assert.ThrowsAny<Exception>(() => Py.Run("import pandas as pd\npd.DataFrame({'a': [1, 2]}).plot.kde()"));
         Assert.Contains("not implemented", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

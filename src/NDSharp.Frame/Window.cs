@@ -239,6 +239,122 @@ public static class Window
         else { mean = 0; ssqdm = 0; }
     }
 
+    // ------------------------------------------------------------------------------------------ exponentially weighted
+
+    /// <summary>pandas' centre of mass from exactly one of com / span / halflife / alpha, then alpha = 1 / (1 + com) (same operation order, so alpha is bit-identical).</summary>
+    public static double Alpha(double? com, double? span, double? halflife, double? alpha)
+    {
+        int given = (com is null ? 0 : 1) + (span is null ? 0 : 1) + (halflife is null ? 0 : 1) + (alpha is null ? 0 : 1);
+        if (given != 1) throw new FrameException("Must pass one of com, span, halflife, or alpha");
+        if (alpha is double a)
+        {
+            if (a <= 0 || a > 1) throw new FrameException("alpha must satisfy: 0 < alpha <= 1");
+            return a;
+        }
+        double c;
+        if (com is double cm) { if (cm < 0) throw new FrameException("com must satisfy: com >= 0"); c = cm; }
+        else if (span is double sp) { if (sp < 1) throw new FrameException("span must satisfy: span >= 1"); c = (sp - 1) / 2.0; }
+        else
+        {
+            double h = halflife!.Value;
+            if (h <= 0) throw new FrameException("halflife must satisfy: halflife > 0");
+            double decay = 1 - Math.Exp(Math.Log(0.5) / h);
+            c = 1 / decay - 1;
+        }
+        return 1.0 / (1.0 + c);
+    }
+
+    public static Column Ewm(string name, Column col, double alpha, int minPeriods, bool adjust, bool ignoreNa, bool bias = false)
+    {
+        var v = Doubles(col);
+        int n = v.Length;
+        int minp = Math.Max(minPeriods, 1);
+        double oldWtFactor = 1.0 - alpha, newWt = adjust ? 1.0 : alpha;
+        var output = new double[n];
+        if (n == 0) return Column.FromDoubles(output);
+        if (name == "mean")
+        {
+            double weighted = v[0];
+            bool isObs = !double.IsNaN(weighted);
+            int nobs = isObs ? 1 : 0;
+            output[0] = nobs >= minp ? weighted : double.NaN;
+            double oldWt = 1.0;
+            for (int i = 1; i < n; i++)
+            {
+                double cur = v[i];
+                isObs = !double.IsNaN(cur);
+                if (isObs) nobs++;
+                if (!double.IsNaN(weighted))
+                {
+                    if (isObs || !ignoreNa)
+                    {
+                        oldWt *= oldWtFactor;
+                        if (isObs)
+                        {
+                            if (weighted != cur)
+                            {
+                                weighted = oldWt * weighted + newWt * cur;
+                                weighted /= oldWt + newWt;
+                            }
+                            if (adjust) oldWt += newWt; else oldWt = 1.0;
+                        }
+                    }
+                }
+                else if (isObs) weighted = cur;
+                output[i] = nobs >= minp ? weighted : double.NaN;
+            }
+            return Column.FromDoubles(output);
+        }
+        // var / std: exponentially weighted covariance of the series with itself
+        {
+            double meanX = v[0], meanY = v[0];
+            bool isObs = !double.IsNaN(meanX);
+            int nobs = isObs ? 1 : 0;
+            if (!isObs) { meanX = double.NaN; meanY = double.NaN; }
+            output[0] = nobs >= minp ? (bias ? 0.0 : double.NaN) : double.NaN;
+            double cov = 0, sumWt = 1, sumWt2 = 1, oldWt = 1;
+            for (int i = 1; i < n; i++)
+            {
+                double curX = v[i], curY = v[i];
+                isObs = !double.IsNaN(curX);
+                if (isObs) nobs++;
+                if (!double.IsNaN(meanX))
+                {
+                    if (isObs || !ignoreNa)
+                    {
+                        sumWt *= oldWtFactor;
+                        sumWt2 *= oldWtFactor * oldWtFactor;
+                        oldWt *= oldWtFactor;
+                        if (isObs)
+                        {
+                            double oldMeanX = meanX, oldMeanY = meanY;
+                            if (meanX != curX) meanX = (oldWt * oldMeanX + newWt * curX) / (oldWt + newWt);
+                            if (meanY != curY) meanY = (oldWt * oldMeanY + newWt * curY) / (oldWt + newWt);
+                            cov = (oldWt * (cov + (oldMeanX - meanX) * (oldMeanY - meanY)) + newWt * ((curX - meanX) * (curY - meanY))) / (oldWt + newWt);
+                            sumWt += newWt;
+                            sumWt2 += newWt * newWt;
+                            oldWt += newWt;
+                            if (!adjust) { sumWt /= oldWt; sumWt2 /= oldWt * oldWt; oldWt = 1.0; }
+                        }
+                    }
+                }
+                else if (isObs) { meanX = curX; meanY = curY; }
+                if (nobs >= minp)
+                {
+                    if (!bias)
+                    {
+                        double numerator = sumWt * sumWt, denominator = numerator - sumWt2;
+                        output[i] = denominator > 0 ? numerator / denominator * cov : double.NaN;
+                    }
+                    else output[i] = cov;
+                }
+                else output[i] = double.NaN;
+            }
+            if (name == "std") for (int i = 0; i < n; i++) output[i] = double.IsNaN(output[i]) ? output[i] : Math.Sqrt(output[i]);
+            return Column.FromDoubles(output);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------ rank
 
     /// <summary>Ranks of the values (NaN stays NaN). Methods: average, min, max, first, dense.</summary>

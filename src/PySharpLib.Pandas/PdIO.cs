@@ -326,6 +326,29 @@ internal static class PdIO
             var s = PdConv.S(a[0]);
             return Dict(Enumerable.Range(0, s.Length).Select(r => (PdConv.FromLabel(s.Index.Labels[r]), PdConv.FromCell(s.Values, r))));
         });
+        PdClasses.DataFrame.Dict["to_json"] = PdClasses.Fn("to_json", (i, a, k) =>
+        {
+            var p = A("to_json", i, a, k, "path_or_buf", "orient", "date_format", "double_precision", "force_ascii", "date_unit", "default_handler", "lines", "compression", "index", "indent", "mode");
+            string orient = p.Has(1) ? (string)p[1]! : "columns";
+            if (orient == "table") throw PyErr.NotImplementedError("to_json(orient='table')");
+            string text = Json.ToJson(PdConv.D(a[0]), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(7, false), p.Bool(4, true), d => PyOps.ReprDouble(d));
+            return Emit(i, text, p[0], p.Has(11) ? (string)p[11]! : "w");
+        });
+        PdClasses.Series.Dict["to_json"] = PdClasses.Fn("to_json", (i, a, k) =>
+        {
+            var p = A("to_json", i, a, k, "path_or_buf", "orient", "date_format", "double_precision", "force_ascii", "date_unit", "default_handler", "lines", "compression", "index", "indent", "mode");
+            string orient = p.Has(1) ? (string)p[1]! : "index";
+            string text = Json.ToJson(PdConv.S(a[0]), orient, p.Int(3, 10), p.Int(10, 0), p.Bool(4, true), d => PyOps.ReprDouble(d));
+            return Emit(i, text, p[0], p.Has(11) ? (string)p[11]! : "w");
+        });
+        m.Dict["read_json"] = PdClasses.Fn("read_json", (i, a, k) =>
+        {
+            var p = new Args("read_json", i, a, k, "path_or_buf", "orient", "typ", "dtype", "convert_axes", "convert_dates", "keep_default_dates", "precise_float", "date_unit", "encoding", "lines", "chunksize", "compression", "nrows");
+            string text = ReadSource(i, p.Required(0));
+            string? orient = p.Has(1) ? (string)p[1]! : null;
+            if (p.Has(2) && (string)p[2]! == "series") return PdConv.Wrap(Json.ReadSeries(text, orient));
+            return PdConv.Wrap(Json.ReadFrame(text, orient, p.Bool(10, false)));
+        });
         PdClasses.DataFrame.Dict["to_html"] = PdClasses.Fn("to_html", (i, a, k) =>
         {
             var p = A("to_html", i, a, k, "buf", "columns", "col_space", "header", "index", "na_rep", "formatters", "float_format");

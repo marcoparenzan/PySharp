@@ -99,6 +99,29 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - Bug found by the rolling oracle: `Generator.normal` used a ziggurat table recomputed from the layer areas, which differs from numpy's in the last bit for most draws; the exact `wi_double`
   table was recovered from numpy's own output and embedded (200000 draws now equal numpy's, tail included)
 
+### Phase 5 — JSON, ewm, pie/box  ✅
+- [x] **`to_json` / `read_json`**: DataFrame orients `columns index records split values` (+ `lines=True`, `indent`, `double_precision`, `force_ascii`), Series `index split records values`;
+      the encoder is a port of pandas' ujson (escaped `/` and non-ASCII, fractional part rounded to `double_precision` digits with ujson's rounding rules, exponent form above 1e16, NaN/inf as `null`);
+      `read_json` (strings, files, `StringIO`, `typ='series'`, `lines`) converts values and index labels like pandas (integral floats become int64, all-integer keys an int64 index, bool with null → float)
+- [x] **`ewm`**: `ewm(com | span | halflife | alpha, min_periods, adjust, ignore_na).mean()/std()/var(bias=)` — ports of pandas' weighted-mean and weighted-covariance kernels (bit-exact on random data)
+- [x] **`plot.pie` / `plot.box`** (and `kind='pie'|'box'`): drawn with polygons and lines in the embedded plotting module (pie: `autopct`, `startangle`, labels; box: quartiles, 1.5 IQR whiskers, fliers, `vert`)
+- [x] oracle snippets `P5_json`, `P5_ewm`; plot tests extended; native tests unchanged
+- Known divergence found: pandas' `ewm(alpha=0.5, adjust=False)` over data with gaps (NaN) returns `1-(1-alpha)^k` for the observation after a gap of k NaNs — a special case at alpha exactly 0.5 that its own
+  documented formula does not give — while every other alpha follows the documented weights. PySharp follows the documented formula; the oracle snippet uses alpha 0.4 there.
+
+### Phase 6 — Categorical  (planned)
+- [ ] `Kind.Category` column: categories + codes (+ ordered), NaN as code -1; `dtype 'category'`, `pd.Categorical`, `astype('category')`, `CategoricalDtype`
+- [ ] printing (`Categories (3, str): ['a', 'b', 'c']` footers, `dtype: category`), `.cat` accessor (`categories codes ordered add/remove/rename/reorder_categories as_ordered/unordered`)
+- [ ] behaviour: ordered comparisons, sort by category order, `value_counts` (all categories, including empty), `groupby` (`observed=False` default shows empty categories), `unique`, `isin`, `fillna`, `get_dummies`
+- [ ] `pd.cut` / `pd.qcut` (interval labels, `labels=`, `bins=`, `right=`, `include_lowest`, `retbins`) and `Interval` display
+- [ ] oracle snippets `P6_*`
+
+### Phase 7 — Datetime  (planned)
+- [ ] `Kind.DateTime` (datetime64 with the unit pandas 3 infers), `Timestamp`/`Timedelta` scalars, `NaT`, `pd.to_datetime` (formats, `errors`, `dayfirst`, ISO parsing), `pd.to_timedelta`
+- [ ] `DatetimeIndex`, `pd.date_range`, `pd.Timedelta`, arithmetic (datetime ± timedelta, differences), comparisons, printing of datetime/timedelta columns and indexes
+- [ ] `.dt` accessor (`year month day hour minute second dayofweek day_name month_name date normalize floor/ceil/round strftime isocalendar`), `resample` (common rules and aggregations), `shift(freq=)`, `rolling('3D')`, `read_csv(parse_dates=)`, `to_csv`/`to_json` date formats, `groupby(pd.Grouper(freq=))`
+- [ ] oracle snippets `P7_*`
+
 ---
 
 ## Known divergences (grows as phases land)
@@ -113,8 +136,8 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - A binary operation between two Series with *different* duplicate labels raises (pandas joins them).
 - `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
 - MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
-- `read_csv`: no `parse_dates`/`converters`/`chunksize`/URLs; `to_json`/`read_json` are not implemented.
-- Not implemented: `ewm`, `rolling(window='3D')` (offsets), `plot.pie/box/kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
+- `read_csv`: no `parse_dates`/`converters`/`chunksize`/URLs; `orient='table'` JSON and datetime-aware JSON are not implemented (Phase 7).
+- Not implemented: `rolling(window='3D')` (offsets, Phase 7), `plot.kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
 
 ## Verification environment
 

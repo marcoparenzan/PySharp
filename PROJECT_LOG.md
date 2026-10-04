@@ -103,13 +103,13 @@ Phase 9 (version lockstep, packages in the local feed, docs) follows these commi
 
 ---
 
-## Scenario 14 - pandas (Phases 1-3)
+## Scenario 14 - pandas (Phases 1-4)
 
-**3 commits - +12137/-56 across 133 file-touches (summed across commits) - ~0h29m active by the commit-gap rule** (two blocks: Phase 1 alone, then Phases 2-3 29 minutes apart; a
-single-commit block counts as 0m, so the figure understates the effort).
+**4 commits - +13961/-84 across 174 file-touches (summed across commits) - ~0h29m active by the commit-gap rule** (three blocks: Phase 1 alone, Phases 2-3 29 minutes apart, Phase 4 alone
+45 minutes later; a single-commit block counts as 0m, so the figure understates the effort).
 
 - `d9b1e61` Phase 1: `NDSharp.Frame` + `PySharp.Pandas` (model, selection, pandas-identical printing), `str(KeyError)` fix
 - `9be52c3` Phase 2: arithmetic with alignment, reductions, missing data, sorting, apply/map/agg, `.str`, describe/info/corr, numpy ufunc interop
 - `6e46e64` Phase 3: MultiIndex, groupby, merge/join/concat, pivot/melt/crosstab/stack/unstack, read_csv/to_csv/to_dict
 
-Phase 4 (rolling/rank, plotting, HTML for notebooks, packages and docs) follows these commits.
+- `334f6ac` Phase 4: rolling/expanding/rank, `df.plot()`, HTML tables and last-expression echo in the kernel, exact numpy ziggurat table, 2.2.0 packages, docs

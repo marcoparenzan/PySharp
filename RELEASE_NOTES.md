@@ -477,5 +477,6 @@ dependency, a thin binding, and verification against the real library. Target se
   `pandas_demo.py`, `pandas_analysis_demo.py`, `pandas_report_demo.py`, `pandas_rolling_demo.py`, whose output is byte-identical to CPython + pandas;
   18 native tests in `NDSharp.Frame.Tests`.
 - **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.2.0 (lockstep); the 16 library packages are in the local feed.
-- Known gaps (see the plan): datetime/categorical/nullable dtypes, `to_json`/`read_json`, `eval`/`query`, ewm, `plot.pie/box/kde`, `read_csv(parse_dates=...)`.
+- **JSON, ewm, pie/box**: `to_json`/`read_json` (pandas' ujson encoding rules), `ewm(...).mean/std/var`, `plot.pie` and `plot.box`.
+- Known gaps (see the plan): datetime and categorical dtypes (planned Phases 6-7), nullable dtypes, `eval`/`query`, `plot.kde`, `read_csv(parse_dates=...)`.
 

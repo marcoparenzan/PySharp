@@ -18,6 +18,9 @@ internal static class PdWindow
 {
     public static readonly PyClass Rolling = new("Rolling", new List<PyClass>());
     public static readonly PyClass Expanding = new("Expanding", new List<PyClass>());
+    public static readonly PyClass Ewm = new("ExponentialMovingWindow", new List<PyClass>());
+
+    private sealed record EwmState(object Source, double Alpha, int MinPeriods, bool Adjust, bool IgnoreNa);
 
     private sealed record WindowState(object Source, int Window, int MinPeriods, bool Center, bool IsExpanding);
 
@@ -53,6 +56,14 @@ internal static class PdWindow
                 var p = A("expanding", i, a, k, "min_periods", "axis", "method");
                 return new PyInstance(Expanding) { Native = new WindowState(a[0], 0, p.Int(0, 1), false, true) };
             });
+            owner.Dict["ewm"] = PdClasses.Fn("ewm", (i, a, k) =>
+            {
+                var p = A("ewm", i, a, k, "com", "span", "halflife", "alpha", "min_periods", "adjust", "ignore_na", "axis", "times", "method");
+                if (p.Has(8)) throw PyErr.NotImplementedError("ewm(times=...)");
+                double? D(int x) => p.Has(x) ? Column.ToDouble(PdConv.ToCell(p[x])!) : null;
+                double alpha = Window.Alpha(D(0), D(1), D(2), D(3));
+                return new PyInstance(Ewm) { Native = new EwmState(a[0], alpha, p.Int(4, 0), p.Bool(5, true), p.Bool(6, false)) };
+            });
             owner.Dict["rank"] = PdClasses.Fn("rank", (i, a, k) =>
             {
                 var p = A("rank", i, a, k, "axis", "method", "numeric_only", "na_option", "ascending", "pct");
@@ -60,6 +71,20 @@ internal static class PdWindow
                 string na = p.Has(3) ? (string)p[3]! : "keep";
                 bool asc = p.Bool(4, true), pct = p.Bool(5, false);
                 return PdOps.Map(a[0], c => Window.Rank(c, method, asc, pct, na));
+            });
+        }
+        foreach (var name in new[] { "mean", "std", "var" })
+        {
+            var nm = name;
+            Ewm.Dict[nm] = PdClasses.Fn("ExponentialMovingWindow." + nm, (i, a, k) =>
+            {
+                var st = (EwmState)((PyInstance)a[0]).Native!;
+                var p = A(nm, i, a, k, "bias", "numeric_only", "engine", "engine_kwargs");
+                bool bias = p.Bool(0, false);
+                Column F(Column c) => Window.Ewm(nm, c, st.Alpha, st.MinPeriods, st.Adjust, st.IgnoreNa, bias);
+                if (st.Source is PyInstance { Native: Series s }) return PdConv.Wrap(new Series(F(s.Values), s.Index, s.Name));
+                var d = PdConv.D(st.Source);
+                return PdConv.Wrap(new DataFrame(d.Data.Select(F), d.Columns, d.Index));
             });
         }
         foreach (var cls in new[] { Rolling, Expanding })

@@ -22,9 +22,11 @@ internal static class PdPlot
     public static void Remember(Interp interp, Importer importer) => Importers.AddOrUpdate(interp, importer);
 
     public const string Source = """
+import math
 import matplotlib.pyplot as plt
+import numpy as np
 
-_KINDS = ('line', 'bar', 'barh', 'hist', 'scatter', 'area')
+_KINDS = ('line', 'bar', 'barh', 'hist', 'scatter', 'area', 'pie', 'box')
 
 
 def _columns(obj, y):
@@ -50,6 +52,92 @@ def _is_numeric_index(index):
     return index.dtype != 'str' and index.dtype != 'object'
 
 
+def _pie(ax, obj, y, autopct, startangle, color, labels=None):
+    if hasattr(obj, 'columns'):
+        if y is None:
+            if len(obj.columns) != 1:
+                raise ValueError("pie requires either y column or 'subplots=True'")
+            y = obj.columns[0]
+        series = obj[y]
+    else:
+        series = obj
+    vals = [float(v) for v in series.to_numpy()]
+    if any(v < 0 for v in vals):
+        raise ValueError("pie plot doesn't allow negative values")
+    names = labels if labels is not None else [str(i) for i in series.index]
+    total = sum(vals)
+    angle = float(startangle)
+    for k, v in enumerate(vals):
+        frac = v / total if total > 0 else 0.0
+        sweep = 360.0 * frac
+        steps = max(2, int(sweep) + 1)
+        xs = [0.0]
+        ys = [0.0]
+        for t in range(steps + 1):
+            a = math.radians(angle + sweep * t / steps)
+            xs.append(math.cos(a))
+            ys.append(math.sin(a))
+        col = color[k % len(color)] if isinstance(color, (list, tuple)) else 'C%d' % (k % 10)
+        ax.add_patch(plt.Polygon(list(zip(xs, ys)), facecolor=col, edgecolor=col))
+        mid = math.radians(angle + sweep / 2.0)
+        ha = 'left' if math.cos(mid) >= 0 else 'right'
+        ax.text(1.1 * math.cos(mid), 1.1 * math.sin(mid), names[k], ha=ha, va='center')
+        if autopct is not None:
+            txt = autopct % (100.0 * frac) if isinstance(autopct, str) else autopct(100.0 * frac)
+            ax.text(0.6 * math.cos(mid), 0.6 * math.sin(mid), txt, ha='center', va='center')
+        angle += sweep
+    ax.set_xlim(-1.25, 1.25)
+    ax.set_ylim(-1.25, 1.25)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+
+def _box(ax, obj, cols, color, vert=True):
+    names = []
+    for k, col in enumerate(cols):
+        data = _values(obj, col)
+        data = data[data == data]
+        names.append(_name(obj, col) or '1')
+        pos = k + 1
+        q1, med, q3 = [float(q) for q in np.percentile(data, [25, 50, 75])]
+        iqr = q3 - q1
+        lo_fence, hi_fence = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        inside = data[(data >= lo_fence) & (data <= hi_fence)]
+        lo, hi = float(inside.min()), float(inside.max())
+        fliers = data[(data < lo_fence) | (data > hi_fence)]
+        w = 0.25
+        cw = 0.125
+        blue = '#1f77b4'
+        green = '#2ca02c'
+        if vert:
+            ax.plot([pos - w, pos + w, pos + w, pos - w, pos - w], [q1, q1, q3, q3, q1], color=blue)
+            ax.plot([pos - w, pos + w], [med, med], color=green)
+            ax.plot([pos, pos], [q1, lo], color=blue)
+            ax.plot([pos, pos], [q3, hi], color=blue)
+            ax.plot([pos - cw, pos + cw], [lo, lo], color=blue)
+            ax.plot([pos - cw, pos + cw], [hi, hi], color=blue)
+            if len(fliers):
+                ax.plot([pos] * len(fliers), list(fliers), marker='+', linestyle='none', color='k')
+        else:
+            ax.plot([q1, q1, q3, q3, q1], [pos - w, pos + w, pos + w, pos - w, pos - w], color=blue)
+            ax.plot([med, med], [pos - w, pos + w], color=green)
+            ax.plot([q1, lo], [pos, pos], color=blue)
+            ax.plot([q3, hi], [pos, pos], color=blue)
+            ax.plot([lo, lo], [pos - cw, pos + cw], color=blue)
+            ax.plot([hi, hi], [pos - cw, pos + cw], color=blue)
+            if len(fliers):
+                ax.plot(list(fliers), [pos] * len(fliers), marker='+', linestyle='none', color='k')
+    ticks = list(range(1, len(cols) + 1))
+    if vert:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(names)
+        ax.set_xlim(0.5, len(cols) + 0.5)
+    else:
+        ax.set_yticks(ticks)
+        ax.set_yticklabels(names)
+        ax.set_ylim(0.5, len(cols) + 0.5)
+
+
 def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, legend=None, grid=None,
          xlabel=None, ylabel=None, color=None, label=None, logx=False, logy=False, stacked=False,
          rot=None, bins=10, alpha=None, xlim=None, ylim=None, width=None, s=None, c=None, marker=None,
@@ -65,6 +153,18 @@ def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, le
     style = {}
     if alpha is not None:
         style['alpha'] = alpha
+    if kind == 'pie':
+        _pie(ax, obj, y, kwargs.get('autopct'), kwargs.get('startangle', 0), color, labels=kwargs.get('labels'))
+        if title is not None:
+            ax.set_title(title)
+        return ax
+    if kind == 'box':
+        _box(ax, obj, cols, color, vert=kwargs.get('vert', True))
+        if title is not None:
+            ax.set_title(title)
+        if grid:
+            ax.grid(True)
+        return ax
     if kind == 'scatter':
         xs = _values(obj, x)
         ys = _values(obj, y if not isinstance(y, (list, tuple)) else y[0])
@@ -217,7 +317,7 @@ def hist_frame(obj, column=None, bins=10, figsize=None, layout=None, sharex=Fals
         }
 
         Accessor.Dict["__call__"] = PdClasses.Fn("plot.__call__", (i, a, k) => CallPlot(i, ((PyInstance)a[0]).Native!, null, a.Skip(1).ToArray(), k));
-        foreach (var kind in new[] { "line", "bar", "barh", "hist", "scatter", "area" })
+        foreach (var kind in new[] { "line", "bar", "barh", "hist", "scatter", "area", "pie", "box" })
         {
             var kd = kind;
             Accessor.Dict[kd] = PdClasses.Fn("plot." + kd, (i, a, k) =>
@@ -230,7 +330,7 @@ def hist_frame(obj, column=None, bins=10, figsize=None, layout=None, sharex=Fals
                 return CallPlot(i, owner, kd, Array.Empty<object>(), kwargs);
             });
         }
-        foreach (var kind in new[] { "pie", "box", "kde", "density", "hexbin" })
+        foreach (var kind in new[] { "kde", "density", "hexbin" })
         {
             var kd = kind;
             Accessor.Dict[kd] = PdClasses.Fn("plot." + kd, (_, _, _) => throw PyErr.NotImplementedError($"plot.{kd}() is not implemented"));
