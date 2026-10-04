@@ -109,12 +109,21 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - Known divergence found: pandas' `ewm(alpha=0.5, adjust=False)` over data with gaps (NaN) returns `1-(1-alpha)^k` for the observation after a gap of k NaNs — a special case at alpha exactly 0.5 that its own
   documented formula does not give — while every other alpha follows the documented weights. PySharp follows the documented formula; the oracle snippet uses alpha 0.4 there.
 
-### Phase 6 — Categorical  (planned)
-- [ ] `Kind.Category` column: categories + codes (+ ordered), NaN as code -1; `dtype 'category'`, `pd.Categorical`, `astype('category')`, `CategoricalDtype`
-- [ ] printing (`Categories (3, str): ['a', 'b', 'c']` footers, `dtype: category`), `.cat` accessor (`categories codes ordered add/remove/rename/reorder_categories as_ordered/unordered`)
-- [ ] behaviour: ordered comparisons, sort by category order, `value_counts` (all categories, including empty), `groupby` (`observed=False` default shows empty categories), `unique`, `isin`, `fillna`, `get_dummies`
-- [ ] `pd.cut` / `pd.qcut` (interval labels, `labels=`, `bins=`, `right=`, `include_lowest`, `retbins`) and `Interval` display
-- [ ] oracle snippets `P6_*`
+### Phase 6 — Categorical  ✅
+- [x] `Kind.Category` column (categories + codes + ordered, missing = -1): `dtype 'category'`, `pd.Categorical`, `pd.CategoricalDtype(categories, ordered)`, `astype('category')` / `astype(CategoricalDtype)`,
+      `pd.Series(..., dtype='category')`, category columns in DataFrames; `Interval` scalars for interval categories
+- [x] printing: `dtype: category` + the `Categories (n, dtype): [...]` footer (pandas' truncation to head/tail and line wrapping, `<` separators for ordered), `Categorical` repr, `CategoricalIndex`, `IntervalIndex`,
+      interval bounds printed as floats when the column holds missing values
+- [x] `.cat` accessor: `categories codes ordered`, `as_ordered/as_unordered`, `add/remove/rename/reorder/set_categories`, `remove_unused_categories`
+- [x] behaviour: equality and (ordered) comparisons by category position with pandas' errors, sorting by category order, `min`/`max` of ordered data, `value_counts` (unused categories listed, `normalize`, `dropna`), `unique` → `Categorical`,
+      `fillna`/setting values outside the categories raises, concat (same categories keep the dtype), `get_dummies` (all categories), `set_index` → `CategoricalIndex`, `describe`, merge keys, CSV/JSON output
+- [x] `groupby` on categorical keys: sorted by category order, pandas 3's `observed=True` default and `observed=False` (unused categories become empty groups: sum 0, count 0, mean NaN), several keys, `as_index=False`;
+      `pivot_table(observed=)`, `crosstab` with categorical keys
+- [x] **`pd.cut` / `pd.qcut`**: bin count or edges, `right`, `labels` (list or `False`), `include_lowest`, `precision` (with pandas' precision inference), `retbins`, `duplicates`, `ordered`; results are ordered categoricals of intervals or labels
+- [x] numpy: `Generator.choice(p=...)` (with and without replacement, numpy's algorithm), found while writing the sample
+- [x] oracle snippets `P6_categorical`, `P6_cut`, `P6_edge`, `numpy/P9_choice_p`; 9 more native tests; sample `pandas_categorical_demo.py` byte-identical to CPython + pandas
+- Not implemented: `CategoricalIndex`-specific methods, `Categorical.map` keeping the dtype, `groupby` with several categorical keys and `observed=False` combined with `as_index=False` corner cases, `IntervalIndex` methods
+  (`overlaps`, `from_breaks`), `pd.interval_range`, `Series.cat` on non-category data raises like pandas; numpy's `Generator.gamma/exponential/...` are still missing
 
 ### Phase 7 — Datetime  (planned)
 - [ ] `Kind.DateTime` (datetime64 with the unit pandas 3 infers), `Timestamp`/`Timedelta` scalars, `NaT`, `pd.to_datetime` (formats, `errors`, `dayfirst`, ISO parsing), `pd.to_timedelta`

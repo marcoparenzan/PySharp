@@ -1,0 +1,147 @@
+  size color  qty  price
+0    M     r    3   9.50
+1    L     g    5  20.00
+2    S     r    2   5.25
+3    M     b    8   9.50
+4   XL     g    1  99.00
+5    S     r    4   5.25
+6    M     g    6   9.50
+size     category
+color    category
+qty         int64
+price     float64
+dtype: object
+['S', 'M', 'L', 'XL'] True True
+  size color  qty  price
+2    S     r    2   5.25
+5    S     r    4   5.25
+0    M     r    3   9.50
+3    M     b    8   9.50
+6    M     g    6   9.50
+1    L     g    5  20.00
+4   XL     g    1  99.00
+[1, 5, 3, 6, 8, 2, 4]
+  size color  qty  price
+1    L     g    5   20.0
+4   XL     g    1   99.0
+XL S 2
+size
+S      6
+M     17
+L      5
+XL     1
+Name: qty, dtype: int64
+size
+S      6
+M     17
+L      5
+XL     1
+Name: qty, dtype: int64
+size  color
+S     b        0
+      g        0
+      r        6
+M     b        8
+      g        6
+      r        3
+L     b        0
+      g        5
+Name: qty, dtype: int64
+size  color
+S     r        6
+M     b        8
+      g        6
+      r        3
+L     g        5
+XL    g        1
+Name: qty, dtype: int64
+color
+b     9.500000
+g    42.833333
+r     6.666667
+Name: price, dtype: float64
+       total  n
+color          
+b          8  1
+g         12  3
+r          9  3
+color
+g    3
+r    3
+b    1
+Name: count, dtype: int64
+color  b  g  r
+size          
+S      0  0  2
+M      1  1  1
+L      0  1  0
+XL     0  1  0
+color  b  g  r
+size          
+S      0  0  6
+M      8  6  3
+L      0  5  0
+XL     0  1  0
+['M', 'L', 'S', 'M', 'XL', 'S', 'M']
+  size  code
+0    M     1
+1    L     2
+2    S     0
+color
+green    3
+red      3
+blue     1
+Name: count, dtype: int64
+['XL', 'L', 'M', 'M', 'M', 'S', 'S']
+5 3 4
+0    True
+1    True
+2    True
+3    True
+4    True
+5    True
+6    True
+Name: size, dtype: bool
+['a', nan]
+[1, 2, 3] [2, 1, 1]
+1.5    2
+2.5    1
+Name: count, dtype: int64
+a b ['a', 'b', nan] [False, True, False] ['b', 'a']
+['b', 'a', 'a']
+['qty', 'size_S', 'size_M', 'size_L', 'size_XL']
+count     7
+unique    4
+top       M
+freq      3
+Name: size, dtype: object
+   v
+k   
+a  1
+b  2
+['a', 'b'] 2 noreindex
+   v
+k   
+b  2
+a  1
+category
+[1, 2, 0, 1, 3, 0, 1] int8
+0    M
+3    M
+Name: size, dtype: category
+Categories (4, str): ['S' < 'M' < 'L' < 'XL']
+['r', 'g', 'b']
+Categories (3, str): ['b', 'g', 'r'] ['M', 'L', 'S', 'XL']
+Categories (4, str): ['S' < 'M' < 'L' < 'XL']
+1
+{'cheap': 5, 'mid': 1, 'dear': 1}
+['lo', 'mid', 'lo', 'hi', 'lo', 'mid', 'hi']
+band
+(0, 10]      5
+(10, 100]    2
+Name: count, dtype: int64
+price
+(0, 10]      23
+(10, 100]     6
+Name: qty, dtype: int64
+(1, 7)

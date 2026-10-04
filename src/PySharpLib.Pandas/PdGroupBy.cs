@@ -102,7 +102,7 @@ internal static class PdGroupBy
                 }
             }
         }
-        var g = new Grouping(keyCols, keyNames, frame.NRows, p.Bool(4, true), p.Bool(7, true));
+        var g = new Grouping(keyCols, keyNames, frame.NRows, p.Bool(4, true), p.Bool(7, true), p.Bool(6, true));
         var valueCols = Enumerable.Range(0, frame.NCols).Where(j => !keyPos.Contains(j)).ToList();
         return Wrap(new GroupByState
         {
@@ -163,7 +163,7 @@ internal static class PdGroupBy
     private static object AssembleFrame(GroupByState st, List<Column> cols, FIndex columnLabels)
     {
         if (st.AsIndex) return PdConv.Wrap(new DataFrame(cols, columnLabels, st.G.ResultIndex()));
-        var keyCols = st.G.KeyColumns.Select((c, n) => c.Take(st.G.Rows.Select(r => r[0]).ToList())).ToList();
+        var keyCols = st.G.ResultKeyColumns();
         var labels = new List<object?>(st.G.KeyNames.Select((n, j) => n ?? $"level_{j}"));
         labels.AddRange(columnLabels.Items());
         keyCols.AddRange(cols);
@@ -173,7 +173,7 @@ internal static class PdGroupBy
     private static object AssembleSeries(GroupByState st, Column col, object? name)
     {
         if (st.AsIndex) return PdConv.Wrap(new Series(col, st.G.ResultIndex(), name));
-        var keyCols = st.G.KeyColumns.Select(c => c.Take(st.G.Rows.Select(r => r[0]).ToList())).ToList();
+        var keyCols = st.G.ResultKeyColumns();
         var labels = new List<object?>(st.G.KeyNames.Select((n, j) => n ?? $"level_{j}")) { name ?? 0L };
         keyCols.Add(col);
         return PdConv.Wrap(new DataFrame(keyCols, new FIndex(Column.Infer(labels)), FIndex.Range(st.G.Count)));

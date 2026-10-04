@@ -89,8 +89,8 @@ internal static partial class NumpyRandom
         Def("choice", (i, a, kw) =>
         {
             var p = new Args("choice", i, a.Skip(1).ToArray(), kw, "a", "size", "replace", "p", "axis", "shuffle");
-            if (p.Has(3)) throw PyErr.NotImplementedError("Generator.choice(p=...) is not implemented yet");
             var g = Gen(a[0]);
+            double[]? probs = p.Has(3) ? p.ND(3).AsType(DType.Float64).ToArray<double>() : null;
             // a sequence of non-numeric objects (strings, ...): numpy builds a string/object array and draws indices exactly like for
             // an integer population — pick the same indices and return the Python objects
             var seq = p.Required(0) is PyList pl ? pl.Items : p.Required(0) is PyTuple pt ? pt.Items.ToList() : null;
@@ -98,7 +98,7 @@ internal static partial class NumpyRandom
             {
                 var sz = SizeArg(p[1]);
                 int cnt = sz is null ? 1 : NDArray.SizeOf(sz);
-                var ids = g.ChooseIndices(seq.Count, cnt, p.Bool(2, true), p.Bool(5, true));
+                var ids = probs is null ? g.ChooseIndices(seq.Count, cnt, p.Bool(2, true), p.Bool(5, true)) : g.ChooseIndicesWeighted(seq.Count, cnt, p.Bool(2, true), probs);
                 if (sz is null) return seq[(int)ids[0]];
                 return new PyList(ids.Select(k => seq[(int)k]));
             }
@@ -106,7 +106,7 @@ internal static partial class NumpyRandom
             long popSize = pool is null ? (long)(BigInteger)p.Required(0) : pool.Shape[0];
             var size = SizeArg(p[1]);
             int count = size is null ? 1 : NDArray.SizeOf(size);
-            var idx = g.ChooseIndices(popSize, count, p.Bool(2, true), p.Bool(5, true));
+            var idx = probs is null ? g.ChooseIndices(popSize, count, p.Bool(2, true), p.Bool(5, true)) : g.ChooseIndicesWeighted(popSize, count, p.Bool(2, true), probs);
             var idxArr = NDArray.FromArray(idx, size ?? new[] { count });
             NDArray result;
             if (pool is null) result = idxArr;

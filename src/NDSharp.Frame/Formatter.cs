@@ -19,6 +19,7 @@ public sealed class DisplayOptions
     public int Width { get; set; } = 80;
     public int Precision { get; set; } = 6;
     public int MaxColWidth { get; set; } = 50;
+    public int MaxCategories { get; set; } = 8;
     public string ColHeaderJustify { get; set; } = "right";
     public string ShowDimensions { get; set; } = "truncate";
     public int TerminalWidth { get; set; } = 80;
@@ -137,6 +138,8 @@ public static class Formatter
                 break;
             case Kind.Float:
                 return FormatFloats(c.Doubles, o, leadingSpace);
+            case Kind.Category:
+                return FormatCategory(c, o, leadingSpace);
             case Kind.Str:
                 for (int i = 0; i < r.Length; i++) r[i] = sp + (c.StrAt(i) is { } s ? Escape(s) : "NaN");
                 break;
@@ -155,6 +158,63 @@ public static class Formatter
                 break;
         }
         return r;
+    }
+
+    private static string[] FormatCategory(Column c, DisplayOptions o, bool leadingSpace)
+    {
+        string sp = leadingSpace ? " " : "";
+        if (c.Categories.Kind == Kind.Object && c.Categories.Length > 0 && c.Categories[0] is IntervalValue)
+        {
+            // interval bounds print as floats when the column also holds missing values
+            bool anyNa = Enumerable.Range(0, c.Length).Any(c.IsNa);
+            return Enumerable.Range(0, c.Length).Select(i => c.IsNa(i) ? sp + "NaN" : sp + ((IntervalValue)c[i]!).Text(anyNa)).ToArray();
+        }
+        return FormatCells(c.Decategorized(), o, leadingSpace);
+    }
+
+    /// <summary>The <c>Categories (n, dtype): [...]</c> footer line of a categorical Series/Categorical (pandas' <c>_repr_categories_info</c>).</summary>
+    public static string CategoriesLine(Column c, DisplayOptions o)
+    {
+        var cats = c.Categories;
+        int maxCategories = o.MaxCategories == 0 ? 10 : o.MaxCategories;
+        string[] Fmt(Column part)
+        {
+            if (part.Kind == Kind.Str) return part.Strings.Select(x => "'" + (x ?? "") + "'").ToArray();
+            if (part.Kind == Kind.Float) return FormatFloats(part.Doubles, o, false).Select(x => x.Trim()).ToArray();
+            if (part.Kind == Kind.Object && part.Length > 0 && part[0] is IntervalValue) return Enumerable.Range(0, part.Length).Select(i => ((IntervalValue)part[i]!).Text()).ToArray();
+            return Enumerable.Range(0, part.Length).Select(i => ObjectStr(part[i])).ToArray();
+        }
+        List<string> strs;
+        if (cats.Length > maxCategories)
+        {
+            int num = maxCategories / 2;
+            strs = Fmt(cats.Slice(0, num)).Concat(new[] { "..." }).Concat(Fmt(cats.Slice(cats.Length - num, num))).ToList();
+        }
+        else strs = Fmt(cats).ToList();
+        string header = $"Categories ({cats.Length}, {c.CategoriesDTypeName}): ";
+        int maxWidth = o.Width;
+        string sep = c.Ordered ? " < " : ", ";
+        int sepLen = sep.Length;
+        string lineSep = sep.TrimEnd() + "\n";
+        var sb = new StringBuilder();
+        bool start = true;
+        int cur = header.Length;
+        foreach (var val in strs)
+        {
+            if (maxWidth != 0 && cur + sepLen + val.Length > maxWidth)
+            {
+                sb.Append(lineSep).Append(' ', header.Length + 1);
+                cur = header.Length + 1;
+            }
+            else if (!start)
+            {
+                sb.Append(sep);
+                cur += val.Length;
+            }
+            sb.Append(val);
+            start = false;
+        }
+        return header + "[" + sb.ToString().Replace(" < ... < ", " ... ") + "]";
     }
 
     // ------------------------------------------------------------------------------------------ text helpers
@@ -231,6 +291,15 @@ public static class Formatter
             int w = raw.Length == 0 ? 0 : raw.Max(x => x.Length);
             var padded = raw.Select(x => x.PadRight(w)).ToArray();
             return padded.Select(x => x[1..]).ToArray();
+        }
+        if (l.Kind == Kind.Category)
+        {
+            if (l.Categories.Kind == Kind.Object && l.Categories.Length > 0 && l.Categories[0] is IntervalValue)
+            {
+                bool anyNa = Enumerable.Range(0, l.Length).Any(l.IsNa);
+                return Enumerable.Range(0, l.Length).Select(i => l.IsNa(i) ? "NaN" : ((IntervalValue)l[i]!).Text(anyNa)).ToArray();
+            }
+            return LabelCells(new Index(l.Decategorized()), o);
         }
         var r = new string[l.Length];
         for (int i = 0; i < r.Length; i++)
@@ -343,6 +412,7 @@ public static class Formatter
         string footer = footerBase;
         if (trunc) footer += (footer.Length > 0 ? ", " : "") + $"Length: {s.Length}";
         footer += (footer.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
+        if (s.Values.Kind == Kind.Category) footer += "\n" + CategoriesLine(s.Values, o);
         return body + "\n" + footer;
     }
 
@@ -521,6 +591,8 @@ public static class Formatter
         var o = options ?? DisplayOptions.Current;
         string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
         if (ix.IsMulti) return MultiIndexRepr(ix, o);
+        if (ix.Labels.Kind == Kind.Category) return CategoricalIndexRepr(ix, o);
+        if (ix.Labels.Kind == Kind.Object && ix.Length > 0 && ix.Labels[0] is IntervalValue) return IntervalIndexRepr(ix);
         if (ix.IsRange)
             return $"RangeIndex(start={ix.RangeStart}, stop={ix.RangeStop}, step={ix.RangeStep}{nameArg})";
         var items = new List<string>();
@@ -547,6 +619,22 @@ public static class Formatter
         // like pandas, the attributes move to their own line once the values wrapped
         tail = "],\n" + new string(' ', "Index(".Length) + tail[3..];
         return sb.Append(tail).ToString();
+    }
+
+    private static string CategoricalIndexRepr(Index ix, DisplayOptions o)
+    {
+        var l = ix.Labels;
+        var items = Enumerable.Range(0, l.Length).Select(i => l.IsNa(i) ? "nan" : ReprLabel(l.Categories, l.Codes[i])).ToList();
+        var cats = Enumerable.Range(0, l.Categories.Length).Select(i => ReprLabel(l.Categories, i));
+        string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
+        return $"CategoricalIndex([{string.Join(", ", items)}], categories=[{string.Join(", ", cats)}], ordered={(l.Ordered ? "True" : "False")}, dtype='category'{nameArg})";
+    }
+
+    private static string IntervalIndexRepr(Index ix)
+    {
+        var l = ix.Labels;
+        string dt = $"interval[{(((IntervalValue)l[0]!).IsInt ? "int64" : "float64")}, {((IntervalValue)l[0]!).Closed}]";
+        return $"IntervalIndex([{string.Join(", ", Enumerable.Range(0, l.Length).Select(i => ((IntervalValue)l[i]!).Text()))}], dtype='{dt}')";
     }
 
     private static string QuoteLabel(object? v) => v is string s ? $"'{s}'" : Pp(v);

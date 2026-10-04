@@ -20,7 +20,7 @@ public sealed class Grouping
 
     public int Count => Rows.Count;
 
-    public Grouping(IReadOnlyList<Column> keyColumns, IReadOnlyList<object?> keyNames, int nRows, bool sort = true, bool dropNa = true)
+    public Grouping(IReadOnlyList<Column> keyColumns, IReadOnlyList<object?> keyNames, int nRows, bool sort = true, bool dropNa = true, bool observed = true)
     {
         KeyColumns = keyColumns; KeyNames = keyNames; NRows = nRows;
         GroupOfRow = new int[nRows];
@@ -35,11 +35,26 @@ public sealed class Grouping
             rows[g].Add(i);
             GroupOfRow[i] = g;
         }
+        var keyValues = first.Select(f => keyColumns.Select(c => c[f]).ToArray()).ToList();
+        if (!observed && keyColumns.Any(c => c.Kind == Kind.Category))
+        {
+            // unobserved categories form (empty) groups too: the product of every key's values (all categories for categorical keys)
+            var perKey = keyColumns.Select((c, k) => c.Kind == Kind.Category
+                ? Enumerable.Range(0, c.Categories.Length).Select(i => c.Categories[i]).ToList()
+                : keyValues.Select(v => v[k]).Distinct().ToList()).ToList();
+            var combos = new List<object?[]> { Array.Empty<object?>() };
+            foreach (var vals in perKey) combos = combos.SelectMany(prefix => vals.Select(v => prefix.Append(v).ToArray())).ToList();
+            foreach (var combo in combos)
+            {
+                object k = keyColumns.Count == 1 ? (Column.Key(combo[0]) ?? Column.NaNKey) : new LabelTuple(combo);
+                if (!ids.ContainsKey(k)) { ids[k] = rows.Count; rows.Add(new List<int>()); first.Add(-1); keyValues.Add(combo); }
+            }
+        }
         var order = Enumerable.Range(0, rows.Count).ToArray();
         if (sort && rows.Count > 1)
         {
-            var firstKeys = keyColumns.Select(c => c.Take(first)).ToList();
-            order = FrameOps.SortPositions(firstKeys, Enumerable.Repeat(true, firstKeys.Count).ToList(), true);
+            var sortKeys = first.All(f => f >= 0) ? keyColumns.Select(c => c.Take(first)).ToList() : Enumerable.Range(0, keyColumns.Count).Select(k => KeyColumnFor(keyColumns[k], keyValues.Select(v => v[k]).ToList())).ToList();
+            order = FrameOps.SortPositions(sortKeys, Enumerable.Repeat(true, sortKeys.Count).ToList(), true);
         }
         var remap = new int[rows.Count];
         for (int n = 0; n < order.Length; n++)
@@ -47,17 +62,39 @@ public sealed class Grouping
             int g = order[n];
             remap[g] = n;
             Rows.Add(rows[g].ToArray());
-            Keys.Add(keyColumns.Select(c => c[first[g]]).ToArray());
+            Keys.Add(keyValues[g]);
+            FirstRows.Add(first[g]);
         }
         for (int i = 0; i < nRows; i++) if (GroupOfRow[i] >= 0) GroupOfRow[i] = remap[GroupOfRow[i]];
     }
 
+    /// <summary>A column of the given key values with the dtype of the source key column (categorical keys stay categorical).</summary>
+    public static Column KeyColumnFor(Column source, IReadOnlyList<object?> values)
+    {
+        if (source.Kind == Kind.Category)
+        {
+            var lookup = new Dictionary<object, int>();
+            for (int i = 0; i < source.Categories.Length; i++) lookup[Column.Key(source.Categories[i]) ?? Column.NaNKey] = i;
+            return Column.FromCodes(values.Select(v => v is null ? -1 : lookup.TryGetValue(Column.Key(v)!, out var c) ? c : -1).ToArray(), source.Categories, source.Ordered);
+        }
+        var inferred = Column.Infer(values);
+        return source.Kind == Kind.Str && inferred.Kind != Kind.Str ? Column.FromStrings(values.Select(v => v as string).ToArray()) : inferred;
+    }
+
+    /// <summary>The key columns of the groups (one value per group), in group order.</summary>
+    public List<Column> ResultKeyColumns() => FirstRows.All(f => f >= 0)
+        ? KeyColumns.Select(c => c.Take(FirstRows)).ToList()
+        : Enumerable.Range(0, KeyColumns.Count).Select(k => KeyColumnFor(KeyColumns[k], Keys.Select(v => v[k]).ToList())).ToList();
+
+    /// <summary>For each group, its first source row (-1 for a group without rows).</summary>
+    public List<int> FirstRows { get; } = new();
+
     /// <summary>The group keys as the index of an aggregated result (flat for one key, a MultiIndex for several).</summary>
     public Index ResultIndex()
     {
-        var firstRows = Rows.Select(r => r[0]).ToList();
-        if (KeyColumns.Count == 1) return new Index(KeyColumns[0].Take(firstRows), KeyNames[0]);
-        return Index.Multi(KeyColumns.Select(c => c.Take(firstRows)).ToList(), KeyNames);
+        var keyCols = ResultKeyColumns();
+        if (KeyColumns.Count == 1) return new Index(keyCols[0], KeyNames[0]);
+        return Index.Multi(keyCols, KeyNames);
     }
 
     /// <summary>One key (or a tuple of keys) as the label a Python caller sees.</summary>

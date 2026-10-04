@@ -162,7 +162,7 @@ internal static class PdApply
 
     private static string?[] Strs(Series s)
     {
-        var c = s.Values;
+        var c = s.Values.Kind == Kind.Category ? s.Values.Decategorized() : s.Values;
         if (c.Kind == Kind.Str) return c.Strings;
         if (c.Kind == Kind.Object) return c.Objects.Select(o => o as string).ToArray();
         throw PyErr.AttributeError("Can only use .str accessor with string values!");

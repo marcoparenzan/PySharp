@@ -29,6 +29,7 @@ internal static class PdConv
             case null: return null;
             case PyNone: return null;
             case PyTuple tup: return new LabelTuple(tup.Items.Select(ToCell).ToArray());
+            case PyInstance { Native: IntervalValue iv }: return iv;
             case bool or double or string: return v;
             case BigInteger bi: return bi >= long.MinValue && bi <= long.MaxValue ? (long)bi : (object)(double)bi;
             case PyInstance { Native: ScalarBox }:
@@ -44,8 +45,9 @@ internal static class PdConv
     /// <summary>A frame cell as a Python value for the column it came from (missing str → NaN, missing object → None).</summary>
     public static object FromCell(object? v, Kind kind) => v switch
     {
-        null => kind == Kind.Str ? double.NaN : PyNone.Instance,
+        null => kind is Kind.Str or Kind.Category ? double.NaN : PyNone.Instance,
         long l => new BigInteger(l),
+        IntervalValue iv => PdCategorical.WrapInterval(iv),
         bool or double or string => v,
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         _ => v,
@@ -57,6 +59,7 @@ internal static class PdConv
     {
         null => PyNone.Instance,
         long l => new BigInteger(l),
+        IntervalValue iv => PdCategorical.WrapInterval(iv),
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         double d when double.IsNaN(d) => d,
         _ => v,
@@ -66,7 +69,7 @@ internal static class PdConv
 
     /// <summary>True for lists, tuples, ndarrays, Series, Index, ranges (things that supply many values).</summary>
     public static bool IsListLike(object o) => o is PyList or PyTuple or PyRange or PySet
-        || o is PyInstance { Native: NDArray { Ndim: >= 1 } or Series or FIndex or INdArrayConvertible };
+        || o is PyInstance { Native: NDArray { Ndim: >= 1 } or Series or FIndex or INdArrayConvertible or Column };
 
     /// <summary>Elements of a list-like as cells (no dtype interpretation).</summary>
     public static List<object?> Cells(object o)
@@ -78,6 +81,7 @@ internal static class PdConv
             case PyRange r: return r.Enumerate().Select(ToCell).ToList();
             case PySet s: return s.Items.Select(ToCell).ToList();
             case PyInstance { Native: Series s }: return s.Values.Values().ToList();
+            case PyInstance { Native: Column cc }: return cc.Values().ToList();
             case PyInstance { Native: FIndex ix }: return ix.Items().ToList();
             case PyInstance { Native: NDArray nd }: return CellsOf(nd);
             case PyInstance { Native: INdArrayConvertible c }: return CellsOf(c.ToNDArray());
@@ -115,6 +119,7 @@ internal static class PdConv
         switch (data)
         {
             case PyInstance { Native: Series s }: return s.Values;
+            case PyInstance { Native: Column cc }: return cc;
             case PyInstance { Native: FIndex ix }: return ix.Labels;
             case PyInstance { Native: NDArray nd }: return FromNd(nd);
             case PyInstance { Native: INdArrayConvertible c }: return FromNd(c.ToNDArray());
@@ -126,7 +131,10 @@ internal static class PdConv
 
     public static Column AsType(Column c, object dtype)
     {
+        if (PdCategorical.AsCatDtype(dtype) is { } cd) return Column.ToCategory(c.Kind == Kind.Category ? c.Decategorized() : c, cd.Categories, cd.Ordered);
         string name = DTypeName(dtype);
+        if (name == "category") return Column.ToCategory(c);
+        if (c.Kind == Kind.Category) c = c.Decategorized();
         int n = c.Length;
         switch (name)
         {
@@ -213,6 +221,7 @@ internal static class PdConv
             case PyClass { Name: "str" }: return "str";
             case PyClass { Name: "object" }: return "object";
             case PyInstance { Native: PdDType d }: return d.Name;
+            case PyInstance { Native: CatDtype }: return "category";
             case PyClass cls when Classes.TryDTypeOfClass(cls, out var dt): return dt.Name();
             case PyInstance pi when Conv.ToDType(pi) is DType dt2: return dt2.Name();
         }
@@ -229,6 +238,7 @@ internal static class PdConv
     {
         Kind.Str => PdDType.StrInstance,
         Kind.Object => PdDType.ObjectInstance,
+        Kind.Category => PdCategorical.WrapDType(c),
         _ => Classes.DTypeObject(c.Num!.Value),
     };
 

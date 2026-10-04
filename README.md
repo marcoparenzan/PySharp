@@ -517,7 +517,7 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md) all run (`tools/NotebookRunner`, report in `NOTEBOOKS_RUN.md`).
 - **pandas**: opt-in `PySharp.Pandas` over the native `NDSharp.Frame` (pandas 3.0 semantics): `Series`, `DataFrame`, `Index`/`MultiIndex`, `loc`/`iloc`,
   arithmetic with index alignment, reductions (numpy-exact sums), missing data, `groupby`, `merge`/`join`/`concat`, `pivot_table`/`melt`/`crosstab`,
-  `rolling`/`ewm`/`rank`, the `.str` accessor, `read_csv`/`to_csv`/`read_json`/`to_json`, HTML tables in JupyterNet and `df.plot()` through `PySharp.Matplotlib`. Printing and results
+  `rolling`/`ewm`/`rank`, categoricals with `pd.cut`/`pd.qcut`, the `.str` accessor, `read_csv`/`to_csv`/`read_json`/`to_json`, HTML tables in JupyterNet and `df.plot()` through `PySharp.Matplotlib`. Printing and results
   equal real pandas (`Oracle/pandas`, the `samples/pandas_*.py` scripts). Register with `PandasRegistration.Register(importer)`. See [PANDAS_PLAN.md](PANDAS_PLAN.md).
 - **ORM (SQLAlchemy)**: the real, unmodified `sqlalchemy` 2.0.51 runs live — `declarative_base()`, a
   mapped class, `create_all()` DDL, `Session.add()`/`.commit()` (a full real INSERT flush through the

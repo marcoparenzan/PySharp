@@ -1,0 +1,7 @@
+[4, 4, 2, 1, 0, 2, 2, 0, 0, 4]
+['b', 'a', 'a', 'c', 'c', 'c', 'a', 'a']
+[20, 10, 30]
+3 x
+[[4, 5, 3], [5, 5, 0]]
+[3.5, 1.5, 3.5, 2.5, 2.5]
+ValueError Probabilities do not sum to 1. See Notes section of docstring for more information.

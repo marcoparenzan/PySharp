@@ -478,5 +478,7 @@ dependency, a thin binding, and verification against the real library. Target se
   18 native tests in `NDSharp.Frame.Tests`.
 - **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.2.0 (lockstep); the 16 library packages are in the local feed.
 - **JSON, ewm, pie/box**: `to_json`/`read_json` (pandas' ujson encoding rules), `ewm(...).mean/std/var`, `plot.pie` and `plot.box`.
-- Known gaps (see the plan): datetime and categorical dtypes (planned Phases 6-7), nullable dtypes, `eval`/`query`, `plot.kde`, `read_csv(parse_dates=...)`.
+- **Categorical data**: `category` dtype (ordered or not), `pd.Categorical`, `pd.CategoricalDtype`, the `.cat` accessor, `pd.cut`/`pd.qcut` with `Interval` categories, categorical `groupby` (`observed=`), `value_counts` with unused categories, `CategoricalIndex`.
+- numpy: `Generator.choice(p=...)`.
+- Known gaps (see the plan): datetime dtypes (planned Phase 7), nullable dtypes, `eval`/`query`, `plot.kde`, `read_csv(parse_dates=...)`.
 

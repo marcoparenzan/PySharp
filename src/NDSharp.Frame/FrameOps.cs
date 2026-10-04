@@ -121,6 +121,7 @@ public static class FrameOps
                 }
                 int r = c.Kind switch
                 {
+                    Kind.Category => c.Codes[a].CompareTo(c.Codes[b]),
                     Kind.Int => c.LongAt(a).CompareTo(c.LongAt(b)),
                     Kind.Float => c.DoubleAt(a).CompareTo(c.DoubleAt(b)),
                     Kind.Bool => c.BoolAt(a).CompareTo(c.BoolAt(b)),

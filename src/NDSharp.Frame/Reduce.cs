@@ -34,6 +34,21 @@ public static class Reduce
 
     public static object? Scalar(string name, Column c, bool skipna = true, int ddof = 1, int minCount = 0)
     {
+        if (c.Kind == Kind.Category)
+        {
+            switch (name)
+            {
+                case "count": case "nunique": return Scalar(name, c.Decategorized(), skipna, ddof, minCount);
+                case "min": case "max":
+                {
+                    if (!c.Ordered) throw new FrameException($"Categorical is not ordered for operation {name}\nyou can use .as_ordered() to change the Categorical to an ordered one\n", "TypeError");
+                    var codes = c.Codes.Where(x => x >= 0).ToArray();
+                    if (codes.Length < c.Length && !skipna) return double.NaN;
+                    return codes.Length == 0 ? double.NaN : c.Categories[name == "min" ? codes.Min() : codes.Max()];
+                }
+                default: throw new FrameException($"Categorical cannot perform the reduction '{name}'", "TypeError");
+            }
+        }
         int n = c.Length;
         switch (name)
         {
@@ -113,6 +128,7 @@ public static class Reduce
 
     private static int CompareCells(Column c, int i, int j) => c.Kind switch
     {
+        Kind.Category => c.Codes[i].CompareTo(c.Codes[j]),
         Kind.Int => c.LongAt(i).CompareTo(c.LongAt(j)),
         Kind.Float => c.DoubleAt(i).CompareTo(c.DoubleAt(j)),
         Kind.Bool => c.BoolAt(i).CompareTo(c.BoolAt(j)),

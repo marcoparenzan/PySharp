@@ -112,6 +112,7 @@ public static class Json
 
     public static string ToJson(DataFrame d, string orient, int precision, int indent, bool lines, bool forceAscii, Func<double, string> repr)
     {
+        if (d.Data.Any(c => c.Kind == Kind.Category)) d = new DataFrame(d.Data.Select(c => c.Decategorized()), d.Columns, d.Index);
         if (d.Index.IsMulti && orient is "index" or "columns") throw new FrameException("DataFrame index must be unique for orient='" + orient + "'.", "ValueError");
         if (orient is "index" or "columns" && !d.Index.IsUnique) throw new FrameException($"DataFrame index must be unique for orient='{orient}'.", "ValueError");
         if (orient is "index" or "columns" && !d.Columns.IsUnique) throw new FrameException($"DataFrame columns must be unique for orient='{orient}'.", "ValueError");
@@ -201,6 +202,7 @@ public static class Json
 
     public static string ToJson(Series s, string orient, int precision, int indent, bool forceAscii, Func<double, string> repr)
     {
+        if (s.Values.Kind == Kind.Category) s = new Series(s.Values.Decategorized(), s.Index, s.Name);
         var w = new Writer(indent);
         string K(string key) => Quote(key, forceAscii);
         string C(int i) => Cell(s.Values, i, precision, forceAscii, repr);

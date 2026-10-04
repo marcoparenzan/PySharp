@@ -181,7 +181,7 @@ internal static class PdIO
         string? ff = p.Has(ffI) ? (string)p[ffI]! : null;
         char quote = p.Has(quoteI) ? Ch(p[quoteI], '"') : '"';
         string nl = p.Has(ltI) ? (string)p[ltI]! : Environment.NewLine;
-        var frame = d;
+        var frame = d.Data.Any(c => c.Kind == Kind.Category) ? new DataFrame(d.Data.Select(c => c.Decategorized()), d.Columns, d.Index) : d;
         if (p.Has(colsI)) frame = d.TakeColumns(PdConv.Cells(p[colsI]!).Select(l => d.ColumnPositions(l)[0]).ToList());
         bool index = p.Bool(indexI, true);
         bool header = !(p.Has(headerI) && p[headerI] is false);
@@ -189,7 +189,7 @@ internal static class PdIO
         if (frame.Columns.IsMulti) throw PyErr.NotImplementedError("to_csv with MultiIndex columns");
         string Q(string s) => Csv.Quote(s, sep, quote);
         var sb = new StringBuilder();
-        var idxCols = index ? Enumerable.Range(0, frame.Index.NLevels).Select(frame.Index.Level).ToList() : new List<Column>();
+        var idxCols = index ? Enumerable.Range(0, frame.Index.NLevels).Select(k => frame.Index.Level(k).Decategorized()).ToList() : new List<Column>();
         if (header)
         {
             var cells = new List<string>();

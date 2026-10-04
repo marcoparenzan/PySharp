@@ -1,0 +1,90 @@
+import pandas as pd
+import numpy as np
+
+s = pd.Series(['b', 'a', 'c', 'a', None], dtype='category')
+print(s)
+print(s.dtype, repr(s.dtype), s.cat.categories, s.cat.codes.tolist(), s.cat.ordered)
+print(s.cat.codes)
+o = pd.Series(pd.Categorical(['lo', 'hi', 'mid', 'lo'], categories=['lo', 'mid', 'hi'], ordered=True), name='lvl')
+print(o)
+print(o < 'hi', o.min(), o.max(), o.sort_values().tolist(), o == 'lo')
+print(o >= 'mid')
+print(o.value_counts())
+print(s.value_counts())
+print(s.value_counts(dropna=False))
+df = pd.DataFrame({'c': pd.Categorical(['x', 'y', 'x'], categories=['x', 'y', 'z']), 'v': [1, 2, 3]})
+print(df)
+print(df.dtypes)
+print(df['c'].value_counts())
+print(df['c'].value_counts(sort=False), df['c'].value_counts(normalize=True))
+print(df.groupby('c')['v'].sum())
+print(df.groupby('c', observed=True)['v'].sum())
+print(df.groupby('c', observed=False)['v'].mean())
+print(df.groupby('c', observed=False)['v'].agg(['count', 'sum']))
+print(df.groupby('c', observed=False).size())
+print(df.groupby('c', observed=False, as_index=False)['v'].sum())
+print(df['c'].unique())
+print(df['c'].cat.add_categories('w').cat.categories)
+print(df['c'].cat.remove_unused_categories().cat.categories)
+print(df['c'].cat.remove_categories('z').cat.categories.tolist())
+print(df['c'].cat.rename_categories({'x': 'X'}).tolist())
+print(df['c'].cat.rename_categories(['p', 'q', 'r']).cat.categories.tolist())
+print(df['c'].astype(str).tolist(), df['c'].astype(object).dtype)
+print(pd.get_dummies(df['c']))
+print(df['c'].describe())
+print(pd.Categorical(['a', 'b', 'a']))
+print(pd.Categorical(['a', 'b'], categories=['b', 'a'], ordered=True))
+print(pd.Categorical(['a', 'b', 'a']).codes.tolist(), pd.Categorical(['a', None]).isna().tolist(), len(pd.Categorical(['a', 'b'])))
+print(pd.Categorical(list('abcdefghij') * 3))
+print(s.isna().tolist(), s.fillna('a').tolist())
+try:
+    s.fillna('zz')
+except Exception as e:
+    print(type(e).__name__, e)
+print(s.astype('category').equals(s), s.nunique(), s.count())
+print(s.cat.as_ordered().cat.ordered, s.cat.reorder_categories(['c', 'b', 'a']).cat.categories.tolist())
+print(s.cat.set_categories(['a', 'b']).tolist())
+print(pd.Series([1, 2, 1, 3], dtype='category'))
+print(pd.Series([1.5, 2.5], dtype='category').cat.categories)
+print(pd.Series([True, False, True], dtype='category').cat.categories)
+print(s.sort_values())
+print(s.isin(['a']).tolist(), (s == 'a').tolist(), (s != 'a').tolist())
+print(df.sort_values('c', ascending=False))
+print(df['c'].cat.codes.dtype)
+print(pd.CategoricalDtype(['a', 'b'], ordered=True))
+print(df.astype({'v': 'category'}).dtypes.tolist())
+big = pd.Series(pd.Categorical(list('abcde'), categories=list('abcdefghijklmnopqrstuvwxyz')))
+print(big)
+print(pd.Series(pd.Categorical(range(30))).head(2))
+print(pd.concat([df['c'], df['c']]).dtype, pd.concat([df['c'], pd.Series(['q'], dtype='category')]).dtype)
+print(df.set_index('c').index)
+print(df.set_index('c').loc['x'])
+print(df.pivot_table(index='c', values='v', aggfunc='sum'))
+print(df['c'].str.upper().tolist() if False else 'skip')
+o2 = pd.Series(pd.Categorical(['b', 'a'], categories=['a', 'b'], ordered=True))
+try:
+    pd.Series(['a'], dtype='category').min()
+except TypeError as e:
+    print('TypeError')
+try:
+    o2 + 1
+except TypeError as e:
+    print('TypeError')
+try:
+    pd.Series(['a'], dtype='category') < 'a'
+except TypeError as e:
+    print('TypeError')
+print(df['c'].tolist(), df['c'].iloc[0], df['c'].head(1).tolist())
+df2 = df.copy()
+df2.loc[0, 'c'] = 'y'
+print(df2['c'].tolist())
+try:
+    df2.loc[1, 'c'] = 'nope'
+except TypeError as e:
+    print('TypeError', e)
+print(df.to_csv(index=False, lineterminator='\n'), end='')
+print(df.to_dict('list'))
+print(df['c'].isin(['x', 'z']).tolist(), df['c'].duplicated().tolist(), df['c'].nunique())
+print(df['c'].dropna().shape, pd.Series(pd.Categorical(['a', None])).dropna().tolist())
+print(df.sort_values(['c', 'v']).index.tolist())
+print(df.merge(pd.DataFrame({'c': ['x'], 'w': [9]}), on='c', how='left'))

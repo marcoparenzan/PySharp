@@ -61,8 +61,39 @@ public static class Ops
         return reversed ? Run(op, s, new Operand(a), a.Length) : Run(op, new Operand(a), s, a.Length);
     }
 
+    private static Operand Decat(Operand o) => o.Col is { Kind: Kind.Category } c ? new Operand(c.Decategorized()) : o;
+
+    /// <summary>Comparison of categorical data: equality by value, ordering by category position (ordered categoricals only).</summary>
+    private static Column CategoryOp(BinOp op, Operand a, Operand b, int n)
+    {
+        if (!IsComparison(op)) throw new FrameException($"Categorical cannot perform the operation {Sym(op)}", "TypeError");
+        var ca = a.Col is { Kind: Kind.Category } x ? x : null;
+        var cb = b.Col is { Kind: Kind.Category } y ? y : null;
+        if (ca is not null && cb is not null && (!Column.SameCategories(ca.Categories, cb.Categories) || ca.Ordered != cb.Ordered))
+            throw new FrameException("Categoricals can only be compared if 'categories' are the same.", "TypeError");
+        if (op is BinOp.Eq or BinOp.Ne) return Run(op, Decat(a), Decat(b), n);
+        var cat = (ca ?? cb)!;
+        if (!cat.Ordered) throw new FrameException("Unordered Categoricals can only compare equality or not", "TypeError");
+        int Code(Operand o, int i)
+        {
+            if (o.Col is { Kind: Kind.Category } c) return c.Codes[i];
+            var v = o.Scalar;
+            if (v is null) return -1;
+            for (int k = 0; k < cat.Categories.Length; k++) if (Equals(Column.Key(cat.Categories[k]), Column.Key(v))) return k;
+            throw new FrameException($"Cannot compare a Categorical for op __{op.ToString().ToLowerInvariant()}__ with a scalar, which is not a category.", "TypeError");
+        }
+        var r = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            int p = Code(a, i), q = Code(b, i);
+            r[i] = p >= 0 && q >= 0 && CompareL(op, p, q);
+        }
+        return Column.FromBools(r);
+    }
+
     private static Column Run(BinOp op, Operand a, Operand b, int n)
     {
+        if (a.Kind == Kind.Category || b.Kind == Kind.Category) return CategoryOp(op, a, b, n);
         Kind ka = a.Kind, kb = b.Kind;
         bool numA = ka is Kind.Bool or Kind.Int or Kind.Float, numB = kb is Kind.Bool or Kind.Int or Kind.Float;
         if (numA && numB) return Numeric(op, a, b, n);

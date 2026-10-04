@@ -1,0 +1,199 @@
+0    (0.994, 3.0]
+1      (5.0, 7.0]
+2      (3.0, 5.0]
+3      (3.0, 5.0]
+4      (5.0, 7.0]
+5    (0.994, 3.0]
+dtype: category
+Categories (3, interval[float64, right]): [(0.994, 3.0] < (3.0, 5.0] < (5.0, 7.0]]
+IntervalIndex([(0.994, 3.0], (3.0, 5.0], (5.0, 7.0]], dtype='interval[float64, right]')
+0     (0, 2]
+1    (5, 10]
+2     (2, 5]
+3     (2, 5]
+4    (5, 10]
+5     (2, 5]
+dtype: category
+Categories (3, interval[int64, right]): [(0, 2] < (2, 5] < (5, 10]]
+0     lo
+1     hi
+2    mid
+3    mid
+4     hi
+5    mid
+dtype: category
+Categories (3, str): ['lo' < 'mid' < 'hi']
+0    0
+1    2
+2    1
+3    1
+4    2
+5    1
+dtype: int64
+0     [0, 2)
+1    [5, 10)
+2    [5, 10)
+3     [2, 5)
+4    [5, 10)
+5     [2, 5)
+dtype: category
+Categories (3, interval[int64, left]): [[0, 2) < [2, 5) < [5, 10)]
+0    (0.999, 3.0]
+1      (5.0, 7.0]
+2      (3.0, 5.0]
+3      (3.0, 5.0]
+4      (5.0, 7.0]
+5    (0.999, 3.0]
+dtype: category
+Categories (3, interval[float64, right]): [(0.999, 3.0] < (3.0, 5.0] < (5.0, 7.0]]
+0            NaN
+1    (3.25, 7.5]
+2    (3.25, 7.5]
+3    (3.25, 7.5]
+4    (3.25, 7.5]
+5    (1.5, 3.25]
+dtype: category
+Categories (2, interval[float64, right]): [(1.5, 3.25] < (3.25, 7.5]]
+0    (1.0, 2.5]
+1    (5.5, 7.0]
+2    (4.0, 5.5]
+3    (2.5, 4.0]
+4    (5.5, 7.0]
+5    (2.5, 4.0]
+dtype: category
+Categories (4, interval[float64, right]): [(1.0, 2.5] < (2.5, 4.0] < (4.0, 5.5] < (5.5, 7.0]]
+[(0.991, 5.5], (0.991, 5.5], (5.5, 10.0]]
+Categories (2, interval[float64, right]): [(0.991, 5.5] < (5.5, 10.0]]
+0    (0.0988, 0.5]
+1    (0.0988, 0.5]
+2       (0.9, 1.3]
+3       (0.9, 1.3]
+dtype: category
+Categories (3, interval[float64, right]): [(0.0988, 0.5] < (0.5, 0.9] < (0.9, 1.3]]
+[0 3 8]
+0    (0.999, 3.667]
+1      (5.333, 7.0]
+2    (3.667, 5.333]
+3    (3.667, 5.333]
+4      (5.333, 7.0]
+5    (0.999, 3.667]
+dtype: category
+Categories (3, interval[float64, right]): [(0.999, 3.667] < (3.667, 5.333] < (5.333, 7.0]]
+0    (0.999, 4.5]
+1      (4.5, 7.0]
+2      (4.5, 7.0]
+3    (0.999, 4.5]
+4      (4.5, 7.0]
+5    (0.999, 4.5]
+dtype: category
+Categories (2, interval[float64, right]): [(0.999, 4.5] < (4.5, 7.0]]
+0    a
+1    b
+2    b
+3    a
+4    b
+5    a
+dtype: category
+Categories (2, str): ['a' < 'b']
+0    (-0.001, 2.25]
+1    (-0.001, 2.25]
+2    (-0.001, 2.25]
+3       (2.25, 4.5]
+4       (2.25, 4.5]
+5       (4.5, 6.75]
+6       (4.5, 6.75]
+7       (6.75, 9.0]
+8       (6.75, 9.0]
+9       (6.75, 9.0]
+dtype: category
+Categories (4, interval[float64, right]): [(-0.001, 2.25] < (2.25, 4.5] < (4.5, 6.75] < (6.75, 9.0]]
+0    (0.122, 0.785]
+1    (0.122, 0.785]
+2    (0.785, 1.773]
+3    (0.785, 1.773]
+4    (1.773, 3.142]
+5    (1.773, 3.142]
+dtype: category
+Categories (3, interval[float64, right]): [(0.122, 0.785] < (0.785, 1.773] < (1.773, 3.142]]
+0    0
+1    2
+2    1
+3    1
+4    2
+5    0
+dtype: int64
+(2, 5]     3
+(5, 10]    2
+(0, 2]     1
+Name: count, dtype: int64
+(0, 2]     1
+(2, 5]     3
+(5, 10]    2
+Name: count, dtype: int64
+0           NaN
+1           NaN
+2    (2.0, 5.0]
+3    (2.0, 5.0]
+4           NaN
+5    (2.0, 5.0]
+dtype: category
+Categories (1, interval[int64, right]): [(2, 5]]
+category True
+(0, 2]      1
+(2, 5]     12
+(5, 10]    13
+dtype: int64
+(0, 2]     1
+(2, 5]     3
+(5, 10]    2
+dtype: int64
+   a      bin
+0  1   (0, 3]
+1  7  (3, 10]
+2  5  (3, 10]
+3  4  (3, 10]
+4  6  (3, 10]
+5  3   (0, 3]
+         count  mean
+bin                 
+(0, 3]       2   2.0
+(3, 10]      4   5.5
+bin
+(3, 10]    4
+(0, 3]     2
+Name: count, dtype: int64
+(0, 2] Interval
+0 2 right 1.0 2 True False Interval(0, 2, closed='right')
+[Interval(0, 2, closed='right'), Interval(2, 5, closed='right'), Interval(5, 10, closed='right')]
+category
+ValueError Bin edges must be unique: Index([0, 2, 2, 10], dtype='int64').
+You can drop duplicate edges by setting the 'duplicates' kwarg
+IntervalIndex([(0, 2], (2, 10]], dtype='interval[int64, right]')
+ValueError Bin edges must be unique: Index([1.0, 1.0, 1.0, 1.0], dtype=
+[(0.0, 2.0], (0.0, 2.0], NaN, (2.0, 5.0]]
+Categories (2, interval[int64, right]): [(0, 2] < (2, 5]]
+0     child
+1     child
+2     adult
+3     adult
+4     adult
+5    senior
+6    senior
+dtype: category
+Categories (3, str): ['child' < 'adult' < 'senior']
+adult     3
+child     2
+senior    2
+Name: count, dtype: int64
+        min  max  mean
+grp                   
+child     5   17  11.0
+adult    18   64  39.0
+senior   65   90  77.5
+(-0.001, 19.8]    20
+(19.8, 39.6]      20
+(39.6, 59.4]      20
+(59.4, 79.2]      20
+(79.2, 99.0]      20
+Name: count, dtype: int64
+['low', 'low', 'low', 'mid', 'mid', 'mid', 'mid', 'mid', 'mid', 'high', 'high', 'high']

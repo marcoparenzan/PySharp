@@ -402,6 +402,7 @@ public static class Window
 
     private static bool Same(Column c, int a, int b) => c.Kind switch
     {
+        Kind.Category => c.Codes[a] == c.Codes[b],
         Kind.Int => c.LongAt(a) == c.LongAt(b),
         Kind.Float => c.DoubleAt(a) == c.DoubleAt(b),
         Kind.Bool => c.BoolAt(a) == c.BoolAt(b),

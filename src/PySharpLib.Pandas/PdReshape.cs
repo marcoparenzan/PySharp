@@ -25,7 +25,7 @@ internal static class PdReshape
     private sealed record Block(object? FuncLabel, object? ValueLabel, int ValuePos, object Func);
 
     internal static DataFrame PivotTable(Interp i, DataFrame df, object? values, List<object?> index, List<object?> columns, object? aggfunc,
-        object? fillValue, bool margins, string marginsName, bool dropNa, bool allowDuplicates = true, bool sizeOnly = false)
+        object? fillValue, bool margins, string marginsName, bool dropNa, bool allowDuplicates = true, bool sizeOnly = false, bool observed = true)
     {
         if (index.Count == 0 && columns.Count == 0) throw new FrameException("No group keys passed!");
         var keyLabels = index.Concat(columns).ToList();
@@ -48,7 +48,7 @@ internal static class PdReshape
                 object func = aggfunc is PyDict ad && ad.TryGet(PdConv.FromLabel(vl), out var chosen) ? chosen : f;
                 blocks.Add(new Block(funcIsList ? FuncName(f) : null, vl, df.ColumnPositions(vl)[0], func));
             }
-        var g = new Grouping(keyCols, keyLabels, df.NRows, true, true);
+        var g = new Grouping(keyCols, keyLabels, df.NRows, true, true, observed);
         var st = new GroupByState { Frame = df, G = g, ValueCols = valueLabels.Select(l => df.ColumnPositions(l)[0]).Distinct().ToList() };
         int nIdx = index.Count, nCol = columns.Count;
         // row keys / column keys (sorted unique)
@@ -65,7 +65,7 @@ internal static class PdReshape
                 map[q] = id;
             }
             if (nKeys == 0) return (new List<object?[]> { Array.Empty<object?>() }, new int[parts.Count]);
-            var cols = Enumerable.Range(0, nKeys).Select(c => Column.Infer(uniq.Select(u => u[c]).ToList())).ToList();
+            var cols = Enumerable.Range(0, nKeys).Select(c => Grouping.KeyColumnFor(keyCols[offset + c], uniq.Select(u => u[c]).ToList())).ToList();
             var order = FrameOps.SortPositions(cols, Enumerable.Repeat(true, nKeys).ToList(), true);
             var rank = new int[uniq.Count];
             for (int r = 0; r < order.Length; r++) rank[order[r]] = r;
@@ -124,9 +124,9 @@ internal static class PdReshape
         for (int q = 0; q < labelLevels; q++) colNames.Add(null);
         colNames.AddRange(columns);
         var rowIndex = nIdx == 1
-            ? new FIndex(Column.Infer(rowUniq.Select(r => r[0]).ToList()), index[0])
+            ? new FIndex(Grouping.KeyColumnFor(keyCols[0], rowUniq.Select(r => r[0]).ToList()), index[0])
             : nIdx == 0 ? new FIndex(Column.Infer(new object?[] { sizeOnly ? "size" : "" }.ToList())) : FIndex.MultiFromTuples(rowUniq, index);
-        if (nIdx == 1) rowIndex = new FIndex(KeyColumn(keyCols[0], rowUniq.Select(r => r[0]).ToList()), index[0]);
+        if (nIdx == 1) rowIndex = new FIndex(keyCols[0].Kind == Kind.Category ? Grouping.KeyColumnFor(keyCols[0], rowUniq.Select(r => r[0]).ToList()) : KeyColumn(keyCols[0], rowUniq.Select(r => r[0]).ToList()), index[0]);
 
         if (margins) AddMargins(i, df, blocks, aggCols, g, keyCols, nIdx, nCol, rowUniq, colUniq, rowOf, colOf, ref outCols, ref outLabels, ref rowIndex, marginsName, fill, sizeOnly, valueLevel, nCol == 0 ? 0 : 1);
         var colIndex = new FIndex(Column.Infer(outLabels));
@@ -225,7 +225,7 @@ internal static class PdReshape
                 : new[] { "data", "values", "index", "columns", "aggfunc", "fill_value", "margins", "dropna", "margins_name", "observed", "sort" });
             int o = isMethod ? 0 : 1;
             var df = isMethod ? PdConv.D(a[0]) : PdConv.D(p.Required(0));
-            return PdConv.Wrap(PivotTable(i, df, p[o], Labels(p[o + 1]), Labels(p[o + 2]), p[o + 3], p[o + 4], p.Bool(o + 5, false), p.Has(o + 7) ? (string)p[o + 7]! : "All", p.Bool(o + 6, true)));
+            return PdConv.Wrap(PivotTable(i, df, p[o], Labels(p[o + 1]), Labels(p[o + 2]), p[o + 3], p[o + 4], p.Bool(o + 5, false), p.Has(o + 7) ? (string)p[o + 7]! : "All", p.Bool(o + 6, true), observed: p.Bool(o + 8, true)));
         };
         m.Dict["pivot_table"] = PdClasses.Fn("pivot_table", pivotTable);
         PdClasses.DataFrame.Dict["pivot_table"] = PdClasses.Fn("pivot_table", pivotTable);
@@ -342,8 +342,13 @@ internal static class PdReshape
             (List<Column>, List<object?>) Encode(Column col, string? prefix)
             {
                 var cats = new List<object?>(); var seen = new HashSet<object>();
-                var order = FrameOps.SortPositions(new[] { col }, new[] { true }, true).Where(r => !col.IsNa(r)).ToList();
-                foreach (var r in order) if (seen.Add(Column.Key(col[r])!)) cats.Add(col[r]);
+                if (col.Kind == Kind.Category)
+                    for (int q = 0; q < col.Categories.Length; q++) cats.Add(col.Categories[q]);
+                else
+                {
+                    var order = FrameOps.SortPositions(new[] { col }, new[] { true }, true).Where(r => !col.IsNa(r)).ToList();
+                    foreach (var r in order) if (seen.Add(Column.Key(col[r])!)) cats.Add(col[r]);
+                }
                 if (dropFirst && cats.Count > 0) cats.RemoveAt(0);
                 var outc = new List<Column>(); var labels = new List<object?>();
                 foreach (var c in cats)
@@ -367,7 +372,7 @@ internal static class PdReshape
             }
             var d = PdConv.D(data);
             var encodeCols = p.Has(4) ? Labels(p[4]).Select(l => d.ColumnPositions(l)[0]).ToList()
-                : Enumerable.Range(0, d.NCols).Where(j => d.Data[j].Kind is Kind.Str or Kind.Object).ToList();
+                : Enumerable.Range(0, d.NCols).Where(j => d.Data[j].Kind is Kind.Str or Kind.Object or Kind.Category).ToList();
             var prefixes = p.Has(1) ? (PdConv.IsListLike(p[1]!) ? PdConv.Cells(p[1]!) : Enumerable.Repeat(PdConv.ToCell(p[1]), encodeCols.Count).ToList()) : null;
             var outCols = new List<Column>(); var outLabels = new List<object?>();
             for (int j = 0; j < d.NCols; j++)

@@ -1,0 +1,189 @@
+0      b
+1      a
+2      c
+3      a
+4    NaN
+dtype: category
+Categories (3, str): ['a', 'b', 'c']
+category CategoricalDtype(categories=['a', 'b', 'c'], ordered=False, categories_dtype=str) Index(['a', 'b', 'c'], dtype='str') [1, 0, 2, 0, -1] False
+0    1
+1    0
+2    2
+3    0
+4   -1
+dtype: int8
+0     lo
+1     hi
+2    mid
+3     lo
+Name: lvl, dtype: category
+Categories (3, str): ['lo' < 'mid' < 'hi']
+0     True
+1    False
+2     True
+3     True
+Name: lvl, dtype: bool lo hi ['lo', 'lo', 'mid', 'hi'] 0     True
+1    False
+2    False
+3     True
+Name: lvl, dtype: bool
+0    False
+1     True
+2     True
+3    False
+Name: lvl, dtype: bool
+lvl
+lo     2
+mid    1
+hi     1
+Name: count, dtype: int64
+a    2
+b    1
+c    1
+Name: count, dtype: int64
+a      2
+b      1
+c      1
+NaN    1
+Name: count, dtype: int64
+   c  v
+0  x  1
+1  y  2
+2  x  3
+c    category
+v       int64
+dtype: object
+c
+x    2
+y    1
+z    0
+Name: count, dtype: int64
+c
+x    2
+y    1
+z    0
+Name: count, dtype: int64 c
+x    0.666667
+y    0.333333
+z    0.000000
+Name: proportion, dtype: float64
+c
+x    4
+y    2
+Name: v, dtype: int64
+c
+x    4
+y    2
+Name: v, dtype: int64
+c
+x    2.0
+y    2.0
+z    NaN
+Name: v, dtype: float64
+   count  sum
+c            
+x      2    4
+y      1    2
+z      0    0
+c
+x    2
+y    1
+z    0
+dtype: int64
+   c  v
+0  x  4
+1  y  2
+2  z  0
+['x', 'y']
+Categories (3, str): ['x', 'y', 'z']
+Index(['x', 'y', 'z', 'w'], dtype='str')
+Index(['x', 'y'], dtype='str')
+['x', 'y']
+['X', 'y', 'X']
+['p', 'q', 'r']
+['x', 'y', 'x'] object
+       x      y      z
+0   True  False  False
+1  False   True  False
+2   True  False  False
+count     3
+unique    2
+top       x
+freq      2
+Name: c, dtype: object
+['a', 'b', 'a']
+Categories (2, str): ['a', 'b']
+['a', 'b']
+Categories (2, str): ['b' < 'a']
+[0, 1, 0] [False, True] 2
+['a', 'b', 'c', 'd', 'e', ..., 'f', 'g', 'h', 'i', 'j']
+Length: 30
+Categories (10, str): ['a', 'b', 'c', 'd', ..., 'g', 'h', 'i', 'j']
+[False, False, False, False, True] ['b', 'a', 'c', 'a', 'a']
+TypeError Cannot setitem on a Categorical with a new category (zz), set the categories first
+True 3 4
+True ['c', 'b', 'a']
+['b', 'a', nan, 'a', nan]
+0    1
+1    2
+2    1
+3    3
+dtype: category
+Categories (3, int64): [1, 2, 3]
+Index([1.5, 2.5], dtype='float64')
+Index([False, True], dtype='bool')
+1      a
+3      a
+0      b
+2      c
+4    NaN
+dtype: category
+Categories (3, str): ['a', 'b', 'c']
+[False, True, False, True, False] [False, True, False, True, False] [True, False, True, False, True]
+   c  v
+1  y  2
+0  x  1
+2  x  3
+int8
+category
+[CategoricalDtype(categories=['x', 'y', 'z'], ordered=False, categories_dtype=str), CategoricalDtype(categories=[1, 2, 3], ordered=False, categories_dtype=int64)]
+0    a
+1    b
+2    c
+3    d
+4    e
+dtype: category
+Categories (26, str): ['a', 'b', 'c', 'd', ..., 'w', 'x', 'y', 'z']
+0    0
+1    1
+dtype: category
+Categories (30, int64): [0, 1, 2, 3, ..., 26, 27, 28, 29]
+category str
+CategoricalIndex(['x', 'y', 'x'], categories=['x', 'y', 'z'], ordered=False, dtype='category', name='c')
+   v
+c   
+x  1
+x  3
+   v
+c   
+x  4
+y  2
+skip
+TypeError
+TypeError
+TypeError
+['x', 'y', 'x'] x ['x']
+['y', 'y', 'x']
+TypeError Cannot setitem on a Categorical with a new category (nope), set the categories first
+c,v
+x,1
+y,2
+x,3
+{'c': ['x', 'y', 'x'], 'v': [1, 2, 3]}
+[True, False, True] [False, False, True] 2
+(3,) ['a']
+[0, 2, 1]
+   c  v    w
+0  x  1  9.0
+1  y  2  NaN
+2  x  3  9.0

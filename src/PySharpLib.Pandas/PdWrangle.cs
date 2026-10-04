@@ -410,6 +410,7 @@ internal static class PdWrangle
         {
             var s = S(a[0]);
             var u = s.Values.Take(FrameOps.UniquePositions(s.Values));
+            if (u.Kind == Kind.Category) return PdCategorical.WrapCategorical(u);
             if (Reduce.IsNumeric(u)) return PdArrays.Values(u);
             return new PyList(Enumerable.Range(0, u.Length).Select(x => PdConv.FromCell(u, x)));
         });
@@ -417,6 +418,7 @@ internal static class PdWrangle
         {
             var p = A("value_counts", i, a, k, "normalize", "sort", "ascending", "bins", "dropna");
             var s = S(a[0]);
+            if (s.Values.Kind == Kind.Category) return CategoricalValueCounts(s, p.Bool(0, false), p.Bool(1, true), p.Bool(2, false), p.Bool(4, true));
             var (first, counts) = FrameOps.ValueCounts(s.Values, p.Bool(4, true), p.Bool(1, true), p.Bool(2, false));
             var idx = new FIndex(s.Values.Take(first), s.Name);
             if (p.Bool(0, false))
@@ -454,6 +456,30 @@ internal static class PdWrangle
             if (m is not (PyDict or PyBuiltinFunction or PyFunction)) return Finish(a[0], PdConv.Wrap(s.Rename(PdConv.ToCell(m))), p.Bool(3, false));
             return Finish(a[0], PdConv.Wrap(new Series(s.Values, new FIndex(RenameLabels(i, s.Index, m), s.Index.Name), s.Name)), p.Bool(3, false));
         });
+    }
+
+    /// <summary>value_counts of a categorical Series: every category appears (unused ones with 0), most frequent first, ties in category order.</summary>
+    private static object CategoricalValueCounts(Series s, bool normalize, bool sort, bool ascending, bool dropNa)
+    {
+        var c = s.Values;
+        int k = c.Categories.Length;
+        var counts = new long[k];
+        long nas = 0;
+        foreach (var code in c.Codes) { if (code >= 0) counts[code]++; else nas++; }
+        var order = Enumerable.Range(0, k).ToList();
+        if (sort) order = (ascending ? order.OrderBy(j => counts[j]) : order.OrderByDescending(j => counts[j])).ToList();
+        var codes = order.ToList();
+        var values = order.Select(j => counts[j]).ToList();
+        Column labels = Column.FromCodes(order.ToArray(), c.Categories, c.Ordered);
+        if (!dropNa && nas > 0)
+        {
+            labels = Column.FromCodes(order.Append(-1).ToArray(), c.Categories, c.Ordered);
+            values.Add(nas);
+        }
+        double total = values.Sum();
+        var idx = new FIndex(labels, s.Name);
+        if (normalize) return PdConv.Wrap(new Series(Column.FromDoubles(values.Select(v => v / total).ToArray()), idx, "proportion"));
+        return PdConv.Wrap(new Series(Column.FromLongs(values.ToArray()), idx, "count"));
     }
 
     internal static Column RenameLabels(Interp i, FIndex ix, object mapper)

@@ -420,6 +420,47 @@ public sealed class Generator
         return x.Get(NDArray.FromArray(idx)).Copy();
     }
 
+    /// <summary>numpy <c>choice(p=...)</c>: inverse-CDF sampling (<c>searchsorted(cdf, uniform, side='right')</c>); without replacement the already drawn items get probability 0
+    /// and the draw is repeated for the missing ones, exactly like numpy.</summary>
+    public long[] ChooseIndicesWeighted(long popSize, int count, bool replace, double[] p)
+    {
+        if (p.Length != popSize) throw new NDValueException("'a' and 'p' must have same size");
+        if (p.Any(x => double.IsNaN(x) || x < 0)) throw new NDValueException("probabilities are not non-negative");
+        double sum = p.Sum();
+        if (Math.Abs(sum - 1.0) > Math.Sqrt(2.220446049250313e-16)) throw new NDValueException("Probabilities do not sum to 1. See Notes section of docstring for more information.");
+        long[] Search(double[] weights, int n)
+        {
+            var cdf = new double[weights.Length];
+            double acc = 0;
+            for (int i = 0; i < cdf.Length; i++) { acc += weights[i]; cdf[i] = acc; }
+            double last = cdf[^1];
+            for (int i = 0; i < cdf.Length; i++) cdf[i] /= last;
+            var res = new long[n];
+            for (int k = 0; k < n; k++)
+            {
+                double u = _bits.NextDouble();
+                int lo = 0, hi = cdf.Length;
+                while (lo < hi) { int mid = (lo + hi) / 2; if (cdf[mid] <= u) lo = mid + 1; else hi = mid; }
+                res[k] = lo;
+            }
+            return res;
+        }
+        if (replace) return Search(p, count);
+        if (count > popSize) throw new NDValueException("Cannot take a larger sample than population when 'replace=False'");
+        if (p.Count(x => x > 0) < count) throw new NDValueException("Fewer non-zero entries in p than size");
+        var found = new List<long>();
+        var w = (double[])p.Clone();
+        while (found.Count < count)
+        {
+            if (found.Count > 0) foreach (var f in found) w[f] = 0;
+            var drawn = Search(w, count - found.Count);
+            // keep the first occurrence of every new index, in order of first appearance
+            var seen = new HashSet<long>();
+            foreach (var d in drawn) if (seen.Add(d)) found.Add(d);
+        }
+        return found.ToArray();
+    }
+
     /// <summary>numpy <c>choice</c> over indices <c>[0, popSize)</c>, uniform; the caller maps indices to values.</summary>
     public long[] ChooseIndices(long popSize, int count, bool replace, bool shuffle = true)
     {

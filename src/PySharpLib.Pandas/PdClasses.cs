@@ -32,6 +32,7 @@ internal static class PdClasses
             string s => s,
             long l => l.ToString(),
             double d => PyOps.ReprDouble(d),
+            IntervalValue iv => iv.ToString(),
             PyList l => "[" + string.Join(", ", l.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + "]",
             PyTuple t => "(" + string.Join(", ", t.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + (t.Items.Length == 1 ? ",)" : ")"),
             _ => PyOps.Str(PdConv.Interp!, o),

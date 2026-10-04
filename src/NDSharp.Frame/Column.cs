@@ -10,7 +10,7 @@ namespace NDSharp.Frame;
 
 /// <summary>The storage families of a column. pandas 3 default dtypes: <c>bool</c>, <c>int64</c>, <c>float64</c>,
 /// <c>str</c> (missing = NaN) and <c>object</c> (anything else).</summary>
-public enum Kind : byte { Bool, Int, Float, Str, Object }
+public enum Kind : byte { Bool, Int, Float, Str, Object, Category }
 
 /// <summary>An immutable, typed, one-dimensional block of values. pandas 3 is always copy-on-write, so a column is never
 /// mutated: every update builds a new column and swaps it into its frame.
@@ -27,11 +27,62 @@ public sealed class Column
     private readonly bool[]? _b;
     private readonly string?[]? _s;
     private readonly object?[]? _o;
+    private readonly int[]? _codes;
+    private readonly Column? _cats;
+    private readonly bool _ordered;
 
-    private Column(Kind kind, DType? num, int length, long[]? i = null, double[]? f = null, bool[]? b = null, string?[]? s = null, object?[]? o = null)
+    private Column(Kind kind, DType? num, int length, long[]? i = null, double[]? f = null, bool[]? b = null, string?[]? s = null, object?[]? o = null,
+        int[]? codes = null, Column? cats = null, bool ordered = false)
     {
-        Kind = kind; Num = num; Length = length; _i = i; _f = f; _b = b; _s = s; _o = o;
+        Kind = kind; Num = num; Length = length; _i = i; _f = f; _b = b; _s = s; _o = o; _codes = codes; _cats = cats; _ordered = ordered;
     }
+
+    // ------------------------------------------------------------------------------------------ categorical
+
+    /// <summary>Category codes (-1 = missing); only for <see cref="Kind.Category"/> columns.</summary>
+    public int[] Codes => _codes!;
+    /// <summary>The categories (distinct, never missing) of a categorical column.</summary>
+    public Column Categories => _cats!;
+    public bool Ordered => _ordered;
+
+    public static Column FromCodes(int[] codes, Column categories, bool ordered = false)
+        => new(Kind.Category, null, codes.Length, codes: codes, cats: categories, ordered: ordered);
+
+    /// <summary>Converts to a categorical column. Without explicit categories they are the sorted distinct non-missing values; values outside
+    /// explicit categories become missing.</summary>
+    public static Column ToCategory(Column source, Column? categories = null, bool ordered = false)
+    {
+        if (source.Kind == Kind.Category && categories is null) return source._ordered == ordered ? source : FromCodes(source._codes!, source._cats!, ordered);
+        var values = source.Kind == Kind.Category ? source.Decategorized() : source;
+        Column cats;
+        if (categories is not null) cats = categories;
+        else
+        {
+            var firsts = FrameOps.UniquePositions(values).Where(i => !values.IsNa(i)).ToArray();
+            var uniq = values.Take(firsts);
+            var order = uniq.Length == 0 ? Array.Empty<int>() : FrameOps.SortPositions(new[] { uniq }, new[] { true }, true);
+            cats = uniq.Take(order);
+        }
+        var lookup = new Dictionary<object, int>();
+        for (int i = 0; i < cats.Length; i++) lookup[Key(cats[i]) ?? NaNKey] = i;
+        var codes = new int[values.Length];
+        for (int i = 0; i < codes.Length; i++)
+            codes[i] = values.IsNa(i) ? -1 : lookup.TryGetValue(Key(values[i]) ?? NaNKey, out var c) ? c : -1;
+        return FromCodes(codes, cats, ordered);
+    }
+
+    /// <summary>The values of a categorical column as a plain column of the categories' type (missing as NaN / None).</summary>
+    public Column Decategorized()
+    {
+        if (Kind != Kind.Category) return this;
+        var take = _codes!;
+        if (_cats!.Kind is Kind.Int or Kind.Bool or Kind.Float or Kind.Str or Kind.Object) return _cats.Take(take);
+        return _cats.Take(take);
+    }
+
+    public string CategoriesDTypeName => _cats!.Kind == Kind.Object && _cats.Length > 0 && _cats[0] is IntervalValue iv
+        ? $"interval[{(iv.IsInt ? "int64" : "float64")}, {iv.Closed}]"
+        : _cats.DTypeName;
 
     // ------------------------------------------------------------------------------------------ factories
 
@@ -102,6 +153,7 @@ public sealed class Column
 
     public string DTypeName => Kind switch
     {
+        Kind.Category => "category",
         Kind.Str => "str",
         Kind.Object => "object",
         _ => Num!.Value.ToString().ToLowerInvariant(),
@@ -127,11 +179,13 @@ public sealed class Column
         Kind.Float => _f![i],
         Kind.Bool => _b![i],
         Kind.Str => _s![i],
+        Kind.Category => _codes![i] < 0 ? null : _cats![_codes[i]],
         _ => _o![i],
     };
 
     public bool IsNa(int i) => Kind switch
     {
+        Kind.Category => _codes![i] < 0,
         Kind.Float => double.IsNaN(_f![i]),
         Kind.Str => _s![i] is null,
         Kind.Object => _o![i] is null || (_o[i] is double d && double.IsNaN(d)),
@@ -155,6 +209,7 @@ public sealed class Column
         for (int k = 0; k < n; k++) if (pos[k] < 0) { anyMissing = true; break; }
         switch (Kind)
         {
+            case Kind.Category: { var r = new int[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? -1 : _codes![pos[k]]; return FromCodes(r, _cats!, _ordered); }
             case Kind.Int when !anyMissing: { var r = new long[n]; for (int k = 0; k < n; k++) r[k] = _i![pos[k]]; return FromLongs(r, Num!.Value); }
             case Kind.Int: { var r = new double[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? double.NaN : _i![pos[k]]; return FromDoubles(r); }
             case Kind.Float: { var r = new double[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? double.NaN : _f![pos[k]]; return FromDoubles(r, Num!.Value); }
@@ -175,6 +230,21 @@ public sealed class Column
         if (!broadcast && vals.Count != pos.Count) throw new FrameException($"Length of values ({vals.Count}) does not match length of index ({pos.Count})");
         object? V(int k) => vals[broadcast ? 0 : k];
         int n = pos.Count;
+        if (Kind == Kind.Category)
+        {
+            var lookup = new Dictionary<object, int>();
+            for (int i = 0; i < _cats!.Length; i++) lookup[Key(_cats[i]) ?? NaNKey] = i;
+            var codes = (int[])_codes!.Clone();
+            for (int k = 0; k < n; k++)
+            {
+                var v = V(k);
+                if (v is null || v is double dn && double.IsNaN(dn)) { codes[pos[k]] = -1; continue; }
+                if (!lookup.TryGetValue(Key(v) ?? NaNKey, out int code))
+                    throw new FrameException($"Cannot setitem on a Categorical with a new category ({Formatter.ObjectStr(v)}), set the categories first", "TypeError");
+                codes[pos[k]] = code;
+            }
+            return FromCodes(codes, _cats, _ordered);
+        }
         switch (Kind)
         {
             case Kind.Float when Enumerable.Range(0, n).All(k => V(k) is double or long or null):
@@ -232,6 +302,9 @@ public sealed class Column
     {
         if (parts.Count == 0) return Empty(Kind.Object);
         if (parts.Count == 1) return parts[0];
+        if (parts.All(p => p.Kind == Kind.Category) && parts.All(p => SameCategories(p._cats!, parts[0]._cats!) && p._ordered == parts[0]._ordered))
+            return FromCodes(parts.SelectMany(p => p._codes!).ToArray(), parts[0]._cats!, parts[0]._ordered);
+        if (parts.Any(p => p.Kind == Kind.Category)) parts = parts.Select(p => p.Decategorized()).ToList();
         var kinds = parts.Select(p => p.Kind).Distinct().ToList();
         if (kinds.Count == 1)
         {
@@ -252,6 +325,13 @@ public sealed class Column
     }
 
     /// <summary>Equality of one element, used by uniqueness, groupby and merge: numbers compare by value (1 == 1.0 == True), NaNs equal each other.</summary>
+    public static bool SameCategories(Column a, Column b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (!Equals(Key(a[i]), Key(b[i]))) return false;
+        return true;
+    }
+
     public static object? Key(object? v) => v switch
     {
         null => NaNKey,
