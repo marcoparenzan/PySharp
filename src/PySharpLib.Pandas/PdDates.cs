@@ -662,26 +662,30 @@ internal static class PdDates
 
     private static object Resample(Interp i, object[] a, Dictionary<string, object>? k)
     {
-        var p = A("resample", i, a.Skip(1).ToArray(), k, "rule", "axis", "closed", "label", "convention", "kind", "on", "level", "origin", "offset", "group_keys");
+        var p = A("resample", i, a.Skip(1).ToArray(), k, "rule", "closed", "label", "convention", "on", "level", "origin", "offset", "group_keys");
         object self = a[0];
         bool isSeries = self is PyInstance { Native: Series };
-        var off = OffsetArg(p.Required(0));
-        if (p.Has(8) && !(p[8] is string os && os == "start_day") || p.Has(9)) throw PyErr.NotImplementedError("resample(origin=/offset=)");
         DataFrame frame = isSeries ? PdGroupBy.SeriesFrame((Series)((PyInstance)self).Native!) : PdConv.D(self);
         Column keySource;
         object? keyName;
         var keyPos = new List<int>();
-        if (p.Has(6))
+        if (p.Has(4))
         {
-            var label = PdConv.ToCell(p[6]);
+            var label = PdConv.ToCell(p[4]);
             int pos = frame.ColumnPositions(label)[0];
             keySource = frame.Data[pos]; keyName = label; keyPos.Add(pos);
         }
         else { keySource = frame.Index.Labels; keyName = frame.Index.Name; }
+        if (keySource.Kind == Kind.Period) return ResamplePeriods(self, frame, keySource, keyName, keyPos, isSeries, p);
+        var off = OffsetArg(p.Required(0));
         if (keySource.Kind != Kind.DateTime)
             throw PyErr.TypeError($"Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex, but got an instance of '{(isSeries ? "RangeIndex" : "Index")}'");
-        string? closed = p.Has(2) ? (string)p[2]! : null, label2 = p.Has(3) ? (string)p[3]! : null;
-        var (binLabels, binOfRow, freqText) = BinsFor(keySource, off, closed, label2);
+        string? closed = p.Has(1) ? (string)p[1]! : null, label2 = p.Has(2) ? (string)p[2]! : null;
+        string originName = p.Has(6) && p[6] is string os ? os : "start_day";
+        if (off.IsTick && originName is "end" or "end_day" && off.IsTick) { closed ??= "right"; label2 ??= "right"; }
+        Td? offsetTd = p.Has(7) ? (PdTime.TryTd(p[7], out var otd) ? otd : throw PyErr.ValueError($"invalid offset: {PyOps.Str(i, p[7]!)}")) : null;
+        Ts? originTs = p.Has(6) && p[6] is not string ? (PdTime.TryTs(p[6], out var ots) ? ots : throw PyErr.ValueError("invalid origin")) : null;
+        var (binLabels, binOfRow, freqText) = BinsFor(keySource, off, closed, label2, originName, originTs, offsetTd);
         var unit = keySource.Unit;
         var rowKeys = Column.FromDateTime(binOfRow.Select(b => b < 0 ? DateTimeCore.NaT : binLabels[b]).ToArray(), unit, keySource.Tz);
         var forced = binLabels.Select(l => new object?[] { new Ts(l, unit, keySource.Tz) }).ToList();
@@ -689,20 +693,57 @@ internal static class PdDates
         return PdGroupBy.FromGrouping(self, frame, g, keyPos, isSeries, keySource);
     }
 
+    /// <summary>Resampling a PeriodIndex to a coarser period frequency: every period falls in the one containing it; empty periods in between are kept.</summary>
+    private static object ResamplePeriods(object self, DataFrame frame, Column keySource, object? keyName, List<int> keyPos, bool isSeries, Args p)
+    {
+        var target = PdPeriod.FreqArg(p.Required(0));
+        var src = keySource.PFreq;
+        if (target.Unit > src.Unit) throw PyErr.NotImplementedError("resample: upsampling a PeriodIndex to a finer frequency is not implemented");
+        bool end = p.Has(3) && (string)p[3]! is "end" or "e";
+        var ords = keySource.Ticks.Select(o => o == PeriodCore.NaT ? PeriodCore.NaT : PeriodCore.Asfreq(o, src, target, end)).ToArray();
+        var valid = ords.Where(o => o != PeriodCore.NaT).ToArray();
+        var all = valid.Length == 0 ? Array.Empty<long>() : Enumerable.Range(0, (int)(valid.Max() - valid.Min() + 1)).Select(x => valid.Min() + x).ToArray();
+        var rowKeys = Column.FromPeriod(ords, target);
+        var forced = all.Select(o => new object?[] { new Per(o, target) }).ToList();
+        var g = new Grouping(new[] { rowKeys }, new[] { keyName }, frame.NRows, true, true, true, forced);
+        return PdGroupBy.FromGrouping(self, frame, g, keyPos, isSeries, keySource);
+    }
+
     /// <summary>Resample bins of a datetime column; for tz-aware data calendar rules (days, weeks, months ...) bin the local wall clock, fixed sub-day steps bin absolute time from the first local midnight.</summary>
-    private static (long[] labels, int[] binOfRow, string freq) BinsFor(Column source, DateOffsetSpec off, string? closed, string? label)
+    private static (long[] labels, int[] binOfRow, string freq) BinsFor(Column source, DateOffsetSpec off, string? closed, string? label,
+        string origin = "start_day", Ts? originTs = null, Td? offset = null)
     {
         var zone = source.Tz;
-        if (zone is null) { var b = TimeSeries.ResampleBins(source.Ticks, source.Unit, off, closed, label); return (b.Labels, b.BinOfRow, b.FreqText); }
-        if (PdTz.IsAbsolute(off))
+        var unit = source.Unit;
+        if (origin is not ("start_day" or "start" or "epoch" or "end" or "end_day"))
+            throw PyErr.ValueError($"'origin' should be equal to 'epoch', 'start', 'start_day', 'end', 'end_day' or should be a Timestamp convertible type. Got '{origin}' instead.");
+        long? OriginTicks()
         {
             var valid = source.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
-            long? origin = valid.Length == 0 ? null : zone.FromWall(TimeSeries.NormalizeTicks(zone.ToWall(valid.Min(), source.Unit), source.Unit), source.Unit, "first", "shift_forward");
-            var b = TimeSeries.ResampleBins(source.Ticks, source.Unit, off, closed, label, origin);
+            if (valid.Length == 0) return null;
+            long first = valid.Min();
+            long mid(long t) => zone is null ? TimeSeries.NormalizeTicks(t, unit) : zone.FromWall(TimeSeries.NormalizeTicks(zone.ToWall(t, unit), unit), unit, "first", "shift_forward");
+            long o;
+            if (originTs is Ts ot) o = DateTimeCore.Scale(ot.Ticks, ot.Unit, unit);
+            else o = origin switch { "start" => first, "epoch" => 0, _ => mid(first) };
+            if (offset is Td od) o += DateTimeCore.Scale(od.Ticks, od.Unit, unit);
+            return o;
+        }
+        string? mode = origin is "end" or "end_day" ? origin : null;
+        long offTicks = offset is Td od2 ? DateTimeCore.Scale(od2.Ticks, od2.Unit, unit) : 0;
+        bool customOrigin = origin != "start_day" || originTs is not null || offset is not null;
+        if (zone is null)
+        {
+            var b = TimeSeries.ResampleBins(source.Ticks, unit, off, closed, label, off.IsTick && customOrigin ? OriginTicks() : null, mode, offTicks);
             return (b.Labels, b.BinOfRow, b.FreqText);
         }
-        var wb = TimeSeries.ResampleBins(source.ToWall().Ticks, source.Unit, off, closed, label);
-        return (wb.Labels.Select(l => zone.FromWall(l, source.Unit, "first", "shift_forward")).ToArray(), wb.BinOfRow, wb.FreqText);
+        if (PdTz.IsAbsolute(off))
+        {
+            var b = TimeSeries.ResampleBins(source.Ticks, unit, off, closed, label, OriginTicks(), mode, offTicks);
+            return (b.Labels, b.BinOfRow, b.FreqText);
+        }
+        var wb = TimeSeries.ResampleBins(source.ToWall().Ticks, unit, off, closed, label);
+        return (wb.Labels.Select(l => zone.FromWall(l, unit, "first", "shift_forward")).ToArray(), wb.BinOfRow, wb.FreqText);
     }
 
     /// <summary>The row keys of a <c>pd.Grouper</c> (binned when it has a frequency).</summary>

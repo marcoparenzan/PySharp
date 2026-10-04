@@ -189,6 +189,16 @@ internal static class PdGroupBy
 
     private static Column InferLike(Column original, List<object?> cells)
     {
+        if (original.Nullable && original.Kind != Kind.Str || original.Nullable && cells.All(c => c is string or null or NAValue))
+        {
+            var mask = cells.Select(c => c is null or NAValue || c is double dn && double.IsNaN(dn) && original.Kind != Kind.Float).ToArray();
+            var valid = cells.Where((c, i) => !mask[i]).ToList();
+            if (cells.Count == 0) return Column.Empty(original.Kind);
+            if (valid.All(c => c is long) && valid.Count > 0 && original.Kind is Kind.Int) return Column.MakeNullable(Column.FromLongs(cells.Select(c => c is long l ? l : 0L).ToArray(), original.Num!.Value), mask);
+            if (valid.All(c => c is long or double)) return Column.MakeNullable(Column.FromDoubles(cells.Select(c => c is long l ? l : c is double d ? d : double.NaN).ToArray()), mask);
+            if (valid.All(c => c is bool)) return Column.MakeNullable(Column.FromBools(cells.Select(c => c is true).ToArray()), mask);
+            if (valid.All(c => c is string)) return Column.MakeNullable(Column.FromStrings(cells.Select(c => c as string).ToArray()));
+        }
         if (cells.Count == 0) return Column.Empty(original.Kind == Kind.Category ? Kind.Object : original.Kind);
         if (original.Kind == Kind.Str && cells.All(c => c is string or null || c is double d && double.IsNaN(d)))
             return Column.FromStrings(cells.Select(c => c as string).ToArray());

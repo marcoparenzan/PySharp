@@ -18,9 +18,16 @@ internal static class Cast
     /// strides) into a fresh contiguous buffer of <paramref name="to"/>.</summary>
     public static Array ToBuffer(NDArray src, DType to)
     {
+        if (src.DType.IsTemporal() || to.IsTemporal())
+        {
+            var source = src.DType.IsTemporal() || src.DType == DType.Int64 ? src : src.AsType(DType.Int64);
+            var ticks = Temporal.Convert(source, to);
+            if (to == DType.Int64 || to.IsTemporal()) return ticks;
+            return ToBuffer(new NDArray(DType.Int64, ticks, (int[])src.Shape.Clone()), to);
+        }
         var dst = Array.CreateInstance(to.ClrType(), src.Size);
         if (src.Size == 0) return dst;
-        return src.DType switch
+        return src.DType.Storage() switch
         {
             DType.Bool => From<byte>(MemoryMarshal.Cast<bool, byte>((bool[])src.Buffer).ToArray(), src, to, dst),
             DType.Int8 => From((sbyte[])src.Buffer, src, to, dst),
@@ -41,7 +48,7 @@ internal static class Cast
 
     private static Array From<TS>(TS[] buf, NDArray src, DType to, Array dst) where TS : unmanaged, INumberBase<TS>
     {
-        switch (to)
+        switch (to.Storage())
         {
             case DType.Bool: Loop(buf, src, (bool[])dst); break;
             case DType.Int8: Loop(buf, src, (sbyte[])dst); break;
@@ -168,7 +175,7 @@ internal static class Cast
     public static void StoreBoxed(NDArray a, int pos, object value)
     {
         // Dispatch on dtype, not on the CLR array type (byte[] is also an sbyte[], uint[] an int[], ...).
-        switch (a.DType)
+        switch (a.DType.Storage())
         {
             case DType.Bool: ((bool[])a.Buffer)[pos] = Boxed<bool>(value); break;
             case DType.Int8: ((sbyte[])a.Buffer)[pos] = Boxed<sbyte>(value); break;

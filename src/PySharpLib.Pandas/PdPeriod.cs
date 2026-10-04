@@ -40,10 +40,10 @@ internal static class PdPeriod
             PUnit.Month => "ME",
             _ => f.Name,
         };
-        return DateOffsetSpec.Parse(name).WithN(n);
+        return DateOffsetSpec.Parse(name).WithN(n * f.Mult);
     }
 
-    public static object WrapDiff(PerDiff d) => d.IsNa ? PdTime.NaT : PdTime.WrapOffset(OffsetFor(d.Freq, (int)d.N));
+    public static object WrapDiff(PerDiff d) => d.IsNa ? PdTime.NaT : PdTime.WrapOffset(OffsetFor(d.Freq.Base, (int)d.N));
 
     private static PyRaise Incompatible(string msg) => PyErr.Raise(IncompatibleFrequency, msg);
 
@@ -71,12 +71,13 @@ internal static class PdPeriod
     private static PeriodFreq FromOffset(DateOffsetSpec spec)
     {
         string text = spec.FreqString;
+        int mult = spec.N;
         text = text.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
-        if (text.StartsWith("ME")) return PeriodFreq.Of(PUnit.Month);
-        if (text.StartsWith("MS")) return PeriodFreq.Of(PUnit.Month);
-        if (text.StartsWith("YE") || text.StartsWith("YS")) return PeriodFreq.Parse("Y" + text.Substring(2));
-        if (text.StartsWith("QE") || text.StartsWith("QS")) return PeriodFreq.Parse("Q" + text.Substring(2));
-        return PeriodFreq.Parse(text);
+        string Mult(string baseName) => mult > 1 ? mult + baseName : baseName;
+        if (text.StartsWith("ME") || text.StartsWith("MS")) return PeriodFreq.Parse(Mult("M"));
+        if (text.StartsWith("YE") || text.StartsWith("YS")) return PeriodFreq.Parse(Mult("Y" + text.Substring(2)));
+        if (text.StartsWith("QE") || text.StartsWith("QS")) return PeriodFreq.Parse(Mult("Q" + text.Substring(2)));
+        return PeriodFreq.Parse(Mult(text));
     }
 
     // ------------------------------------------------------------------ conversion helpers
@@ -205,10 +206,10 @@ internal static class PdPeriod
         }
         long? Steps(Per x, object other, int sign)
         {
-            if (other is BigInteger n) return sign * (long)n;
+            if (other is BigInteger n) return sign * (long)n * x.Freq.Mult;
             if (other is PyInstance { Native: DateOffsetSpec off })
             {
-                var mine = OffsetFor(x.Freq);
+                var mine = OffsetFor(x.Freq.Base);
                 if (off.WithN(1).FreqString != mine.FreqString) throw Incompatible($"Input has different freq={PdTime.OffsetText(off)} from Period(freq={x.Freq.Name})");
                 return sign * off.N;
             }
@@ -278,10 +279,10 @@ internal static class PdPeriod
         if (start is null && end is null) throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified");
         int? periods = p.IntOrNull(2);
         long s0, n;
-        if (start is Per sp && end is Per ep) { s0 = sp.Ordinal; n = ep.Ordinal - sp.Ordinal + 1; if (periods is not null) throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified"); }
+        if (start is Per sp && end is Per ep) { s0 = sp.Ordinal; n = (ep.Ordinal - sp.Ordinal) / freq.Mult + 1; if (periods is not null) throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified"); }
         else if (start is Per sp2) { s0 = sp2.Ordinal; n = periods ?? throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified"); }
-        else { n = periods ?? throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified"); s0 = end!.Value.Ordinal - n + 1; }
-        var ords = Enumerable.Range(0, (int)Math.Max(0, n)).Select(x => s0 + x).ToArray();
+        else { n = periods ?? throw PyErr.ValueError("Of the three parameters: start, end, and periods, exactly two must be specified"); s0 = end!.Value.Ordinal - (n - 1) * freq.Mult; }
+        var ords = Enumerable.Range(0, (int)Math.Max(0, n)).Select(x => s0 + x * freq.Mult).ToArray();
         return new FIndex(Column.FromPeriod(ords, freq), p.Has(4) ? PdConv.ToCell(p[4]) : null);
     }
 
@@ -491,7 +492,7 @@ internal static class PdPeriod
             var ix = Ix(a[0]);
             if (ix.Labels.Kind != Kind.Period) return i.Call(prevShift!, a, k);
             int n = A("shift", i, a.Skip(1).ToArray(), k, "periods").Int(0, 1);
-            return PdConv.Wrap(new FIndex(Column.FromPeriod(ix.Labels.Ticks.Select(o => o == PeriodCore.NaT ? o : o + n).ToArray(), ix.Labels.PFreq), ix.Name));
+            return PdConv.Wrap(new FIndex(Column.FromPeriod(ix.Labels.Ticks.Select(o => o == PeriodCore.NaT ? o : o + n * ix.Labels.PFreq.Mult).ToArray(), ix.Labels.PFreq), ix.Name));
         });
     }
 }

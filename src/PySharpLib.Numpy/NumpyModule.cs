@@ -53,6 +53,8 @@ public static class NumpyModule
         foreach (var dt in DTypes.All)
             m.Dict[dt == DType.Bool ? "bool_" : dt.Name()] = Classes.ScalarClass(dt);
         m.Dict["bool"] = Classes.ScalarClass(DType.Bool);
+        m.Dict["datetime64"] = Classes.DateTime64Class;
+        m.Dict["timedelta64"] = Classes.TimeDelta64Class;
         foreach (var (alias, dt) in new[]
         {
             ("int_", DType.Int64), ("intp", DType.Int64), ("int_", DType.Int64), ("uint", DType.UInt64), ("uintp", DType.UInt64),

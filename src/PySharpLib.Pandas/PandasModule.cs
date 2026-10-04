@@ -88,6 +88,8 @@ internal static class PandasModule
         PdDates.Install(m);
         PdPeriod.Install(m);
         PdTz.Install(m);
+        PdNullable.Install(m);
+        PdMissing.Install();
         PdMerge.Install(m);
         PdReshape.Install(m);
         PdIO.Install(m);
@@ -102,7 +104,7 @@ internal static class PandasModule
 
 internal static class PdFunctions
 {
-    private static bool CellIsNa(object? c) => c is null || (c is double x && double.IsNaN(x));
+    private static bool CellIsNa(object? c) => c is null || c is NAValue || (c is double x && double.IsNaN(x));
 
     private static Column NaMask(Column c, bool negate)
         => Column.FromBools(Enumerable.Range(0, c.Length).Select(i => c.IsNa(i) != negate).ToArray());

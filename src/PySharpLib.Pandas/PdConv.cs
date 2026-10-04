@@ -36,6 +36,7 @@ internal static class PdConv
             case PyInstance { Native: ScalarBox }:
             {
                 var nd = Conv.TryUnwrap(v)!;
+                if (nd.DType.IsTemporal()) return PdTime.FromNumpyScalar(nd);
                 var x = nd.GetAt(0);
                 return x switch { bool b => b, double d => d, float f => (double)f, Half h => (double)h, ulong u => (double)u, Complex c => c, _ => Convert.ToInt64(x) };
             }
@@ -53,6 +54,7 @@ internal static class PdConv
         Td t => PdTime.Wrap(t),
         Per p => PdPeriod.Wrap(p),
         PerDiff pd => PdPeriod.WrapDiff(pd),
+        NAValue => PdNullable.NA,
         bool or double or string => v,
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         _ => v,
@@ -68,6 +70,7 @@ internal static class PdConv
         Ts t => PdTime.Wrap(t),
         Td t => PdTime.Wrap(t),
         Per p => PdPeriod.Wrap(p),
+        NAValue => PdNullable.NA,
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         double d when double.IsNaN(d) => d,
         _ => v,
@@ -110,6 +113,13 @@ internal static class PdConv
     public static Column FromNd(NDArray nd)
     {
         if (nd.Ndim != 1) throw PyErr.ValueError("Data must be 1-dimensional");
+        if (nd.DType.IsTemporal())
+        {
+            var unit = nd.DType.TemporalUnit() switch { "D" => DateUnit.Second, "s" => DateUnit.Second, "ms" => DateUnit.Milli, "us" => DateUnit.Micro, _ => DateUnit.Nano };
+            var raw = nd.ToArray<long>();
+            if (nd.DType.TemporalUnit() == "D") raw = raw.Select(t => t == long.MinValue ? t : t * 86400).ToArray();
+            return nd.DType.IsDateTime() ? Column.FromDateTime(raw, unit) : Column.FromTimedelta(raw, unit);
+        }
         switch (nd.DType)
         {
             case DType.Bool: return Column.FromBools(nd.ToArray<bool>());
@@ -153,6 +163,16 @@ internal static class PdConv
 
     public static Column AsType(Column c, object dtype)
     {
+        if (PdCategorical.AsCatDtype(dtype) is null)
+        {
+            string nm0 = DTypeName(dtype);
+            if (PdNullable.IsNullableName(nm0)) return PdNullable.ToNullable(c, nm0);
+            if (c.Nullable)
+            {
+                string target = nm0 switch { "int" => "int64", "float" => "float64", "str" or "category" => nm0, _ => nm0 };
+                if (target != "category") return AsType(PdNullable.FromNullable(c, target is "str" or "object" or "bool" or "float64" or "float32" ? target : "int64"), dtype);
+            }
+        }
         if (PdCategorical.AsCatDtype(dtype) is { } cd) return Column.ToCategory(c.Kind == Kind.Category ? c.Decategorized() : c, cd.Categories, cd.Ordered);
         string name = DTypeName(dtype);
         if (name == "category") return Column.ToCategory(c);
@@ -228,6 +248,7 @@ internal static class PdConv
 
     private static string Fmt(Column c, int i) => c.Kind switch
     {
+        _ when c.Nullable && c.IsNa(i) => "nan",
         Kind.Period => PeriodCore.Format(c.Ticks[i], c.PFreq),
         Kind.DateTime => c.Tz is { } z ? DateTimeCore.FormatAware(c.Ticks[i], c.Unit, z) : DateTimeCore.FormatTimestamp(c.Ticks[i], c.Unit),
         Kind.Timedelta => DateTimeCore.FormatTimedelta(c.Ticks[i], c.Unit),
@@ -264,7 +285,7 @@ internal static class PdConv
                 {
                     "int" or "i8" or "int_" => "int64", "float" or "f8" or "double" => "float64", "f4" => "float32", "i4" => "int32", "i2" => "int16", "i1" => "int8",
                     "u1" => "uint8", "u2" => "uint16", "u4" => "uint32", "u8" => "uint64",
-                    "str" or "string" or "U" => "str", "O" or "object" => "object", "?" or "bool" => "bool", _ => s,
+                    "str" or "U" => "str", "O" or "object" => "object", "?" or "bool" => "bool", _ => s,
                 };
             case PyBuiltinFunction { Name: "int" }: return "int64";
             case PyBuiltinFunction { Name: "float" }: return "float64";
@@ -291,10 +312,12 @@ internal static class PdConv
 
     public static object WrapDType(Column c) => c.Kind switch
     {
+        _ when c.Nullable => PdDType.Nullable(c.DTypeName),
         Kind.Str => PdDType.StrInstance,
         Kind.Object => PdDType.ObjectInstance,
         Kind.Category => PdCategorical.WrapDType(c),
         Kind.DateTime or Kind.Timedelta or Kind.Period => PdDType.Time(c.DTypeName),
+        _ when c.Nullable => PdDType.Nullable(c.DTypeName),
         _ => Classes.DTypeObject(c.Num!.Value),
     };
 
@@ -326,6 +349,14 @@ internal sealed class PdDType
     public static readonly PyClass ObjectDtypeClass = new("dtype", new List<PyClass>());
     public static readonly PyClass TimeDtypeClass = new("dtype", new List<PyClass>());
     public static PyInstance Time(string name) => new(TimeDtypeClass) { Native = new PdDType(name) };
+    public static readonly PyClass NullableDtypeClass = new("ExtensionDtype", new List<PyClass>());
+    public static PyInstance Nullable(string name) => new(NullableDtypeClass) { Native = new PdDType(name) };
+    private static string NullableRepr(string name) => name switch
+    {
+        "boolean" => "BooleanDtype",
+        "string" => "<StringDtype(storage='python', na_value=<NA>)>",
+        _ => name + "Dtype()",
+    };
     public static readonly PyInstance StrInstance;
     public static readonly PyInstance ObjectInstance;
 
@@ -335,10 +366,10 @@ internal sealed class PdDType
     {
         StrInstance = new PyInstance(StringDtypeClass) { Native = new PdDType("str") };
         ObjectInstance = new PyInstance(ObjectDtypeClass) { Native = new PdDType("object") };
-        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(storage='python', na_value=nan)>"), (ObjectDtypeClass, "dtype('O')"), (TimeDtypeClass, (string?)null) })
+        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(storage='python', na_value=nan)>"), (ObjectDtypeClass, "dtype('O')"), (TimeDtypeClass, (string?)null), (NullableDtypeClass, (string?)null) })
         {
             var r = repr;
-            cls.Dict["__repr__"] = new PyBuiltinFunction("dtype.__repr__", (_, a, _) => r ?? TimeRepr(((PdDType)((PyInstance)a[0]).Native!).Name));
+            cls.Dict["__repr__"] = new PyBuiltinFunction("dtype.__repr__", (_, a, _) => r ?? (((PyInstance)a[0]).Class == NullableDtypeClass ? NullableRepr(((PdDType)((PyInstance)a[0]).Native!).Name) : TimeRepr(((PdDType)((PyInstance)a[0]).Native!).Name)));
             cls.Dict["__str__"] = new PyBuiltinFunction("dtype.__str__", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name);
             cls.Dict["__hash__"] = new PyBuiltinFunction("dtype.__hash__", (_, a, _) => new BigInteger(((PdDType)((PyInstance)a[0]).Native!).Name.GetHashCode()));
             cls.Dict["__eq__"] = new PyBuiltinFunction("dtype.__eq__", (_, a, _) =>
@@ -352,7 +383,7 @@ internal sealed class PdDType
                 try { return PdConv.DTypeName(a[1]) != me; } catch (PyRaise) { return true; }
             });
             cls.Dict["name"] = new PyProperty { Getter = new PyBuiltinFunction("name", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name) };
-            cls.Dict["kind"] = new PyProperty { Getter = new PyBuiltinFunction("kind", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name is var nm && nm == "str" ? "T" : nm.StartsWith("datetime") ? "M" : nm.StartsWith("timedelta") ? "m" : "O") };
+            cls.Dict["kind"] = new PyProperty { Getter = new PyBuiltinFunction("kind", (_, a, _) => ((PdDType)((PyInstance)a[0]).Native!).Name is var nm && nm == "str" ? "T" : nm.StartsWith("datetime") ? "M" : nm.StartsWith("timedelta") ? "m" : nm.StartsWith("UInt") ? "u" : nm.StartsWith("Int") ? "i" : nm.StartsWith("Float") ? "f" : nm == "boolean" ? "b" : "O") };
         }
     }
 }

@@ -36,7 +36,7 @@ public static partial class np
         if (n > 1)
         {
             // Dispatch on dtype, never on the CLR array type (byte[] is also an sbyte[]).
-            switch (data.DType)
+            switch (data.DType.Storage())
             {
                 case DType.Int8: SortLines((sbyte[])data.Buffer, n); break;
                 case DType.UInt8: SortLines((byte[])data.Buffer, n); break;
@@ -70,7 +70,7 @@ public static partial class np
         var data = moved.Copy();
         int n = data.Shape[^1];
         var result = new long[data.Size];
-        switch (data.DType)
+        switch (data.DType.Storage())
         {
             case DType.Int8: ArgSortLines((sbyte[])data.Buffer, n, result); break;
             case DType.UInt8: ArgSortLines((byte[])data.Buffer, n, result); break;

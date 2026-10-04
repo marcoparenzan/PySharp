@@ -214,14 +214,60 @@ public static class Ops
             var per = fa is not null ? a : b; var num = fa is not null ? b : a; var f = (fa ?? fb)!;
             if (num.Kind is not (Kind.Int or Kind.Bool) || (op == BinOp.Sub && fa is null)) throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(fa is not null ? "Period" : Name(a))}' and '{(fb is not null ? "Period" : Name(b))}'", "TypeError");
             var r = new long[n];
-            for (int i = 0; i < n; i++) { long x = Ord(per, i); r[i] = x == PeriodCore.NaT || num.IsNa(i) ? PeriodCore.NaT : op == BinOp.Add ? x + num.L(i) : x - num.L(i); }
+            for (int i = 0; i < n; i++) { long x = Ord(per, i); r[i] = x == PeriodCore.NaT || num.IsNa(i) ? PeriodCore.NaT : op == BinOp.Add ? x + num.L(i) * f.Mult : x - num.L(i) * f.Mult; }
             return Column.FromPeriod(r, f);
         }
         throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(fa is not null ? "Period" : Name(a))}' and '{(fb is not null ? "Period" : Name(b))}'", "TypeError");
     }
 
+    private static bool IsNullableOperand(Operand o) => o.Col is { Nullable: true } || o.Scalar is NAValue;
+
+    /// <summary>Arithmetic, comparison and logic with <c>pd.NA</c>: computed on placeholders, then the missing positions are restored (with Kleene logic for <c>&amp;</c>, <c>|</c> and the <c>NA ** 0</c> / <c>1 ** NA</c> exceptions).</summary>
+    private static Column NullableOp(BinOp op, Operand a, Operand b, int n)
+    {
+        bool[] MaskOf(Operand o) => o.Scalar is NAValue ? Enumerable.Repeat(true, n).ToArray() : o.Col is not null ? o.Col.NaMask() : o.Scalar is null || o.Scalar is double d && double.IsNaN(d) ? Enumerable.Repeat(true, n).ToArray() : new bool[n];
+        Operand Plain(Operand o, Operand other)
+        {
+            if (o.Scalar is NAValue) return new Operand(other.Kind == Kind.Str ? "" : other.Kind == Kind.Bool ? false : (object)1L, n);
+            return o.Col is { Nullable: true } c ? new Operand(c.FillPlaceholder()) : o;
+        }
+        var ma = MaskOf(a); var mb = MaskOf(b);
+        var pa = Plain(a, b); var pb = Plain(b, a);
+        var r = Run(op, pa, pb, n);
+        var mask = new bool[n];
+        for (int i = 0; i < n; i++) mask[i] = ma[i] || mb[i];
+        if (op is BinOp.And or BinOp.Or && r.Kind == Kind.Bool)
+        {
+            bool Val(Operand o, int i) => o.Col is not null ? o.Col.BoolAt(i) : o.Scalar is bool bv && bv;
+            for (int i = 0; i < n; i++)
+            {
+                bool va = Val(pa, i), vb = Val(pb, i);
+                mask[i] = op == BinOp.And
+                    ? (ma[i] && mb[i]) || (ma[i] && !mb[i] && vb) || (mb[i] && !ma[i] && va)
+                    : (ma[i] && mb[i]) || (ma[i] && !mb[i] && !vb) || (mb[i] && !ma[i] && !va);
+            }
+            var vals = new bool[n];
+            for (int i = 0; i < n; i++) vals[i] = op == BinOp.And ? Val(pa, i) && Val(pb, i) && !mask[i] : (Val(pa, i) && !ma[i]) || (Val(pb, i) && !mb[i]);
+            return Column.MakeNullable(Column.FromBools(vals), mask);
+        }
+        if (op == BinOp.Pow && r.Kind is Kind.Int or Kind.Float)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                if (ma[i] && !mb[i] && pb.D(i) == 0) mask[i] = false;      // NA ** 0 == 1
+                else if (mb[i] && !ma[i] && pa.D(i) == 1) mask[i] = false;  // 1 ** NA == 1
+            }
+        }
+        if (r.Kind is Kind.Int or Kind.Float or Kind.Bool or Kind.Str)
+        {
+            return Column.MakeNullable(r, mask);
+        }
+        return r;
+    }
+
     private static Column Run(BinOp op, Operand a, Operand b, int n)
     {
+        if (IsNullableOperand(a) || IsNullableOperand(b)) return NullableOp(op, a, b, n);
         if (a.Kind == Kind.Period || b.Kind == Kind.Period) return PeriodOp(op, a, b, n);
         if (a.Kind is Kind.DateTime or Kind.Timedelta || b.Kind is Kind.DateTime or Kind.Timedelta) return TimeOp(op, a, b, n);
         if (a.Kind == Kind.Category || b.Kind == Kind.Category) return CategoryOp(op, a, b, n);
@@ -425,7 +471,9 @@ public static class Ops
 
     // ------------------------------------------------------------------------------------------ unary
 
-    public static Column Negate(Column c) => c.Kind switch
+    private static Column Keep(Column c, Func<Column, Column> f) => c.Nullable ? Column.MakeNullable(f(c.FillPlaceholder()), c.NaMask()) : f(c);
+
+    public static Column Negate(Column c) => c.Nullable ? Keep(c, Negate) : c.Kind switch
     {
         Kind.Timedelta => Column.FromTimedelta(c.Ticks.Select(t => t == DateTimeCore.NaT ? t : -t).ToArray(), c.Unit),
         Kind.Int => Column.FromLongs(c.Longs.Select(x => -x).ToArray(), c.Num!.Value),
@@ -434,7 +482,7 @@ public static class Ops
         _ => throw new FrameException($"bad operand type for unary -: '{c.DTypeName}'", "TypeError"),
     };
 
-    public static Column Abs(Column c) => c.Kind switch
+    public static Column Abs(Column c) => c.Nullable ? Keep(c, Abs) : c.Kind switch
     {
         Kind.Timedelta => Column.FromTimedelta(c.Ticks.Select(t => t == DateTimeCore.NaT ? t : Math.Abs(t)).ToArray(), c.Unit),
         Kind.Int => Column.FromLongs(c.Longs.Select(Math.Abs).ToArray(), c.Num!.Value),
@@ -443,7 +491,7 @@ public static class Ops
         _ => throw new FrameException($"bad operand type for abs(): '{c.DTypeName}'", "TypeError"),
     };
 
-    public static Column Invert(Column c) => c.Kind switch
+    public static Column Invert(Column c) => c.Nullable ? Keep(c, Invert) : c.Kind switch
     {
         Kind.Bool => Column.FromBools(c.Bools.Select(x => !x).ToArray()),
         Kind.Int => Column.FromLongs(c.Longs.Select(x => ~x).ToArray(), c.Num!.Value),

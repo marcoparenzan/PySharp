@@ -90,6 +90,7 @@ public sealed class Grouping
         if (source.Kind == Kind.DateTime) return Column.FromDateTime(values.Select(v => v is Ts t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit, source.Tz);
         if (source.Kind == Kind.Timedelta) return Column.FromTimedelta(values.Select(v => v is Td t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit);
         var inferred = Column.Infer(values);
+        if (source.Nullable && inferred.Kind == source.Kind) return Column.MakeNullable(inferred.Kind == Kind.Int && source.Num is { } sn ? Column.FromLongs(inferred.Longs, sn) : inferred, source.Kind == Kind.Str ? null : new bool[inferred.Length]);
         return source.Kind == Kind.Str && inferred.Kind != Kind.Str ? Column.FromStrings(values.Select(v => v as string).ToArray()) : inferred;
     }
 

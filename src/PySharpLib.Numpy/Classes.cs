@@ -25,6 +25,9 @@ internal static class Classes
     public static readonly PyClass DTypeClass = new("dtype", new List<PyClass>());
     public static readonly PyClass NdArray = new("ndarray", new List<PyClass>());
 
+    public static PyClass DateTime64Class = null!;
+    public static PyClass TimeDelta64Class = null!;
+
     private static readonly Dictionary<DType, PyClass> ScalarClasses = new();
     private static readonly Dictionary<PyClass, DType> ScalarToDType = new();
     private static readonly Dictionary<DType, PyInstance> DTypeObjects = new();
@@ -53,6 +56,18 @@ internal static class Classes
             ScalarClasses[dt] = cls;
             ScalarToDType[cls] = dt;
         }
+
+        // datetime64 / timedelta64: one scalar class each, whatever the unit
+        var datetimeClass = new PyClass("datetime64", new List<PyClass> { Generic });
+        var timedeltaClass = new PyClass("timedelta64", new List<PyClass> { SignedInteger });
+        foreach (var dt in DTypes.Temporal)
+        {
+            ScalarClasses[dt] = dt.IsDateTime() ? datetimeClass : timedeltaClass;
+        }
+        ScalarToDType[datetimeClass] = DType.DateTime64Ns;
+        ScalarToDType[timedeltaClass] = DType.TimeDelta64Ns;
+        DateTime64Class = datetimeClass;
+        TimeDelta64Class = timedeltaClass;
 
         // Results of numpy operations that are float64/int64/bool are plain Python values (see
         // Conv.Scalarize), so the numpy scalar classes claim them for isinstance.
@@ -130,7 +145,7 @@ internal static class Classes
 
     private static void BuildScalarClasses()
     {
-        foreach (var (dt, cls) in ScalarClasses)
+        foreach (var (dt, cls) in ScalarClasses.Where(e => !e.Key.IsTemporal()))
         {
             var dtype = dt;
             cls.Dict["__new__"] = Native.Fn($"{cls.Name}.__new__", (interp, a, kw) =>
@@ -144,11 +159,48 @@ internal static class Classes
             });
             cls.Dict["__init__"] = new PyBuiltinFunction($"{cls.Name}.__init__", (_, _, _) => PyNone.Instance);
         }
+        // np.datetime64(value[, unit]) and np.timedelta64(value[, unit])
+        DateTime64Class.Dict["__new__"] = Native.Fn("datetime64.__new__", (_, a, kw) =>
+        {
+            string? unit = a.Length > 2 && a[2] is string us ? us : null;
+            var v = a.Length > 1 ? a[1] : "NaT";
+            if (v is PyInstance { Native: ScalarBox sb0 } && sb0.Array.DType.IsDateTime())
+            {
+                var src = sb0.Array;
+                return Conv.Scalarize(unit is null ? src : src.AsType(DTypes.DateTime64Of(unit)));
+            }
+            if (v is string s)
+            {
+                unit ??= s.Trim().Equals("NaT", StringComparison.OrdinalIgnoreCase) ? "ns" : Temporal.UnitOfText(s);
+                var dtype = DTypes.DateTime64Of(unit);
+                var ticks = Temporal.ParseDateTime(s, dtype) ?? throw PyErr.ValueError($"Error parsing datetime string \"{s}\" at position 0");
+                return Conv.Scalarize(new NDArray(dtype, new[] { ticks }, Array.Empty<int>()));
+            }
+            if (v is BigInteger bi)
+            {
+                var dtype = DTypes.DateTime64Of(unit ?? throw PyErr.ValueError("Converting an integer to a NumPy datetime requires a specified unit"));
+                return Conv.Scalarize(new NDArray(dtype, new[] { (long)bi }, Array.Empty<int>()));
+            }
+            throw PyErr.TypeError($"Cannot convert {PyOps.TypeName(v)} to a numpy datetime64");
+        });
+        TimeDelta64Class.Dict["__new__"] = Native.Fn("timedelta64.__new__", (_, a, kw) =>
+        {
+            if (a.Length > 1 && a[1] is PyInstance { Native: ScalarBox sbt } && sbt.Array.DType.IsTimeDelta())
+                return Conv.Scalarize(a.Length > 2 && a[2] is string u2 ? sbt.Array.AsType(DTypes.TimeDelta64Of(u2)) : sbt.Array);
+            long value = a.Length > 1 && a[1] is BigInteger b ? (long)b : a.Length > 1 && a[1] is string st && st.Trim().Equals("NaT", StringComparison.OrdinalIgnoreCase) ? Temporal.NaT : throw PyErr.TypeError("timedelta64 needs an integer value");
+            string unit = a.Length > 2 && a[2] is string us ? us : "ns";
+            return Conv.Scalarize(new NDArray(DTypes.TimeDelta64Of(unit), new[] { value }, Array.Empty<int>()));
+        });
+        DateTime64Class.Dict["__init__"] = new PyBuiltinFunction("datetime64.__init__", (_, _, _) => PyNone.Instance);
+        TimeDelta64Class.Dict["__init__"] = new PyBuiltinFunction("timedelta64.__init__", (_, _, _) => PyNone.Instance);
+
         // Shared scalar behaviour lives on `generic`, so every numpy scalar class inherits it.
         Operators.Install(Generic);
         Generic.Dict["__repr__"] = Native.Fn("generic.__repr__", (_, a, _) =>
         {
             var nd = Conv.ND(a[0]);
+            if (nd.DType.IsDateTime()) return $"np.datetime64('{ArrayFormat.ScalarStr(nd.GetAt(0), nd.DType)}')";
+            if (nd.DType.IsTimeDelta()) return (long)nd.GetAt(0) == Temporal.NaT ? "np.timedelta64('NaT')" : $"np.timedelta64({nd.GetAt(0)},'{nd.DType.TemporalUnit()}')";
             return $"np.{nd.DType.Name()}({ArrayFormat.ScalarStr(nd.GetAt(0), nd.DType)})";
         });
         Generic.Dict["__str__"] = Native.Fn("generic.__str__", (_, a, _) =>

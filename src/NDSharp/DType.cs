@@ -24,6 +24,21 @@ public enum DType : byte
     Float64,
     Complex64,
     Complex128,
+    // datetime64 / timedelta64: 64-bit tick counts (long.MinValue is NaT) in days, seconds, milli-, micro- or nanoseconds
+    DateTime64D,
+    DateTime64H,
+    DateTime64Min,
+    DateTime64S,
+    DateTime64Ms,
+    DateTime64Us,
+    DateTime64Ns,
+    TimeDelta64D,
+    TimeDelta64H,
+    TimeDelta64Min,
+    TimeDelta64S,
+    TimeDelta64Ms,
+    TimeDelta64Us,
+    TimeDelta64Ns,
 }
 
 /// <summary>Static facts about <see cref="DType"/>s and numpy's type-promotion rules.</summary>
@@ -41,7 +56,30 @@ public static class DTypes
 
     public static readonly IReadOnlyList<DType> All = PromotionOrder;
 
-    public static string Name(this DType d) => d switch
+    /// <summary>The datetime64 / timedelta64 dtypes (kept out of <see cref="All"/>: they take no part in numeric promotion).</summary>
+    public static readonly IReadOnlyList<DType> Temporal = new[]
+    {
+        DType.DateTime64D, DType.DateTime64H, DType.DateTime64Min, DType.DateTime64S, DType.DateTime64Ms, DType.DateTime64Us, DType.DateTime64Ns,
+        DType.TimeDelta64D, DType.TimeDelta64H, DType.TimeDelta64Min, DType.TimeDelta64S, DType.TimeDelta64Ms, DType.TimeDelta64Us, DType.TimeDelta64Ns,
+    };
+
+    public static bool IsTemporal(this DType d) => d >= DType.DateTime64D;
+    public static bool IsDateTime(this DType d) => d is >= DType.DateTime64D and <= DType.DateTime64Ns;
+    public static bool IsTimeDelta(this DType d) => d >= DType.TimeDelta64D;
+
+    /// <summary>The storage dtype behind a dtype: temporal arrays are int64 tick counts.</summary>
+    public static DType Storage(this DType d) => d.IsTemporal() ? DType.Int64 : d;
+
+    /// <summary>The unit letters of a temporal dtype: <c>D</c>, <c>s</c>, <c>ms</c>, <c>us</c> or <c>ns</c>.</summary>
+    public static string TemporalUnit(this DType d) => ((d.IsDateTime() ? d - DType.DateTime64D : d - DType.TimeDelta64D)) switch { 0 => "D", 1 => "h", 2 => "m", 3 => "s", 4 => "ms", 5 => "us", _ => "ns" };
+
+    /// <summary>Nanoseconds per tick of a temporal dtype.</summary>
+    public static long TickNanos(this DType d) => d.TemporalUnit() switch { "D" => 86_400_000_000_000L, "h" => 3_600_000_000_000L, "m" => 60_000_000_000L, "s" => 1_000_000_000L, "ms" => 1_000_000L, "us" => 1_000L, _ => 1L };
+
+    public static DType DateTime64Of(string unit) => unit switch { "D" => DType.DateTime64D, "h" => DType.DateTime64H, "m" => DType.DateTime64Min, "s" => DType.DateTime64S, "ms" => DType.DateTime64Ms, "us" => DType.DateTime64Us, "ns" => DType.DateTime64Ns, _ => throw new NDTypeException($"Invalid datetime unit \"{unit}\" in metadata") };
+    public static DType TimeDelta64Of(string unit) => unit switch { "D" => DType.TimeDelta64D, "h" => DType.TimeDelta64H, "m" => DType.TimeDelta64Min, "s" => DType.TimeDelta64S, "ms" => DType.TimeDelta64Ms, "us" => DType.TimeDelta64Us, "ns" => DType.TimeDelta64Ns, _ => throw new NDTypeException($"Invalid datetime unit \"{unit}\" in metadata") };
+
+    public static string Name(this DType d) => d.IsDateTime() ? "datetime64[" + d.TemporalUnit() + "]" : d.IsTimeDelta() ? "timedelta64[" + d.TemporalUnit() + "]" : d switch
     {
         DType.Bool => "bool",
         DType.Int8 => "int8",
@@ -61,7 +99,7 @@ public static class DTypes
     };
 
     /// <summary>numpy's one-character kind code: <c>b</c> bool, <c>i</c> signed, <c>u</c> unsigned, <c>f</c> float.</summary>
-    public static char Kind(this DType d) => d switch
+    public static char Kind(this DType d) => d.IsDateTime() ? 'M' : d.IsTimeDelta() ? 'm' : d switch
     {
         DType.Bool => 'b',
         DType.Int8 or DType.Int16 or DType.Int32 or DType.Int64 => 'i',
@@ -92,7 +130,7 @@ public static class DTypes
     public static DType ComplexOf(this DType d) => d switch { DType.Float64 or DType.Int32 or DType.UInt32 or DType.Int64 or DType.UInt64 or DType.Complex128 => DType.Complex128, _ => DType.Complex64 };
 
     /// <summary>The CLR element type of the backing array.</summary>
-    public static Type ClrType(this DType d) => d switch
+    public static Type ClrType(this DType d) => d.IsTemporal() ? typeof(long) : d switch
     {
         DType.Bool => typeof(bool),
         DType.Int8 => typeof(sbyte),
@@ -136,6 +174,12 @@ public static class DTypes
 
     public static bool TryFromName(string name, out DType dtype)
     {
+        var tm = System.Text.RegularExpressions.Regex.Match(name, @"^[<>=|]?(datetime64|M8|timedelta64|m8)\[(D|h|m|s|ms|us|ns)\]$");
+        if (tm.Success)
+        {
+            dtype = tm.Groups[1].Value is "datetime64" or "M8" ? DateTime64Of(tm.Groups[2].Value) : TimeDelta64Of(tm.Groups[2].Value);
+            return true;
+        }
         DType? r = name switch
         {
             "bool" or "bool_" or "?" or "b1" => DType.Bool,

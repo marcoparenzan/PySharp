@@ -27,6 +27,7 @@ internal static class PdOps
         Ts t => PdTime.Wrap(t),
         Td t => PdTime.Wrap(t),
         Per p => PdPeriod.Wrap(p),
+        NAValue => PdNullable.NA,
         _ => v,
     };
 

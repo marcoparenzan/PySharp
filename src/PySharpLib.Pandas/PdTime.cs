@@ -55,6 +55,17 @@ internal static class PdTime
 
     // ------------------------------------------------------------------ wrapping and conversion
 
+    /// <summary>A numpy datetime64 / timedelta64 scalar as a pandas cell (days, hours and minutes become second ticks).</summary>
+    public static object? FromNumpyScalar(NDArray nd)
+    {
+        long v = (long)nd.GetAt(0);
+        string u = nd.DType.TemporalUnit();
+        var unit = u switch { "ms" => DateUnit.Milli, "us" => DateUnit.Micro, "ns" => DateUnit.Nano, _ => DateUnit.Second };
+        if (v != long.MinValue && u is "D" or "h" or "m") v *= u switch { "D" => 86400L, "h" => 3600L, _ => 60L };
+        if (nd.DType.IsDateTime()) return v == long.MinValue ? null : new Ts(v, unit);
+        return v == long.MinValue ? null : new Td(v, unit);
+    }
+
     public static object Wrap(Ts t) => t.Ticks == DateTimeCore.NaT ? NaT : new PyInstance(TimestampClass) { Native = t };
     public static object Wrap(Td t) => t.Ticks == DateTimeCore.NaT ? NaT : new PyInstance(TimedeltaClass) { Native = t };
 
@@ -90,6 +101,7 @@ internal static class PdTime
         {
             case Ts t: ts = t; return true;
             case PyInstance { Native: Ts t2 }: ts = t2; return true;
+            case PyInstance { Native: ScalarBox sbts } when sbts.Array.DType.IsDateTime(): { var c = FromNumpyScalar(sbts.Array); if (c is Ts nt) { ts = nt; return true; } ts = new Ts(DateTimeCore.NaT, DateUnit.Second); return true; }
             case PyInstance pi when pi.Class == DateTimeModule.DateTimeClass && pi.Dict.TryGet("__value__", out var v) && v is DateTime dt:
             {
                 long ticks = (dt - DateTime.UnixEpoch).Ticks;
@@ -113,6 +125,7 @@ internal static class PdTime
         {
             case Td t: td = t; return true;
             case PyInstance { Native: Td t2 }: td = t2; return true;
+            case PyInstance { Native: ScalarBox sbtd } when sbtd.Array.DType.IsTimeDelta(): { var c = FromNumpyScalar(sbtd.Array); if (c is Td nt) { td = nt; return true; } td = new Td(DateTimeCore.NaT, DateUnit.Second); return true; }
             case PyInstance pi when pi.Class == DateTimeModule.TimeDeltaClass && pi.Dict.TryGet("__value__", out var v) && v is TimeSpan span:
                 td = span.Ticks % 10 == 0 ? new Td(span.Ticks / 10, DateUnit.Micro) : new Td(span.Ticks * 100, DateUnit.Nano);
                 return true;
@@ -128,6 +141,7 @@ internal static class PdTime
     {
         cell = null;
         if (v is PyInstance { Native: NaTMarker }) return true;
+        if (v is PyInstance { Native: NAValue }) { cell = NAValue.Instance; return true; }
         if (v is PyInstance { Native: Ts or Td or Per } pi) { cell = pi.Native; return true; }
         if (v is PyInstance pi2 && pi2.Class == DateTimeModule.DateTimeClass && TryTs(v, out var ts)) { cell = ts; return true; }
         if (v is PyInstance pi3 && pi3.Class == DateTimeModule.TimeDeltaClass && TryTd(v, out var td)) { cell = td; return true; }
@@ -300,7 +314,7 @@ internal static class PdTime
         {
             var v = p[0]!;
             if (v is PyInstance { Native: NaTMarker }) return new Ts(DateTimeCore.NaT, DateUnit.Micro);
-            if (v is BigInteger or double or PyInstance { Native: ScalarBox })
+            if (v is BigInteger or double || v is PyInstance { Native: ScalarBox nsb } && !nsb.Array.DType.IsTemporal())
             {
                 string unit = p.Has(11) ? (string)p[11]! : "ns";
                 double dv = Column.ToDouble(PdConv.ToCell(v)!);
@@ -332,7 +346,7 @@ internal static class PdTime
             var v = p[0]!;
             if (v is PyInstance { Native: NaTMarker }) return new Td(DateTimeCore.NaT, DateUnit.Micro);
             if (TryTd(v, out var td) && p.Has(1) == false) return td;
-            if (v is BigInteger or double or PyInstance { Native: ScalarBox })
+            if (v is BigInteger or double || v is PyInstance { Native: ScalarBox nsb } && !nsb.Array.DType.IsTemporal())
             {
                 string unit = p.Has(1) ? (string)p[1]! : "ns";
                 double dv = Column.ToDouble(PdConv.ToCell(v)!);

@@ -41,6 +41,7 @@ internal static class PdApply
             var s = S(a[0]);
             var extra = p.Has(2) ? ((PyTuple)p[2]!).Items : null;
             var results = Enumerable.Range(0, s.Length).Select(x => PdConv.ToCell(Call(i, p.Required(0), PdConv.FromCell(s.Values, x), extra, k?.Where(e => e.Key is not ("func" or "convert_dtype" or "args")).ToDictionary(e => e.Key, e => e.Value)))).ToList();
+            if (s.Values.Nullable && s.Values.Kind != Kind.Str) results = results.Select(r => r is NAValue ? double.NaN : r).ToList();
             return PdConv.Wrap(new Series(Column.Infer(results), s.Index, s.Name));
         });
         SDef("map", (i, a, k) =>
@@ -59,6 +60,7 @@ internal static class PdApply
                 if (lookup is not null) results.Add(lookup.TryGetValue(Column.Key(s.Values[x]) ?? Column.NaNKey, out var v) ? v : null);
                 else results.Add(PdConv.ToCell(Call(i, arg, PdConv.FromCell(s.Values, x))));
             }
+            if (s.Values.Nullable && s.Values.Kind != Kind.Str) results = results.Select(r => r is NAValue ? double.NaN : r).ToList();
             return PdConv.Wrap(new Series(Column.Infer(results), s.Index, s.Name));
         });
         FDef("apply", (i, a, k) =>
@@ -173,19 +175,23 @@ internal static class PdApply
     private static object MapStr(object self, Func<string, string?> f)
     {
         var s = Me(self);
-        return StrOut(s, Column.FromStrings(Strs(s).Select(x => x is null ? null : f(x)).ToArray()));
+        var r = Column.FromStrings(Strs(s).Select(x => x is null ? null : f(x)).ToArray());
+        return StrOut(s, s.Values.Nullable ? Column.MakeNullable(r) : r);
     }
 
     private static object MapBool(object self, Func<string, bool> f)
     {
         var s = Me(self);
-        return StrOut(s, Column.FromBools(Strs(s).Select(x => x is not null && f(x)).ToArray()));
+        var src = Strs(s);
+        var r = Column.FromBools(src.Select(x => x is not null && f(x)).ToArray());
+        return StrOut(s, s.Values.Nullable ? Column.MakeNullable(r, src.Select(x => x is null).ToArray()) : r);
     }
 
     private static object MapNum(object self, Func<string, long> f)
     {
         var s = Me(self);
         var src = Strs(s);
+        if (s.Values.Nullable) return StrOut(s, Column.MakeNullable(Column.FromLongs(src.Select(x => x is null ? 0L : f(x)).ToArray()), src.Select(x => x is null).ToArray()));
         if (src.Any(x => x is null)) return StrOut(s, Column.FromDoubles(src.Select(x => x is null ? double.NaN : (double)f(x)).ToArray()));
         return StrOut(s, Column.FromLongs(src.Select(f).ToArray()));
     }

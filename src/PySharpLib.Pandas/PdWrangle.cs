@@ -47,6 +47,10 @@ internal static class PdWrangle
 
     private static Series NewSeries(Series like, Column c) => new(c, like.Index, like.Name);
 
+    /// <summary>Runs a plain-column operation on a nullable column through its placeholders and restores the missing positions.</summary>
+    private static Column KeepNa(Column c, Func<Column, Column> f)
+        => c.Nullable ? Column.MakeNullable(f(c.FillPlaceholder()), c.NaMask()) : f(c);
+
     private static object Rebuild(object self, Func<Column, Column> f)
     {
         if (self is PyInstance { Native: Series s }) return PdConv.Wrap(NewSeries(s, f(s.Values)));
@@ -174,17 +178,17 @@ internal static class PdWrangle
                     return Rebuild(a[0], c => PdDates.ClipTime(c, loT, hiT));
                 }
                 double? lo = p.Has(0) ? Column.ToDouble(PdConv.ToCell(p[0])!) : null, hi = p.Has(1) ? Column.ToDouble(PdConv.ToCell(p[1])!) : null;
-                return Rebuild(a[0], c => FrameOps.Clip(c, lo, hi));
+                return Rebuild(a[0], c => KeepNa(c, x => FrameOps.Clip(x, lo, hi)));
             });
             Def("round", (i, a, k) =>
             {
                 int dec = A("round", i, a, k, "decimals").Int(0, 0);
-                return Rebuild(a[0], c => FrameOps.Round(c, dec));
+                return Rebuild(a[0], c => KeepNa(c, x => FrameOps.Round(x, dec)));
             });
             Def("isin", (i, a, k) =>
             {
                 var values = PdConv.Cells(A("isin", i, a, k, "values").Required(0));
-                if (a[0] is PyInstance { Native: Series s }) return PdConv.Wrap(BoolSeries(s, FrameOps.IsIn(s.Values, values)));
+                if (a[0] is PyInstance { Native: Series s }) return PdConv.Wrap(s.Values.Nullable ? new Series(Column.MakeNullable(Column.FromBools(FrameOps.IsIn(s.Values, values)), new bool[s.Length]), s.Index, s.Name) : BoolSeries(s, FrameOps.IsIn(s.Values, values)));
                 var d = D(a[0]);
                 return PdConv.Wrap(new DataFrame(d.Data.Select(c => Column.FromBools(FrameOps.IsIn(c, values))), d.Columns, d.Index));
             });
@@ -423,6 +427,7 @@ internal static class PdWrangle
             var s = S(a[0]);
             var u = s.Values.Take(FrameOps.UniquePositions(s.Values));
             if (u.Kind == Kind.Category) return PdCategorical.WrapCategorical(u);
+            if (u.Nullable) return PdNullable.WrapArray(u);
             if (Reduce.IsNumeric(u)) return PdArrays.Values(u);
             if (u.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) return PdDates.WrapTimeArray(u);
             return new PyList(Enumerable.Range(0, u.Length).Select(x => PdConv.FromCell(u, x)));
@@ -434,6 +439,7 @@ internal static class PdWrangle
             if (s.Values.Kind == Kind.Category) return CategoricalValueCounts(s, p.Bool(0, false), p.Bool(1, true), p.Bool(2, false), p.Bool(4, true));
             var (first, counts) = FrameOps.ValueCounts(s.Values, p.Bool(4, true), p.Bool(1, true), p.Bool(2, false));
             var idx = new FIndex(s.Values.Take(first), s.Name);
+            if (s.Values.Nullable && !p.Bool(0, false)) return PdConv.Wrap(new Series(Column.MakeNullable(Column.FromLongs(counts), new bool[counts.Length]), idx, "count"));
             if (p.Bool(0, false))
             {
                 double total = counts.Sum();
@@ -573,11 +579,24 @@ internal static class PdWrangle
         Def("describe", (i, a, k) =>
         {
             var p = A("describe", i, a, k, "percentiles", "include", "exclude");
-            if (p.Has(1) || p.Has(2)) throw PyErr.NotImplementedError("describe(include=/exclude=)");
             var d = D(a[0]);
             var pct = p.Has(0) ? PdConv.Cells(p[0]!).Select(x => Column.ToDouble(x!)).ToList() : null;
-            var num = Enumerable.Range(0, d.NCols).Where(j => d.Data[j].Kind is Kind.Int or Kind.Float or Kind.DateTime or Kind.Timedelta).ToArray();
-            var use = num.Length > 0 ? num : Enumerable.Range(0, d.NCols).ToArray();
+            int[] use;
+            if (p.Has(1) && p[1] is "all")
+            {
+                if (p.Has(2)) throw PyErr.ValueError("exclude must be None when include is 'all'");
+                use = Enumerable.Range(0, d.NCols).ToArray();
+            }
+            else if (p.Has(1) || p.Has(2))
+            {
+                use = PdMissing.Select(d, p.Has(1) ? p[1] : null, p.Has(2) ? p[2] : null);
+                if (use.Length == 0) throw PyErr.ValueError("No columns match the specified include or exclude data types");
+            }
+            else
+            {
+                var num = Enumerable.Range(0, d.NCols).Where(j => d.Data[j].Kind is Kind.Int or Kind.Float or Kind.DateTime or Kind.Timedelta).ToArray();
+                use = num.Length > 0 ? num : Enumerable.Range(0, d.NCols).ToArray();
+            }
             if (use.Length == 0) throw PyErr.ValueError("Cannot describe a DataFrame without columns");
             var parts = use.Select(j => FrameOps.Describe(new Series(d.Data[j], d.Index, null), pct)).ToList();
             if (parts.All(x => x.Index.Length == parts[0].Index.Length))
@@ -597,26 +616,7 @@ internal static class PdWrangle
         {
             var p = A("select_dtypes", i, a, k, "include", "exclude");
             var d = D(a[0]);
-            bool Matches(Column c, object spec)
-            {
-                if (spec is string s)
-                {
-                    switch (s)
-                    {
-                        case "number": return c.Kind is Kind.Int or Kind.Float;
-                        case "integer": return c.Kind == Kind.Int;
-                        case "floating": return c.Kind == Kind.Float;
-                        case "object": return c.Kind == Kind.Object;
-                        case "string": case "str": return c.Kind == Kind.Str;
-                    }
-                }
-                if (spec is PyBuiltinFunction { Name: "object" } or PyClass { Name: "object" }) return c.Kind == Kind.Object;
-                return c.DTypeName == PdConv.DTypeName(spec);
-            }
-            var inc = p.Has(0) ? (PdConv.IsListLike(p[0]!) ? PdConv.Cells(p[0]!).Select(x => PdConv.IsListLike(p[0]!) ? (object)x! : x!).ToList() : new List<object?> { p[0] }) : null;
-            var incSpecs = p.Has(0) ? (p[0] is PyList pl ? pl.Items : p[0] is PyTuple pt ? pt.Items.ToList() : new List<object> { p[0]! }) : null;
-            var excSpecs = p.Has(1) ? (p[1] is PyList ql ? ql.Items : p[1] is PyTuple qt ? qt.Items.ToList() : new List<object> { p[1]! }) : null;
-            var keep = Enumerable.Range(0, d.NCols).Where(j => (incSpecs is null || incSpecs.Any(s => Matches(d.Data[j], s))) && (excSpecs is null || !excSpecs.Any(s => Matches(d.Data[j], s)))).ToArray();
+            var keep = PdMissing.Select(d, p.Has(0) ? p[0] : null, p.Has(1) ? p[1] : null);
             return PdConv.Wrap(d.TakeColumns(keep));
         });
         Def("items", (_, a, _) =>

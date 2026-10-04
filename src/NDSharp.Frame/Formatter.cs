@@ -124,8 +124,30 @@ public static class Formatter
     private static string Escape(string s) => s.Replace("\t", "\\t").Replace("\r", "\\r").Replace("\n", "\\n");
 
     /// <summary>The text of every cell of a column, before justification (numbers carry the sign-space pandas reserves).</summary>
+    private static string[] FormatNullable(Column c, DisplayOptions o, bool leadingSpace)
+    {
+        string sp = leadingSpace ? " " : "";
+        var na = c.NaMask();
+        var validPos = Enumerable.Range(0, c.Length).Where(i => !na[i]).ToArray();
+        string[] shown;
+        if (c.Kind == Kind.Float)
+            shown = validPos.Select(i =>
+            {
+                double v = Math.Round(c.DoubleAt(i), 6);
+                if (double.IsInfinity(v)) return sp + (v > 0 ? "inf" : "-inf");
+                if (double.IsNaN(v)) return sp + "NaN";
+                string t = v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+                return sp + (t.Contains('.') || t.Contains('E') || t.Contains('N') || t.Contains('I') ? t : t + ".0");
+            }).ToArray();
+        else shown = validPos.Length == 0 ? Array.Empty<string>() : FormatCells(c.Take(validPos).ToPlain(), o, leadingSpace);
+        var r = new string[c.Length];
+        for (int i = 0, k = 0; i < r.Length; i++) r[i] = na[i] ? sp + "<NA>" : shown[k++];
+        return r;
+    }
+
     public static string[] FormatCells(Column c, DisplayOptions o, bool leadingSpace = true)
     {
+        if (c.Nullable) return FormatNullable(c, o, leadingSpace);
         string sp = leadingSpace ? " " : "";
         var r = new string[c.Length];
         switch (c.Kind)
@@ -639,9 +661,9 @@ public static class Formatter
 
     /// <summary>Port of pandas' <c>format_object_summary</c>: the bracketed list of an Index repr, wrapped at the display width, right-justified when it does not fit on a line,
     /// truncated beyond <c>max_seq_items</c>; the result ends so that the attributes (<c>dtype=...</c>) can follow directly.</summary>
-    public static string ObjectSummary(IReadOnlyList<string> objs, string name, bool justify, int displayWidth, int maxSeqItems = 100)
+    public static string ObjectSummary(IReadOnlyList<string> objs, string name, bool justify, int displayWidth, int maxSeqItems = 100, bool indentForName = true)
     {
-        string space1 = "\n" + new string(' ', name.Length + 1), space2 = "\n" + new string(' ', name.Length + 2);
+        string space1 = indentForName ? "\n" + new string(' ', name.Length + 1) : "\n", space2 = indentForName ? "\n" + new string(' ', name.Length + 2) : "\n ";
         int n = objs.Count;
         string close = ", ";
         if (n == 0) return "[]" + close;
@@ -717,7 +739,7 @@ public static class Formatter
 
     private static string ReprLabel(Column l, int i) => l.Kind switch
     {
-        Kind.Str => l.StrAt(i) is { } s ? $"'{s}'" : "nan",
+        Kind.Str => l.StrAt(i) is { } s ? $"'{s}'" : (l.Nullable ? "<NA>" : "nan"),
         Kind.Float => double.IsNaN(l.DoubleAt(i)) ? "nan" : FormatSingleFloatLabel(l.DoubleAt(i)),
         _ => LabelText(l[i], DisplayOptions.Current) is var t && l[i] is string ? $"'{t}'" : t,
     };

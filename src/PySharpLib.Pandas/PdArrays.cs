@@ -20,6 +20,13 @@ internal static class PdArrays
             case Kind.Int: return NDArray.FromArray((long[])c.Longs.Clone()).AsType(c.Num!.Value);
             case Kind.Float: return NDArray.FromArray((double[])c.Doubles.Clone()).AsType(c.Num!.Value);
             case Kind.Bool: return NDArray.FromArray((bool[])c.Bools.Clone());
+            case Kind.DateTime:
+            case Kind.Timedelta:
+            {
+                string unit = DateTimeCore.UnitName(c.Unit);
+                var dt = c.Kind == Kind.DateTime ? DTypes.DateTime64Of(unit) : DTypes.TimeDelta64Of(unit);
+                return new NDArray(dt, (long[])c.Ticks.Clone(), new[] { c.Length });
+            }
             default: throw PyErr.NotImplementedError($"converting a '{c.DTypeName}' column to a numpy array (NDSharp has no object arrays)");
         }
     }
@@ -29,6 +36,16 @@ internal static class PdArrays
     public static NDArray ToNd(DataFrame d)
     {
         int n = d.NRows, m = d.NCols;
+        if (m > 0 && d.Data.All(c => c.Kind is Kind.DateTime or Kind.Timedelta) && d.Data.Select(c => (c.Kind, c.Unit)).Distinct().Count() == 1)
+        {
+            var t = new long[n * m];
+            for (int j = 0; j < m; j++) for (int i = 0; i < n; i++) t[i * m + j] = d.Data[j].Ticks[i];
+            var first = d.Data[0];
+            string unit = DateTimeCore.UnitName(first.Unit);
+            return new NDArray(first.Kind == Kind.DateTime ? DTypes.DateTime64Of(unit) : DTypes.TimeDelta64Of(unit), t, new[] { n, m });
+        }
+        if (d.Data.Any(c => c.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period or Kind.Category))
+            throw PyErr.NotImplementedError("converting a frame that mixes datetime/period/category columns with other dtypes to a numpy array (NDSharp has no object arrays)");
         if (d.Data.Any(c => c.Kind is Kind.Str or Kind.Object))
             throw PyErr.NotImplementedError("converting a frame with str/object columns to a numpy array (NDSharp has no object arrays)");
         if (m == 0) return NDArray.FromArray(new double[0], n, 0);

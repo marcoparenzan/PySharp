@@ -33,11 +33,13 @@ public sealed class Column
     private readonly DateUnit _unit;
     private readonly PeriodFreq? _pfreq;
     private readonly TzInfo? _tz;
+    private readonly bool[]? _na;
+    private readonly bool _nstr;
 
     private Column(Kind kind, DType? num, int length, long[]? i = null, double[]? f = null, bool[]? b = null, string?[]? s = null, object?[]? o = null,
-        int[]? codes = null, Column? cats = null, bool ordered = false, DateUnit unit = DateUnit.Micro, PeriodFreq? pfreq = null, TzInfo? tz = null)
+        int[]? codes = null, Column? cats = null, bool ordered = false, DateUnit unit = DateUnit.Micro, PeriodFreq? pfreq = null, TzInfo? tz = null, bool[]? na = null, bool nstr = false)
     {
-        _pfreq = pfreq; _tz = tz;
+        _pfreq = pfreq; _tz = tz; _na = na; _nstr = nstr;
         Kind = kind; Num = num; Length = length; _i = i; _f = f; _b = b; _s = s; _o = o; _codes = codes; _cats = cats; _ordered = ordered; _unit = unit;
     }
 
@@ -51,6 +53,66 @@ public sealed class Column
     /// <summary>The frequency of a period column.</summary>
     public PeriodFreq PFreq => _pfreq!;
     public static Column FromPeriod(long[] ordinals, PeriodFreq freq) => new(Kind.Period, null, ordinals.Length, i: ordinals, pfreq: freq);
+
+    // ------------------------------------------------------------------------------------------ nullable dtypes (Int64, Float64, boolean, string)
+
+    /// <summary>True for the nullable extension dtypes (<c>Int64</c>, <c>Float64</c>, <c>boolean</c>, <c>string</c>): missing values are <c>pd.NA</c>.</summary>
+    public bool Nullable => _na is not null || _nstr;
+
+    /// <summary>For nullable numeric/bool columns, which elements are missing (the stored value there is a placeholder).</summary>
+    public bool[]? Mask => _na;
+
+    /// <summary>The nullable version of a plain Int/Float/Bool/Str column; missing elements are those of <paramref name="mask"/>, or (floats, strings) the NaN / null ones.</summary>
+    public static Column MakeNullable(Column plain, bool[]? mask = null)
+    {
+        if (plain.Kind == Kind.Str) return new(Kind.Str, null, plain.Length, s: mask is null ? plain._s : plain._s!.Select((x, i) => mask[i] ? null : x).ToArray(), nstr: true);
+        if (plain.Kind is not (Kind.Int or Kind.Float or Kind.Bool)) throw new FrameException($"no nullable dtype for '{plain.DTypeName}'", "TypeError");
+        var m = mask ?? (plain.Kind == Kind.Float ? plain._f!.Select(double.IsNaN).ToArray() : new bool[plain.Length]);
+        if (plain.Kind == Kind.Float && mask is not null) { }
+        return new(plain.Kind, plain.Num, plain.Length, i: plain._i, f: plain._f, b: plain._b, na: m);
+    }
+
+    /// <summary>The plain column holding the same values: missing elements become NaN (floats, and ints that then turn float64), None (bool) or None (str).</summary>
+    public Column ToPlain()
+    {
+        if (!Nullable) return this;
+        if (Kind == Kind.Str) return FromStrings(_s!);
+        bool any = _na!.Any(x => x);
+        switch (Kind)
+        {
+            case Kind.Int:
+                if (!any) return FromLongs(_i!, Num!.Value);
+                return FromDoubles(Enumerable.Range(0, Length).Select(i => _na[i] ? double.NaN : (double)_i![i]).ToArray());
+            case Kind.Float:
+                return FromDoubles(Enumerable.Range(0, Length).Select(i => _na[i] ? double.NaN : _f![i]).ToArray(), Num!.Value);
+            default:
+                if (!any) return FromBools(_b!);
+                return FromObjects(Enumerable.Range(0, Length).Select(i => _na[i] ? null : (object?)_b![i]).ToArray());
+        }
+    }
+
+    /// <summary>Which elements are missing (NA for nullable columns, NaN / None / NaT elsewhere).</summary>
+    public bool[] NaMask() => _na is not null && Kind != Kind.Float ? (bool[])_na.Clone() : Enumerable.Range(0, Length).Select(IsNa).ToArray();
+
+    /// <summary>A plain column of the same kind where missing elements hold a harmless placeholder (1, 1.0, false or "") so that arithmetic can run unconditionally.</summary>
+    public Column FillPlaceholder()
+    {
+        if (!Nullable) return this;
+        var m = NaMask();
+        switch (Kind)
+        {
+            case Kind.Int: return FromLongs(Enumerable.Range(0, Length).Select(i => m[i] ? 1L : _i![i]).ToArray(), Num!.Value);
+            case Kind.Float: return FromDoubles(Enumerable.Range(0, Length).Select(i => m[i] ? 1.0 : _f![i]).ToArray(), Num!.Value);
+            case Kind.Bool: return FromBools(Enumerable.Range(0, Length).Select(i => !m[i] && _b![i]).ToArray());
+            default: return FromStrings(_s!.Select(x => x ?? "").ToArray());
+        }
+    }
+
+    /// <summary>The valid (non-missing) elements as a plain column.</summary>
+    public Column ValidOnly() => Take(Enumerable.Range(0, Length).Where(i => !IsNa(i)).ToArray()).ToPlain();
+
+    /// <summary>The columns of nullable and plain data placed side by side keep their nullability: a plain column becomes nullable of the same kind.</summary>
+    public Column AsNullable() => Nullable ? this : MakeNullable(this);
 
     /// <summary>The time zone of a tz-aware datetime column (its ticks are UTC instants); null for naive data.</summary>
     public TzInfo? Tz => _tz;
@@ -207,7 +269,17 @@ public sealed class Column
 
     // ------------------------------------------------------------------------------------------ access
 
-    public string DTypeName => Kind switch
+    public string DTypeName => Nullable ? NullableName() : PlainName();
+
+    private string NullableName() => Kind switch
+    {
+        Kind.Bool => "boolean",
+        Kind.Str => "string",
+        Kind.Float => "Float" + (Num == DType.Float32 ? "32" : "64"),
+        _ => (Num!.Value.IsSigned() ? "Int" : "UInt") + (Num!.Value.ItemSize() * 8),
+    };
+
+    private string PlainName() => Kind switch
     {
         Kind.Period => _pfreq!.DTypeName,
         Kind.DateTime => "datetime64[" + DateTimeCore.UnitName(_unit) + (_tz is null ? "" : ", " + _tz.Name) + "]",
@@ -232,7 +304,7 @@ public sealed class Column
     public object?[] Objects => _o!;
 
     /// <summary>The element as a boxed .NET value: <c>long</c>, <c>double</c>, <c>bool</c>, <c>string</c> or the stored object (missing: NaN / null).</summary>
-    public object? this[int i] => Kind switch
+    public object? this[int i] => (_na is not null && _na[i]) || (_nstr && _s![i] is null) ? NAValue.Instance : Kind switch
     {
         Kind.Int => _i![i],
         Kind.Float => _f![i],
@@ -245,13 +317,13 @@ public sealed class Column
         _ => _o![i],
     };
 
-    public bool IsNa(int i) => Kind switch
+    public bool IsNa(int i) => (_na is not null && _na[i]) || Kind switch
     {
         Kind.DateTime or Kind.Timedelta or Kind.Period => _i![i] == DateTimeCore.NaT,
         Kind.Category => _codes![i] < 0,
         Kind.Float => double.IsNaN(_f![i]),
         Kind.Str => _s![i] is null,
-        Kind.Object => _o![i] is null || (_o[i] is double d && double.IsNaN(d)),
+        Kind.Object => _o![i] is null || _o[i] is NAValue || (_o[i] is double d && double.IsNaN(d)),
         _ => false,
     };
 
@@ -267,6 +339,7 @@ public sealed class Column
     /// <summary>Gathers positions (a negative position produces a missing value, which promotes int → float and bool → object like reindexing does).</summary>
     public Column Take(IReadOnlyList<int> pos)
     {
+        if (Nullable) return TakeNullable(pos);
         int n = pos.Count;
         bool anyMissing = false;
         for (int k = 0; k < n; k++) if (pos[k] < 0) { anyMissing = true; break; }
@@ -290,8 +363,67 @@ public sealed class Column
 
     /// <summary>A copy of this column with the given positions replaced (one value broadcasts). Typed fast paths keep the dtype when the new
     /// values fit; otherwise the result is promoted the way pandas does (int + float → float64, anything + str → object).</summary>
+    private Column TakeNullable(IReadOnlyList<int> pos)
+    {
+        int n = pos.Count;
+        if (Kind == Kind.Str)
+        {
+            var r = new string?[n];
+            for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? null : _s![pos[k]];
+            return MakeNullable(FromStrings(r));
+        }
+        var mask = new bool[n];
+        for (int k = 0; k < n; k++) mask[k] = pos[k] < 0 || _na![pos[k]];
+        switch (Kind)
+        {
+            case Kind.Int: { var r = new long[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? 0 : _i![pos[k]]; return MakeNullable(FromLongs(r, Num!.Value), mask); }
+            case Kind.Float: { var r = new double[n]; for (int k = 0; k < n; k++) r[k] = pos[k] < 0 ? double.NaN : _f![pos[k]]; return MakeNullable(FromDoubles(r, Num!.Value), mask); }
+            default: { var r = new bool[n]; for (int k = 0; k < n; k++) r[k] = pos[k] >= 0 && _b![pos[k]]; return MakeNullable(FromBools(r), mask); }
+        }
+    }
+
+    private Column WithValuesNullable(IReadOnlyList<int> pos, IReadOnlyList<object?> vals)
+    {
+        bool broadcast = vals.Count == 1 && pos.Count != 1;
+        if (!broadcast && vals.Count != pos.Count) throw new FrameException($"Length of values ({vals.Count}) does not match length of index ({pos.Count})");
+        if (Kind == Kind.Str)
+        {
+            var r = (string?[])_s!.Clone();
+            for (int k = 0; k < pos.Count; k++)
+            {
+                var v = vals[broadcast ? 0 : k];
+                r[pos[k]] = v is null or NAValue || v is double d && double.IsNaN(d) ? null : v as string ?? throw new FrameException($"Invalid value '{v}' for dtype 'string'", "TypeError");
+            }
+            return MakeNullable(FromStrings(r));
+        }
+        var mask = (bool[])_na!.Clone();
+        var li = (long[]?)_i?.Clone(); var lf = (double[]?)_f?.Clone(); var lb = (bool[]?)_b?.Clone();
+        for (int k = 0; k < pos.Count; k++)
+        {
+            var v = vals[broadcast ? 0 : k];
+            int p = pos[k];
+            if (v is null or NAValue || v is double dn && double.IsNaN(dn)) { mask[p] = true; continue; }
+            mask[p] = false;
+            switch (Kind)
+            {
+                case Kind.Int:
+                    if (v is double dv && dv != Math.Floor(dv)) throw new FrameException($"Invalid value '{v}' for dtype '{DTypeName}'", "TypeError");
+                    li![p] = v is bool bv ? (bv ? 1 : 0) : ToLong(v); break;
+                case Kind.Float: lf![p] = v is bool bf ? (bf ? 1.0 : 0.0) : ToDouble(v); break;
+                default: lb![p] = v is bool bb ? bb : throw new FrameException($"Invalid value '{v}' for dtype 'boolean'", "TypeError"); break;
+            }
+        }
+        return Kind switch
+        {
+            Kind.Int => MakeNullable(FromLongs(li!, Num!.Value), mask),
+            Kind.Float => MakeNullable(FromDoubles(lf!, Num!.Value), mask),
+            _ => MakeNullable(FromBools(lb!), mask),
+        };
+    }
+
     public Column WithValues(IReadOnlyList<int> pos, IReadOnlyList<object?> vals)
     {
+        if (Nullable) return WithValuesNullable(pos, vals);
         bool broadcast = vals.Count == 1 && pos.Count != 1;
         if (!broadcast && vals.Count != pos.Count) throw new FrameException($"Length of values ({vals.Count}) does not match length of index ({pos.Count})");
         object? V(int k) => vals[broadcast ? 0 : k];
@@ -412,10 +544,29 @@ public sealed class Column
     }
 
     /// <summary>Concatenates columns, promoting like pandas: int+float → float64, anything with str/object → object (str+str stays str).</summary>
+    private static Column ConcatNullable(IReadOnlyList<Column> parts)
+    {
+        var kinds = parts.Select(p => p.Kind).Distinct().ToList();
+        bool allNumber = kinds.All(k => k is Kind.Int or Kind.Float);
+        if (kinds.Count == 1 && kinds[0] == Kind.Str) return MakeNullable(FromStrings(parts.SelectMany(p => p._s!).ToArray()));
+        if (kinds.Count == 1 && kinds[0] == Kind.Bool)
+            return MakeNullable(FromBools(parts.SelectMany(p => p._b!).ToArray()), parts.SelectMany(p => p._na ?? new bool[p.Length]).ToArray());
+        if (!allNumber) return null!;
+        var mask = parts.SelectMany(p => p._na ?? new bool[p.Length]).ToArray();
+        if (kinds.Count == 1 && kinds[0] == Kind.Int)
+        {
+            var dt = parts.Select(p => p.Num!.Value).Aggregate((a, b) => DTypes.Promote(a, b));
+            return MakeNullable(FromLongs(parts.SelectMany(p => p._i!).ToArray(), dt), mask);
+        }
+        var fl = parts.SelectMany(p => p.Kind == Kind.Float ? p._f! : p._i!.Select(x => (double)x)).ToArray();
+        return MakeNullable(FromDoubles(fl, parts.Any(p => p.Kind == Kind.Float && p.Num == DType.Float64) || parts.Any(p => p.Kind == Kind.Int) ? DType.Float64 : DType.Float32), mask);
+    }
+
     public static Column Concat(IReadOnlyList<Column> parts)
     {
         if (parts.Count == 0) return Empty(Kind.Object);
         if (parts.Count == 1) return parts[0];
+        if (parts.Any(p => p.Nullable) && parts.All(p => p.Kind is Kind.Int or Kind.Float or Kind.Bool or Kind.Str) && ConcatNullable(parts) is { } nc) return nc;
         if (parts.All(p => p.Kind == Kind.Category) && parts.All(p => SameCategories(p._cats!, parts[0]._cats!) && p._ordered == parts[0]._ordered))
             return FromCodes(parts.SelectMany(p => p._codes!).ToArray(), parts[0]._cats!, parts[0]._ordered);
         if (parts.Any(p => p.Kind == Kind.Category)) parts = parts.Select(p => p.Decategorized()).ToList();
@@ -459,6 +610,7 @@ public sealed class Column
     {
         Ts t => t.Ticks == DateTimeCore.NaT ? NaNKey : ("ts", DateTimeCore.ToNanos(t.Ticks, t.Unit)),
         Td t => t.Ticks == DateTimeCore.NaT ? NaNKey : ("td", DateTimeCore.ToNanos(t.Ticks, t.Unit)),
+        NAValue => NaNKey,
         Per p => p.Ordinal == DateTimeCore.NaT ? NaNKey : ("per", p.Freq.Name, p.Ordinal),
         null => NaNKey,
         double d when double.IsNaN(d) => NaNKey,

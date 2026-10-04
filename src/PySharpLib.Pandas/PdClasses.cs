@@ -36,6 +36,7 @@ internal static class PdClasses
             PyList l => "[" + string.Join(", ", l.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + "]",
             PyTuple t => "(" + string.Join(", ", t.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + (t.Items.Length == 1 ? ",)" : ")"),
             PerDiff pd => pd.ToString(),
+            NAValue => "<NA>",
             _ => PyOps.Str(PdConv.Interp!, o),
         };
         Ops.ObjectCompare = (a, b) => PdConv.Interp is { } ip ? ip.Compare(a, b) : throw new InvalidOperationException("no interpreter to compare host objects");

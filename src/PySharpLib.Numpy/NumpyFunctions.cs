@@ -117,6 +117,7 @@ internal static class NumpyFunctions
         Alias("rad2deg", "degrees");
         Alias("deg2rad", "radians");
         Unary("isnan", np.IsNan);
+        Unary("isnat", Temporal.IsNaT);
         Unary("isinf", np.IsInf);
         Unary("isfinite", np.IsFinite);
         Unary("signbit", np.SignBit);

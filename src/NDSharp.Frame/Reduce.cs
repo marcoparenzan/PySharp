@@ -34,6 +34,18 @@ public static class Reduce
 
     public static object? Scalar(string name, Column c, bool skipna = true, int ddof = 1, int minCount = 0)
     {
+        if (c.Nullable)
+        {
+            var na = c.NaMask();
+            bool anyNa = na.Any(x => x);
+            if (name == "count") return (long)na.Count(x => !x);
+            if (name == "any" && !skipna && anyNa && c.Kind == Kind.Bool) return Enumerable.Range(0, c.Length).Any(i => !na[i] && c.BoolAt(i)) ? true : NAValue.Instance;
+            if (name == "all" && !skipna && anyNa && c.Kind == Kind.Bool) return Enumerable.Range(0, c.Length).Any(i => !na[i] && !c.BoolAt(i)) ? false : NAValue.Instance;
+            if (!skipna && anyNa && name != "nunique") return NAValue.Instance;
+            var valid = c.ValidOnly();
+            var res = Scalar(name, valid, true, ddof, minCount);
+            return res is double d && double.IsNaN(d) && name is not ("sum" or "prod") ? NAValue.Instance : res;
+        }
         if (c.Kind == Kind.Period)
         {
             var valid = c.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
@@ -200,8 +212,16 @@ public static class Reduce
         return c.Kind == Kind.DateTime ? new Ts(result, c.Unit, c.Tz) : new Td(result, c.Unit);
     }
 
+    private static Column PlainFromCells(object?[] cells, Column like)
+    {
+        bool isInt = like.Kind == Kind.Int;
+        if (isInt) return Column.FromLongs(cells.Select(x => x is long l ? l : 0L).ToArray(), like.Num!.Value);
+        return Column.FromDoubles(cells.Select(x => x is double d ? d : double.NaN).ToArray(), like.Num ?? DType.Float64);
+    }
+
     public static double Quantile(Column c, double q, bool skipna = true)
     {
+        if (c.Nullable) { if (!skipna && c.NaMask().Any(x => x)) return double.NaN; c = c.ValidOnly(); }
         if (q < 0 || q > 1) throw new FrameException("percentiles should all be in the interval [0, 1]");
         var all = AsDoubles(c, "quantile");
         if (!skipna && all.Any(double.IsNaN)) return double.NaN;
@@ -212,6 +232,21 @@ public static class Reduce
 
     public static Column Cumulative(string name, Column c, bool skipna = true)
     {
+        if (c.Nullable)
+        {
+            var na = c.NaMask();
+            var validPos = Enumerable.Range(0, c.Length).Where(i => !na[i]).ToArray();
+            var running = Cumulative(name, c.Take(validPos).ToPlain(), true);
+            var cells = new object?[c.Length];
+            bool dead = false;
+            for (int i = 0, k = 0; i < c.Length; i++)
+            {
+                if (na[i]) { cells[i] = NAValue.Instance; if (!skipna) dead = true; continue; }
+                cells[i] = dead ? NAValue.Instance : running[k];
+                k++;
+            }
+            return Column.MakeNullable(PlainFromCells(cells, running), cells.Select(x => x is NAValue).ToArray());
+        }
         int n = c.Length;
         if (c.Kind is Kind.DateTime or Kind.Timedelta)
         {

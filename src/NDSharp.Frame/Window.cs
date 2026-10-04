@@ -421,7 +421,7 @@ public static class Window
             double denom = method == "dense" ? dense : res.Count(x => !double.IsNaN(x));
             for (int i = 0; i < n; i++) if (!double.IsNaN(res[i])) res[i] /= denom;
         }
-        return Column.FromDoubles(res);
+        return c.Nullable ? Column.MakeNullable(Column.FromDoubles(res), res.Select(double.IsNaN).ToArray()) : Column.FromDoubles(res);
     }
 
     private static bool Same(Column c, int a, int b) => c.Kind switch

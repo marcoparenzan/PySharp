@@ -210,7 +210,7 @@ public static class TimeSeries
 
     public sealed record Bins(long[] Labels, int[] BinOfRow, string FreqText);
 
-    public static Bins ResampleBins(long[] ticks, DateUnit unit, DateOffsetSpec off, string? closedArg, string? labelArg, long? originTicks = null)
+    public static Bins ResampleBins(long[] ticks, DateUnit unit, DateOffsetSpec off, string? closedArg, string? labelArg, long? originTicks = null, string? originMode = null, long offsetTicks = 0)
     {
         bool endAnchored = off is DateOffsetSpec.WeekOffset || off is DateOffsetSpec.MonthLike && off.FreqString.Contains('E');
         string closed = closedArg ?? (endAnchored ? "right" : "left");
@@ -225,13 +225,33 @@ public static class TimeSeries
         if (off is DateOffsetSpec.TickOffset tick)
         {
             long step = tick.StepTicks(unit);
-            long origin = originTicks ?? NormalizeTicks(first, unit);
-            long foffset = DateTimeCore.FloorMod(first - origin, step), loffset = DateTimeCore.FloorMod(last - origin, step);
-            long fres, lres;
-            if (closed == "right") { fres = foffset > 0 ? first - foffset : first - step; lres = loffset > 0 ? last + (step - loffset) : last + step; }
-            else { fres = first - foffset; lres = loffset > 0 ? last + (step - loffset) : last + step; }
-            for (long e = fres; e <= lres; e += step) edges.Add(e);
-            cmp = edges.ToArray();
+            if (tick.Nanos % 86400_000_000_000 == 0)
+            {
+                // pandas 3: a day is a calendar step, not a tick - bins start at midnight and ignore origin/offset
+                long fn = NormalizeTicks(first, unit), ln = NormalizeTicks(last, unit);
+                long fr = closed == "left" ? fn : fn - step, lr = ln + step;
+                for (long e = fr; e <= lr; e += step) edges.Add(e);
+                cmp = closed == "right" ? edges.Select(e => e + day - 1).ToArray() : edges.ToArray();
+            }
+            else
+            {
+                long f2 = first, origin;
+                if (originMode is "end" or "end_day")
+                {
+                    long originLast = originMode == "end" ? last : (NormalizeTicks(last, unit) == last ? last : NormalizeTicks(last, unit) + day);
+                    long times = DateTimeCore.FloorDiv(originLast - first, step);
+                    if (closed == "left") times++;
+                    f2 = originLast - times * step;
+                    origin = f2 + offsetTicks;
+                }
+                else origin = originTicks ?? NormalizeTicks(first, unit);
+                long foffset = DateTimeCore.FloorMod(f2 - origin, step), loffset = DateTimeCore.FloorMod(last - origin, step);
+                long fres, lres;
+                if (closed == "right") { fres = foffset > 0 ? f2 - foffset : f2 - step; lres = loffset > 0 ? last + (step - loffset) : last; }
+                else { fres = foffset > 0 ? f2 - foffset : f2; lres = loffset > 0 ? last + (step - loffset) : last + step; }
+                for (long e = fres; e <= lres; e += step) edges.Add(e);
+                cmp = edges.ToArray();
+            }
         }
         else
         {

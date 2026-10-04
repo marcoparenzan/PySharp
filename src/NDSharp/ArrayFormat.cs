@@ -55,7 +55,7 @@ public static class ArrayFormat
             extras.Add($"shape={Broadcasting.ShapeRepr(a.Shape)}");
         bool implied = a.DType is DType.Float64 or DType.Int64 or DType.Bool or DType.Complex128;
         if (!implied || a.Size == 0)
-            extras.Add($"dtype={a.DType.Name()}");
+            extras.Add(a.DType.IsTemporal() ? $"dtype='{a.DType.Name()}'" : $"dtype={a.DType.Name()}");
         if (extras.Count == 0) return prefix + lst + ")";
         string arrStr = prefix + lst + ",";
         string extraStr = string.Join(", ", extras) + ")";
@@ -70,6 +70,12 @@ public static class ArrayFormat
     /// below 1e-4 or from 1e16 (<c>1e-05</c>, <c>1e+16</c>).</summary>
     public static string ScalarStr(object value, DType dtype)
     {
+        if (dtype.IsTemporal())
+        {
+            long t = (long)value;
+            if (dtype.IsDateTime()) return Temporal.DateTimeText(t, dtype);
+            return t == Temporal.NaT ? "NaT" : t + " " + dtype.TemporalUnit() switch { "D" => "days", "h" => "hours", "m" => "minutes", "s" => "seconds", "ms" => "milliseconds", "us" => "microseconds", _ => "nanoseconds" };
+        }
         switch (value)
         {
             case bool b: return b ? "True" : "False";
@@ -172,8 +178,28 @@ public static class ArrayFormat
     private static ElementFormatter Formatter(NDArray a, PrintOptions o, bool all0d)
         => MakeFormatter(a.DType, new List<object> { a.GetAt(0) }, o, all0d);
 
+    private sealed class TemporalFormatter : ElementFormatter
+    {
+        private readonly DType _dt;
+        private readonly int _width;
+        public TemporalFormatter(DType dt, List<object> data)
+        {
+            _dt = dt;
+            _width = data.Count == 0 ? 0 : data.Max(v => Text((long)v).Length);
+        }
+
+        private string Text(long t)
+        {
+            if (_dt.IsDateTime()) return "'" + Temporal.DateTimeText(t, _dt) + "'";
+            return t == Temporal.NaT ? "'NaT'" : t.ToString(CultureInfo.InvariantCulture);
+        }
+
+        public override string Format(object value) => Text((long)value).PadLeft(_width);
+    }
+
     private static ElementFormatter MakeFormatter(DType dt, List<object> data, PrintOptions o, bool zeroDim)
     {
+        if (dt.IsTemporal()) return new TemporalFormatter(dt, data);
         if (dt == DType.Bool) return new BoolFormatter(zeroDim);
         if (dt.IsComplex()) return new ComplexFormatter(dt, data, o);
         if (dt.IsInteger()) return new IntFormatter(data);

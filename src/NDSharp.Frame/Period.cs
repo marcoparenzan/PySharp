@@ -11,14 +11,18 @@ namespace NDSharp.Frame;
 public enum PUnit { Year, Quarter, Month, Week, Day, Hour, Minute, Second, Milli, Micro, Nano }
 
 /// <summary>The frequency of a <c>Period</c>: calendar units (anchored: the month a year/quarter ends in, the weekday a week ends on) or a fixed duration.</summary>
-public sealed record PeriodFreq(PUnit Unit, int Anchor)
+public sealed record PeriodFreq(PUnit Unit, int Anchor, int Mult = 1)
 {
     private static readonly string[] Months = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
     private static readonly string[] Days = { "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN" };
 
     public static PeriodFreq Of(PUnit u) => new(u, u is PUnit.Year or PUnit.Quarter ? 12 : u == PUnit.Week ? 6 : 0);
 
-    public string Name => Unit switch
+    public string Name => (Mult > 1 ? Mult.ToString(CultureInfo.InvariantCulture) : "") + BaseName;
+
+    public PeriodFreq Base => Mult == 1 ? this : this with { Mult = 1 };
+
+    private string BaseName => Unit switch
     {
         PUnit.Year => "Y-" + Months[Anchor - 1],
         PUnit.Quarter => "Q-" + Months[Anchor - 1],
@@ -42,27 +46,28 @@ public sealed record PeriodFreq(PUnit Unit, int Anchor)
     {
         var m = Regex.Match(text.Trim(), @"^(\d*)([A-Za-z]+)(?:-([A-Za-z]{3}))?$");
         if (!m.Success) throw new FrameException($"Invalid frequency: {text}");
-        if (m.Groups[1].Value is not ("" or "1")) throw new FrameException($"Period frequencies with a multiple ('{text}') are not supported", "NotImplementedError");
+        int mult = m.Groups[1].Value == "" ? 1 : int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        if (mult < 1) throw new FrameException($"Invalid frequency: {text}");
         string code = m.Groups[2].Value, anchor = m.Groups[3].Success ? m.Groups[3].Value.ToUpperInvariant() : "";
         int Month(int dflt) { if (anchor == "") return dflt; int k = Array.IndexOf(Months, anchor); if (k < 0) throw new FrameException($"Invalid frequency: {text}"); return k + 1; }
         switch (code)
         {
-            case "Y": case "A": case "YE": return new PeriodFreq(PUnit.Year, Month(12));
-            case "Q": case "QE": return new PeriodFreq(PUnit.Quarter, Month(12));
-            case "M": return Of(PUnit.Month);
+            case "Y": case "A": case "YE": return new PeriodFreq(PUnit.Year, Month(12), mult);
+            case "Q": case "QE": return new PeriodFreq(PUnit.Quarter, Month(12), mult);
+            case "M": return Of(PUnit.Month) with { Mult = mult };
             case "W":
             {
                 int d = anchor == "" ? 6 : Array.IndexOf(Days, anchor);
                 if (d < 0) throw new FrameException($"Invalid frequency: {text}");
-                return new PeriodFreq(PUnit.Week, d);
+                return new PeriodFreq(PUnit.Week, d, mult);
             }
-            case "D": return Of(PUnit.Day);
-            case "h": return Of(PUnit.Hour);
-            case "min": return Of(PUnit.Minute);
-            case "s": return Of(PUnit.Second);
-            case "ms": return Of(PUnit.Milli);
-            case "us": return Of(PUnit.Micro);
-            case "ns": return Of(PUnit.Nano);
+            case "D": return Of(PUnit.Day) with { Mult = mult };
+            case "h": return Of(PUnit.Hour) with { Mult = mult };
+            case "min": return Of(PUnit.Minute) with { Mult = mult };
+            case "s": return Of(PUnit.Second) with { Mult = mult };
+            case "ms": return Of(PUnit.Milli) with { Mult = mult };
+            case "us": return Of(PUnit.Micro) with { Mult = mult };
+            case "ns": return Of(PUnit.Nano) with { Mult = mult };
             case "B": throw new FrameException("Period with BDay freq is not supported", "NotImplementedError");
         }
         throw new FrameException($"Invalid frequency: {text}");
@@ -121,6 +126,7 @@ public static class PeriodCore
     public static long Ordinal(PeriodFreq f, long ticks, DateUnit unit)
     {
         if (ticks == DateTimeCore.NaT) return NaT;
+        if (f.Mult > 1) f = f.Base;
         var p = DateTimeCore.Decompose(ticks, unit);
         long monthIndex = p.Year * 12 + p.Month - 1;
         switch (f.Unit)
@@ -169,6 +175,7 @@ public static class PeriodCore
     /// <summary>First and last instant (inclusive) of a period, in the frequency's tick unit.</summary>
     public static (long start, long end) Span(PeriodFreq f, long ordinal)
     {
+        if (f.Mult > 1) return (Span(f.Base, ordinal).start, Span(f.Base, ordinal + f.Mult - 1).end);
         var unit = f.TickUnit;
         switch (f.Unit)
         {

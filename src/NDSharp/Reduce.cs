@@ -181,7 +181,7 @@ internal static class Red
             throw new NDValueException($"attempt to get {(max ? "argmax" : "argmin")} of an empty sequence");
         var outShape = axis is null ? (keepdims ? Enumerable.Repeat(1, a.Ndim).ToArray() : Array.Empty<int>()) : OutShape(src.Shape, axes, keepdims);
         var result = new NDArray(DType.Int64, new long[NDArray.SizeOf(outShape)], outShape);
-        switch (src.DType)
+        switch (src.DType.Storage())
         {
             case DType.Int8: ArgT<sbyte>(src, ax, max, (long[])result.Buffer); break;
             case DType.UInt8: ArgT<byte>(src, ax, max, (long[])result.Buffer); break;
@@ -286,7 +286,7 @@ public static partial class np
     private static DType ReductionType(NDArray a, DType? dtype) => dtype ?? DTypes.SumResult(a.DType);
 
     public static NDArray Sum(NDArray a, int[]? axis = null, bool keepdims = false, DType? dtype = null)
-        => a.DType.IsComplex()
+        => a.DType.IsTimeDelta() ? Temporal.Reduce(a, x => Sum(x, axis, keepdims)) : a.DType.IsDateTime() ? throw new NDTypeException("ufunc 'add' cannot use operands with types dtype('" + a.DType.Name() + "') and dtype('" + a.DType.Name() + "')") : a.DType.IsComplex()
             ? Cx.FromParts(Sum(Real(a), axis, keepdims), Sum(Imag(a), axis, keepdims), a.DType)
             : Red.Fold<AddK>(a.CastTo(ReductionType(a, dtype)), Red.NormalizeAxes(axis, a.Ndim), keepdims, 0L, "add");
 
@@ -294,10 +294,10 @@ public static partial class np
         => Red.Fold<MulK>(a.CastTo(ReductionType(a, dtype)), Red.NormalizeAxes(axis, a.Ndim), keepdims, 1L, "multiply");
 
     public static NDArray Max(NDArray a, int[]? axis = null, bool keepdims = false)
-        => Red.Fold<MaxK>(a, Red.NormalizeAxes(axis, a.Ndim), keepdims, null, "maximum");
+        => a.DType.IsTemporal() ? Temporal.Reduce(a, x => Max(x, axis, keepdims)) : Red.Fold<MaxK>(a, Red.NormalizeAxes(axis, a.Ndim), keepdims, null, "maximum");
 
     public static NDArray Min(NDArray a, int[]? axis = null, bool keepdims = false)
-        => Red.Fold<MinK>(a, Red.NormalizeAxes(axis, a.Ndim), keepdims, null, "minimum");
+        => a.DType.IsTemporal() ? Temporal.Reduce(a, x => Min(x, axis, keepdims)) : Red.Fold<MinK>(a, Red.NormalizeAxes(axis, a.Ndim), keepdims, null, "minimum");
 
     /// <summary>Peak-to-peak (max − min).</summary>
     public static NDArray Ptp(NDArray a, int[]? axis = null, bool keepdims = false)

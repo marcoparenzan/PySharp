@@ -180,13 +180,16 @@ public static class FrameOps
         var order = new List<object>();
         var first = new Dictionary<object, int>();
         var counts = new Dictionary<object, long>();
+        object? naKey = null;
         for (int i = 0; i < c.Length; i++)
         {
             if (dropNa && c.IsNa(i)) continue;
             var k = Column.Key(c[i]) ?? Column.NaNKey;
+            if (c.Nullable && c.IsNa(i) && !counts.ContainsKey(k)) { counts[k] = 0; first[k] = i; naKey = k; }
             if (!counts.ContainsKey(k)) { counts[k] = 0; first[k] = i; order.Add(k); }
             counts[k]++;
         }
+        if (naKey is not null) { order.Remove(naKey); order.Add(naKey); }
         IEnumerable<object> keys = order;
         if (sort) keys = ascending ? order.OrderBy(k => counts[k]) : order.OrderByDescending(k => counts[k]);
         var ks = keys.ToArray();
@@ -220,6 +223,7 @@ public static class FrameOps
     {
         if (c.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) return Ops.Binary(BinOp.Sub, c, Shift(c, periods));
         if (!Reduce.IsNumeric(c)) throw new FrameException("unsupported operand type(s) for -", "TypeError");
+        if (c.Nullable) return Ops.Binary(BinOp.Sub, c.Kind == Kind.Bool ? Column.MakeNullable(Column.FromLongs(c.FillPlaceholder().Bools.Select(b => b ? 1L : 0L).ToArray()), c.NaMask()) : c, Shift(c.Kind == Kind.Bool ? Column.MakeNullable(Column.FromLongs(c.FillPlaceholder().Bools.Select(b => b ? 1L : 0L).ToArray()), c.NaMask()) : c, periods));
         var f = c.Kind == Kind.Bool ? Column.FromLongs(c.Bools.Select(b => b ? 1L : 0L).ToArray()) : c;
         var prev = Shift(f, periods);
         return Ops.Binary(BinOp.Sub, f.Kind == Kind.Int ? Column.FromDoubles(f.Longs.Select(x => (double)x).ToArray()) : f, prev);
@@ -250,7 +254,8 @@ public static class FrameOps
             };
             foreach (var q in percentiles) { labels.Add(PercentileLabel(q)); vals.Add(Reduce.Quantile(c, q)); }
             labels.Add("max"); vals.Add(Convert.ToDouble(Reduce.Scalar("max", c)));
-            return new Series(Column.FromDoubles(vals.ToArray()), new Index(Column.Infer(labels)), s.Name);
+            var dcol = Column.FromDoubles(vals.ToArray());
+            return new Series(c.Nullable ? Column.MakeNullable(dcol, new bool[vals.Count]) : dcol, new Index(Column.Infer(labels)), s.Name);
         }
         if (c.Kind is Kind.DateTime or Kind.Timedelta)
         {

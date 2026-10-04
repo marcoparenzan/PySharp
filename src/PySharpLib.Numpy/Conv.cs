@@ -194,6 +194,7 @@ internal static class Conv
             PyTuple t => t.Items,
             _ => throw new NDTypeException("not a sequence"),
         };
+        if (dtype is DType td && td.IsTemporal()) return TemporalSequence(items, td);
         NDArray result;
         if (items.Count == 0)
             result = np.Zeros(new[] { 0 }, dtype ?? DType.Float64);
@@ -212,6 +213,28 @@ internal static class Conv
             result = np.Stack(children, 0);
         }
         return dtype is DType dt && dt != result.DType ? result.AsType(dt) : result;
+    }
+
+    /// <summary>A (nested) list of date strings, integers, NaT/None or datetime64 scalars as an array of a datetime64/timedelta64 dtype.</summary>
+    private static NDArray TemporalSequence(IReadOnlyList<object> items, DType dtype)
+    {
+        if (items.Any(x => x is PyList or PyTuple))
+            return np.Stack(items.Select(x => FromSequence(x, dtype)).ToList(), 0);
+        var ticks = new long[items.Count];
+        for (int i = 0; i < ticks.Length; i++)
+        {
+            var x = items[i];
+            ticks[i] = x switch
+            {
+                PyNone => Temporal.NaT,
+                double d when double.IsNaN(d) => Temporal.NaT,
+                BigInteger b => (long)b,
+                string s when dtype.IsDateTime() => Temporal.ParseDateTime(s, dtype) ?? throw PyErr.ValueError($"Error parsing datetime string \"{s}\" at position {i}"),
+                PyInstance { Native: ScalarBox sb } when sb.Array.DType.IsTemporal() => (long)sb.Array.AsType(dtype).GetAt(0),
+                _ => throw PyErr.TypeError($"Cannot convert {PyOps.TypeName(x)} to {dtype.Name()}"),
+            };
+        }
+        return new NDArray(dtype, ticks, new[] { ticks.Length });
     }
 
     private static NDArray FromScalars(IReadOnlyList<object> items)

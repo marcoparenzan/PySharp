@@ -42,7 +42,7 @@ public static class Assign
 
     private static void Run(NDArray dst, NDArray s, int[] ss)
     {
-        switch (dst.DType)
+        switch (dst.DType.Storage())
         {
             case DType.Bool: Loop((bool[])s.Buffer, s.Offset, ss, (bool[])dst.Buffer, dst); break;
             case DType.Int8: Loop((sbyte[])s.Buffer, s.Offset, ss, (sbyte[])dst.Buffer, dst); break;

@@ -69,7 +69,7 @@ public static class Info
         for (int i = 0; i < d.NCols; i++)
             sb.Append(Put(" " + i, spaceNum)).Append(Put(names[i], space)).Append(Put(counts[i] + " non-null", spaceCount)).Append(Put(dtypes[i], spaceDtype)).Append('\n');
         sb.Append("dtypes: ").Append(string.Join(", ", dtypes.GroupBy(t => t).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}({g.Count()})"))).Append('\n');
-        long mem = IndexBytes(d.Index) + d.Data.Sum(c => (long)c.Length * ItemSize(c));
+        long mem = IndexBytes(d.Index) + d.Data.Sum(c => (long)c.Length * ItemSize(c) + (c.Nullable && c.Kind != Kind.Str ? c.Length : 0));
         sb.Append("memory usage: ").Append(SizeText(mem, PlusFlag(d.Data, d.Index))).Append('\n');
         return sb.ToString();
     }

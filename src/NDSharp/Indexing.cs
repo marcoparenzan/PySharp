@@ -342,7 +342,7 @@ internal static class Indexer
 
     private static void Gather(NDArray a, int[] offsets, NDArray result)
     {
-        switch (a.DType)
+        switch (a.DType.Storage())
         {
             case DType.Bool: GatherT((bool[])a.Buffer, offsets, (bool[])result.Buffer); break;
             case DType.Int8: GatherT((sbyte[])a.Buffer, offsets, (sbyte[])result.Buffer); break;
@@ -369,7 +369,7 @@ internal static class Indexer
     private static void Scatter(NDArray a, int[] offsets, NDArray values)
     {
         int vo = values.Offset;
-        switch (a.DType)
+        switch (a.DType.Storage())
         {
             case DType.Bool: ScatterT((bool[])a.Buffer, offsets, (bool[])values.Buffer, vo); break;
             case DType.Int8: ScatterT((sbyte[])a.Buffer, offsets, (sbyte[])values.Buffer, vo); break;

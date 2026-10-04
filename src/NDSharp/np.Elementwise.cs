@@ -14,14 +14,18 @@ public static partial class np
 
     private static bool IsC(DType d) => d.IsComplex();
 
+    private static bool Tmp(NDArray a, NDArray b) => a.DType.IsTemporal() || b.DType.IsTemporal();
+
     public static NDArray Add(NDArray a, NDArray b)
     {
+        if (Tmp(a, b)) return Temporal.Add(a, b);
         var rt = Ew.ResultType(a, b);
         return IsC(rt) ? Cx.Binary(a, b, rt, static (x, y) => x + y) : Ew.Num<AddK>(a, b, rt);
     }
 
     public static NDArray Subtract(NDArray a, NDArray b)
     {
+        if (Tmp(a, b)) return Temporal.Subtract(a, b);
         var rt = Ew.ResultType(a, b);
         if (rt == DType.Bool)
             throw new NDTypeException(
@@ -31,6 +35,7 @@ public static partial class np
 
     public static NDArray Multiply(NDArray a, NDArray b)
     {
+        if (Tmp(a, b)) return Temporal.MultiplyDivide(a, b, false);
         var rt = Ew.ResultType(a, b);
         return IsC(rt) ? Cx.Binary(a, b, rt, static (x, y) => x * y) : Ew.Num<MulK>(a, b, rt);
     }
@@ -43,6 +48,7 @@ public static partial class np
     /// <summary>numpy <c>true_divide</c>: integers (and bool) divide in float64.</summary>
     public static NDArray Divide(NDArray a, NDArray b)
     {
+        if (Tmp(a, b)) return Temporal.MultiplyDivide(a, b, true);
         var rt = Ew.ResultType(a, b);
         if (IsC(rt)) return Cx.Binary(a, b, rt, static (x, y) => x / y);
         return Ew.Float<DivF>(a, b, rt.IsFloat() ? rt : DType.Float64);
@@ -97,14 +103,14 @@ public static partial class np
     private static bool AnyC(NDArray a, NDArray b) => IsC(a.DType) || IsC(b.DType);
 
     public static NDArray Equal(NDArray a, NDArray b)
-        => AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x == y) : Ew.Compare<EqK>(a, b);
+        => Tmp(a, b) ? Temporal.Compare("eq", a, b) : AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x == y) : Ew.Compare<EqK>(a, b);
 
     public static NDArray NotEqual(NDArray a, NDArray b)
-        => AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x != y) : Ew.Compare<NeK>(a, b);
-    public static NDArray Less(NDArray a, NDArray b) => Ew.Compare<LtK>(a, b);
-    public static NDArray LessEqual(NDArray a, NDArray b) => Ew.Compare<LeK>(a, b);
-    public static NDArray Greater(NDArray a, NDArray b) => Ew.Compare<GtK>(a, b);
-    public static NDArray GreaterEqual(NDArray a, NDArray b) => Ew.Compare<GeK>(a, b);
+        => Tmp(a, b) ? Temporal.Compare("ne", a, b) : AnyC(a, b) ? Cx.Compare(a, b, Ew.ResultType(a, b, true), static (x, y) => x != y) : Ew.Compare<NeK>(a, b);
+    public static NDArray Less(NDArray a, NDArray b) => Tmp(a, b) ? Temporal.Compare("lt", a, b) : Ew.Compare<LtK>(a, b);
+    public static NDArray LessEqual(NDArray a, NDArray b) => Tmp(a, b) ? Temporal.Compare("le", a, b) : Ew.Compare<LeK>(a, b);
+    public static NDArray Greater(NDArray a, NDArray b) => Tmp(a, b) ? Temporal.Compare("gt", a, b) : Ew.Compare<GtK>(a, b);
+    public static NDArray GreaterEqual(NDArray a, NDArray b) => Tmp(a, b) ? Temporal.Compare("ge", a, b) : Ew.Compare<GeK>(a, b);
 
     // ================================================================ bitwise / logical
 

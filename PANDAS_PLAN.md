@@ -139,23 +139,30 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - [x] time zones: `tz_localize` (`ambiguous`, `nonexistent`) / `tz_convert` on Timestamp, Series, DataFrame, DatetimeIndex and `.dt`, `Timestamp(tz=)`, offset strings (`+01:00`, `Z`), `to_datetime(utc=True)`, tz-aware `date_range`, DST-aware offsets (`Day` is a calendar day, `Hour`/`Timedelta` are absolute), resample/Grouper on the local clock, tz in printing, CSV and JSON; the OS time zone database supplies the rules; `P8_tz`, `P8_tz_edge`
 - [x] the Index repr now ports pandas' `format_object_summary` exactly (right-justification, wrapping, truncation); `PeriodTzTests` (9 native tests); sample `pandas_periods_tz_demo.py` byte-identical to CPython + pandas
 
+### Phase 9 — Remaining items  ✅
+- [x] `describe(include=/exclude=)` (`'all'`, dtype lists, row-name union) and `select_dtypes` through one dtype-spec matcher; `interpolate` (`linear`/`index`/`values`/`time`, `limit`, `limit_direction`, `limit_area`); `P9_describe_interpolate`
+- [x] `resample(origin=, offset=)` (`epoch`, `start`, `start_day`, `end`, `end_day`, Timestamp) and `resample(kind='period')` / PeriodIndex results; `P9_resample_origin`
+- [x] Period frequencies with a multiple (`'2M'`, `'3Q'`, `'5min'`); `P9_period_multiples`. Business-day periods (`'B'`) are deliberately skipped (deprecated upstream)
+- [x] numpy `datetime64` / `timedelta64` arrays (units `D h m s ms us ns`): construction, parsing, arithmetic, comparison, reductions, `isnat`, repr; `.values` / `np.asarray` of datetime columns and datetime frames; `numpy/P11_datetime64`, `P9_numpy_datetime`
+- [x] nullable dtypes and `pd.NA`: `Int8..Int64`, `UInt8..UInt64`, `Float32/64`, `boolean`, `string` (Series/DataFrame/`pd.array`, `convert_dtypes`, `astype`, Kleene logic, masked reductions, `fillna`/`dropna`/sort/`value_counts`/groupby/describe/info, `.str` on `string`); the `NAType` singleton with pandas' propagation rules; `P9_nullable`
+
 ---
 
 ## Known divergences (grows as phases land)
 
 - `np.asarray(series_of_str)` / `.values` of `str` and `object` columns: NDSharp has no object arrays, so these raise `NotImplementedError` (numeric and bool columns convert).
 - `Series.dtype` of a `str` column is a stand-in object (`str(dtype) == 'str'`, `repr` as pandas); there is no `StringDtype` class hierarchy.
-- Nullable dtypes and `pd.NA`: out of scope. Period frequencies with a multiple (`'2M'`) and business-day periods (`'B'`) raise `NotImplementedError`; `to_pydatetime()` of a tz-aware Timestamp raises (PySharp's `datetime` has no tz-aware instances); zone abbreviations (`%Z`) are known for common zones and fall back to the numeric offset elsewhere; historical zone rules follow the OS database, not pandas' bundled one.
+- Business-day periods (`'B'`) raise `NotImplementedError`; nullable dtypes: an element read from an `Int64` Series is a Python int (pandas: `np.int64`), `pd.array` supports only the nullable dtypes, `Int64` with `float` data that is not integral is rejected with a `TypeError`; numpy `datetime64` has no `W`/`M`/`Y` units and does not sort NaT; `to_pydatetime()` of a tz-aware Timestamp raises (PySharp's `datetime` has no tz-aware instances); zone abbreviations (`%Z`) are known for common zones and fall back to the numeric offset elsewhere; historical zone rules follow the OS database, not pandas' bundled one.
 - A frame/Series element read from a `float32` column comes back as a Python float (pandas returns `np.float32`); reductions return plain Python `int`/`float` (the numpy binding's convention), not `np.int64`/`np.float64`.
 - `Series.unique()` of a `str`/`object` Series returns a Python list (pandas returns an extension array).
 - `sort_values` is always stable (pandas' default quicksort is not stable on large inputs, so tie order can differ there).
-- `Series.corr` can differ from pandas in the last digit (BLAS rounding inside `np.corrcoef`); the oracle snippet rounds it. `describe(include=...)`, `ranking`, `rolling`, `interpolate`, `eval`/`query` are not implemented yet.
+- `Series.corr` can differ from pandas in the last digit (BLAS rounding inside `np.corrcoef`); the oracle snippet rounds it. 
 - A binary operation between two Series with *different* duplicate labels raises (pandas joins them).
 - `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
 - MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
 - `read_csv`: no `converters`/`chunksize`/URLs and no combined-column `parse_dates=[[...]]`; `orient='table'` JSON is not implemented; `read_json` converts dates only for the default date-like column names or an explicit `convert_dates` list.
-- Datetimes: `.values`/`np.asarray` of a datetime column raise (NDSharp has no datetime64 arrays); `resample(origin=, offset=)` raises; `isocalendar()` columns are int64 where pandas has UInt32; `Series.unique()` returns a `DatetimeArray`/`TimedeltaArray` stand-in with `len`, iteration, indexing and `tolist`; `resample(kind='period')` is not implemented.
-- Not implemented: `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
+- Datetimes: `isocalendar()` columns are int64 where pandas has UInt32; `Series.unique()` returns a `DatetimeArray`/`TimedeltaArray` stand-in with `len`, iteration, indexing and `tolist`.
+- Plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
 
 ## Verification environment
 
