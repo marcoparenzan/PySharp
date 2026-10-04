@@ -162,9 +162,35 @@ internal static class PdSelect
     }
 
     /// <summary>Positions selected by a label key (<c>loc</c>): label, label slice (inclusive), list of labels or mask.</summary>
+    /// <summary>How many leading levels a scalar/tuple key of a MultiIndex consumes when it is shorter than the index (0 otherwise).</summary>
+    public static int PartialDepth(object key, FIndex index)
+    {
+        if (!index.IsMulti || key is PySlice || PdConv.IsListLike(key) && key is not PyTuple) return 0;
+        int n = key is PyTuple t ? t.Items.Length : 1;
+        return n < index.NLevels ? n : 0;
+    }
+
+    private static (int[] pos, bool scalar) MultiLoc(object key, FIndex index)
+    {
+        var parts = key is PyTuple t ? t.Items.Select(PdConv.ToCell).ToArray() : new[] { PdConv.ToCell(key) };
+        if (parts.Length > index.NLevels) throw PdConv.KeyErr(key);
+        var want = parts.Select(p => Column.Key(p) ?? Column.NaNKey).ToArray();
+        var pos = new List<int>();
+        for (int i = 0; i < index.Length; i++)
+        {
+            var lt = (LabelTuple)index.Labels[i]!;
+            bool ok = true;
+            for (int k = 0; k < want.Length && ok; k++) ok = Equals(Column.Key(lt.Parts[k]) ?? Column.NaNKey, want[k]);
+            if (ok) pos.Add(i);
+        }
+        if (pos.Count == 0) throw PdConv.KeyErr(key);
+        return (pos.ToArray(), parts.Length == index.NLevels && pos.Count == 1);
+    }
+
     public static (int[] pos, bool scalar) LocAxis(object key, FIndex index)
     {
         if (key is PySlice sl) return (LabelSlice(sl, index), false);
+        if (index.IsMulti && (key is PyTuple || !PdConv.IsListLike(key)) && TryMask(key, index) is null) return MultiLoc(key, index);
         var mask = TryMask(key, index);
         if (mask is not null)
         {

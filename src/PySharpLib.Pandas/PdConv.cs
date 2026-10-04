@@ -28,6 +28,7 @@ internal static class PdConv
         {
             case null: return null;
             case PyNone: return null;
+            case PyTuple tup: return new LabelTuple(tup.Items.Select(ToCell).ToArray());
             case bool or double or string: return v;
             case BigInteger bi: return bi >= long.MinValue && bi <= long.MaxValue ? (long)bi : (object)(double)bi;
             case PyInstance { Native: ScalarBox }:
@@ -46,6 +47,7 @@ internal static class PdConv
         null => kind == Kind.Str ? double.NaN : PyNone.Instance,
         long l => new BigInteger(l),
         bool or double or string => v,
+        LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         _ => v,
     };
 
@@ -55,6 +57,8 @@ internal static class PdConv
     {
         null => PyNone.Instance,
         long l => new BigInteger(l),
+        LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
+        double d when double.IsNaN(d) => d,
         _ => v,
     };
 
@@ -261,7 +265,7 @@ internal sealed class PdDType
     {
         StrInstance = new PyInstance(StringDtypeClass) { Native = new PdDType("str") };
         ObjectInstance = new PyInstance(ObjectDtypeClass) { Native = new PdDType("object") };
-        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(na_value=nan)>"), (ObjectDtypeClass, "dtype('O')") })
+        foreach (var (cls, repr) in new[] { (StringDtypeClass, "<StringDtype(storage='python', na_value=nan)>"), (ObjectDtypeClass, "dtype('O')") })
         {
             var r = repr;
             cls.Dict["__repr__"] = new PyBuiltinFunction("dtype.__repr__", (_, _, _) => r);

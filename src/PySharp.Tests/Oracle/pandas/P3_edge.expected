@@ -1,0 +1,156 @@
+           rev            units
+           sum       mean   max
+region                         
+E       125.75  62.875000     6
+N       290.00  96.666667    12
+S       225.50  75.166667     9
+        rev_sum   rev_mean  units_max
+region                               
+E        125.75  62.875000          6
+N        290.00  96.666667         12
+S        225.50  75.166667          9
+  region  rev_sum   rev_mean  units_max
+0      E   125.75  62.875000          6
+1      N   290.00  96.666667         12
+2      S   225.50  75.166667          9
+rep       ann    bob      cy   dee   eve
+region                                  
+E         0.0    0.0  125.75   0.0   0.0
+N       220.0    0.0    0.00  70.0   0.0
+S         0.0  170.5    0.00   0.0  55.0
+        count     sum
+region               
+N           3  290.00
+S           3  225.50
+E           2  125.75
+          rep  q    rev  units
+region                        
+E      6   cy  4   65.5      6
+N      2  ann  2  120.0     12
+S      4  bob  3   90.0      9
+region
+E    10.479167
+N    10.000000
+S    10.250000
+dtype: float64
+q
+1    2
+2    2
+3    2
+4    2
+Name: rep, dtype: int64
+region
+E          cy
+N    ann, dee
+S    bob, eve
+Name: rep, dtype: str
+rev    min     70.0
+       max    120.0
+units  min      7.0
+       max     12.0
+Name: N, dtype: float64
+  region   total  n
+0      E  125.75  2
+1      N  290.00  3
+2      S  225.50  3
+N 290.0
+[2.9, 2.801, 2.417, 2.087, 2.506, 4.143, 1.92, 4.1]
+  region  rep  q    rev  units  share
+0      N  ann  1  100.0     10  0.345
+1      S  bob  1   80.5      8  0.357
+2      N  ann  2  120.0     12  0.414
+norank
+rev
+False    24
+True     39
+Name: units, dtype: int64
+  region  rep  q    rev  units
+6      E   cy  4   65.5      6
+2      N  ann  2  120.0     12
+4      S  bob  3   90.0      9
+   k    a    b
+0  1  1.5  NaN
+1  2  2.5    x
+2  3  3.5    y
+3  4  NaN    z k      int64
+a    float64
+b        str
+dtype: object
+k      int64
+a    float64
+b        str
+dtype: object
+     a  b
+k        
+2  2.5  x
+3  3.5  y
+   oid  cid  amt name
+0   10    1  5.0  ann
+1   11    1  7.5  ann
+2   12    3  9.0  NaN
+name
+ann    12.5
+NaN     9.0
+Name: amt, dtype: float64
+       sum  count
+name             
+ann   12.5      2
+  region  rep  q    rev  units
+0      N  ann  1  100.0     10
+1      S  bob  1   80.5      8
+6      E   cy  4   65.5      6
+7      S  eve  4   55.0      5
+  region    rev
+0      N  100.0
+1      S   80.5
+float64
+a    object
+dtype: object
+a    float64
+b    float64
+dtype: object
+              a  b
+0  line1\nline2  1
+1      say "hi"  2 ['line1\nline2', 'say "hi"']
+a,b
+"line1
+line2",1
+"say ""hi""",2
+[4, 6]
+{'a': 1, 'b': 2}
+[[1, 2], [3, 4]]
+[dtype('int64'), <StringDtype(storage='python', na_value=nan)>] [' x ', 'y']
+q           1       2     3     4
+region                           
+E         NaN   60.25   NaN  65.5
+N       100.0  120.00  70.0   NaN
+S        80.5     NaN  90.0  55.0
+region  q
+E       1       NaN
+        2     60.25
+        3       NaN
+        4     65.50
+N       1    100.00
+        2    120.00
+        3     70.00
+        4       NaN
+S       1     80.50
+        2       NaN
+        3     90.00
+        4     55.00
+dtype: float64
+  region  q     rev
+0      E  2   60.25
+1      E  4   65.50
+2      N  1  100.00
+3      N  2  120.00
+4      N  3   70.00
+5      S  1   80.50
+6      S  3   90.00
+7      S  4   55.00
+q           1       2      3      4     All
+region                                     
+E         0.0   60.25    0.0   65.5  125.75
+N       100.0  120.00   70.0    0.0  290.00
+S        80.5    0.00   90.0   55.0  225.50
+All     180.5  180.25  160.0  120.5  641.25

@@ -290,6 +290,15 @@ public static class Ops
 
     public static int CompareLabels(object? a, object? b)
     {
+        if (a is LabelTuple ta && b is LabelTuple tb)
+        {
+            for (int i = 0; i < Math.Min(ta.Parts.Length, tb.Parts.Length); i++)
+            {
+                int c = CompareLabels(ta.Parts[i], tb.Parts[i]);
+                if (c != 0) return c;
+            }
+            return ta.Parts.Length.CompareTo(tb.Parts.Length);
+        }
         if (a is string sa && b is string sb) return string.CompareOrdinal(sa, sb);
         if (a is null || b is null) return a is null ? (b is null ? 0 : 1) : -1;
         if (a is string || b is string) throw new FrameException("'<' not supported between instances of 'str' and 'int'", "TypeError");

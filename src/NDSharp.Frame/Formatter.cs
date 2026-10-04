@@ -221,6 +221,14 @@ public static class Formatter
             int lead = cells.Min(x => x.Length - x.TrimStart().Length);
             return lead > 0 ? cells.Select(x => x[lead..]).ToArray() : cells;
         }
+        if (l.Kind == Kind.Bool)
+        {
+            // bool labels go through the object formatter: leading blank, left-justified, common leading blanks trimmed (so 'True' ends up padded)
+            var raw = Enumerable.Range(0, l.Length).Select(i => " " + (l.BoolAt(i) ? "True" : "False")).ToArray();
+            int w = raw.Length == 0 ? 0 : raw.Max(x => x.Length);
+            var padded = raw.Select(x => x.PadRight(w)).ToArray();
+            return padded.Select(x => x[1..]).ToArray();
+        }
         var r = new string[l.Length];
         for (int i = 0; i < r.Length; i++)
             r[i] = l.Kind == Kind.Str ? (l.StrAt(i) is { } s ? Escape(s) : "NaN") : LabelText(l[i], o);
@@ -235,6 +243,66 @@ public static class Formatter
     }
 
     private static string Pp(object? name) => name switch { null => "", _ => ObjectStr(name) };
+
+    // ------------------------------------------------------------------------------------------ MultiIndex layout
+
+    private static string[][] LevelCells(Index ix, DisplayOptions o)
+    {
+        var r = new string[ix.NLevels][];
+        for (int k = 0; k < r.Length; k++) r[k] = LabelCells(new Index(ix.Level(k)), o);
+        return r;
+    }
+
+    /// <summary>Blanks repeated outer labels: a cell is shown only when it, or an outer level, differs from the row above.</summary>
+    private static string[][] Sparsified(string[][] raw, int count)
+    {
+        var res = raw.Select(l => (string[])l.Clone()).ToArray();
+        for (int i = count - 1; i >= 1; i--)
+            for (int k = 0; k < raw.Length; k++)
+            {
+                bool same = true;
+                for (int j = 0; j <= k && same; j++) same = raw[j][i] == raw[j][i - 1];
+                if (same) res[k][i] = ""; else break;
+            }
+        return res;
+    }
+
+    /// <summary>Row labels as display text. A MultiIndex gives sparsified levels, left-justified and joined by <paramref name="space"/> blanks;
+    /// <c>header</c> is the line of level names (null when no level is named).</summary>
+    private static (string? header, string[] cells) RowLabels(Index ix, DisplayOptions o, int space)
+    {
+        if (!ix.IsMulti)
+            return (ix.Name is null ? null : Pp(ix.Name), LabelCells(ix, o));
+        var lv = Sparsified(LevelCells(ix, o), ix.Length);
+        var names = ix.Names;
+        bool anyName = names.Any(n => n is not null);
+        var widths = lv.Select((l, k) => Math.Max(l.Length == 0 ? 0 : l.Max(x => x.Length), anyName && names[k] is not null ? Pp(names[k]).Length : 0)).ToArray();
+        string sep = new string(' ', space);
+        var cells = new string[ix.Length];
+        for (int i = 0; i < cells.Length; i++) cells[i] = string.Join(sep, lv.Select((l, k) => l[i].PadRight(widths[k])));
+        string? header = anyName ? string.Join(sep, names.Select((n, k) => (n is null ? "" : Pp(n)).PadRight(widths[k]))) : null;
+        return (header, cells);
+    }
+
+    private static string MultiIndexRepr(Index ix, DisplayOptions o)
+    {
+        int nl = ix.NLevels;
+        var parts = new string[nl][];
+        for (int k = 0; k < nl; k++)
+        {
+            var lvl = ix.Level(k);
+            var cells = new string[lvl.Length];
+            for (int i = 0; i < cells.Length; i++) cells[i] = ReprLabel(lvl, i);
+            int w = cells.Length == 0 ? 0 : cells.Max(x => x.Length);
+            parts[k] = cells.Select(c => c.PadLeft(w)).ToArray();
+        }
+        var rows = new List<string>();
+        for (int i = 0; i < ix.Length; i++)
+            rows.Add("(" + string.Join(", ", Enumerable.Range(0, nl).Select(k => parts[k][i])) + (nl == 1 ? ",)" : ")"));
+        string pad = new string(' ', "MultiIndex([".Length);
+        string names = ix.Names.All(n => n is null) ? "" : "names=[" + string.Join(", ", ix.Names.Select(n => n is null ? "None" : QuoteLabel(n))) + "]";
+        return "MultiIndex([" + string.Join(",\n" + pad, rows) + "],\n" + new string(' ', "MultiIndex(".Length) + names + ")";
+    }
 
     // ------------------------------------------------------------------------------------------ Series
 
@@ -258,8 +326,8 @@ public static class Formatter
             t = s.Take(pos);
         }
         var vals = MakeFixedWidth(FormatCells(t.Values, o), o.ColHeaderJustify, 0, o).ToList();
-        var idx = LabelCells(t.Index, o).ToList();
-        idx = MakeFixedWidth(idx, "left", 0, o).ToList();
+        var (idxHeader, idxCellsRaw) = RowLabels(t.Index, o, 2);
+        var idx = MakeFixedWidth(idxCellsRaw.ToList(), "left", 0, o).ToList();
         if (trunc)
         {
             int width = vals[rowNum - 1].Length;
@@ -268,7 +336,7 @@ public static class Formatter
             idx.Insert(rowNum, "");
         }
         string body = Adjoin(3, new[] { idx, vals });
-        if (s.Index.Name is not null) body = Pp(s.Index.Name) + "\n" + body;
+        if (idxHeader is not null) body = idxHeader + "\n" + body;
         string footer = footerBase;
         if (trunc) footer += (footer.Length > 0 ? ", " : "") + $"Length: {s.Length}";
         footer += (footer.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
@@ -389,15 +457,22 @@ public static class Formatter
                 t = t.TakeColumns(Enumerable.Range(0, colNum).Concat(Enumerable.Range(df.NCols - colNum, colNum)).ToArray());
             else t = t.TakeColumns(Enumerable.Range(0, colsFitted).ToArray());
         }
-        bool showRowIdxNames = t.Index.Name is not null;
-        bool showColIdxNames = t.Columns.Name is not null;
-        var headerLabels = LabelCells(t.Columns, o);
+        var (rowHeader, rowCells) = RowLabels(t.Index, o, 1);
+        bool showRowIdxNames = rowHeader is not null;
+        bool multiCols = t.Columns.IsMulti;
+        int nColLevels = t.Columns.NLevels;
+        bool showColIdxNames = t.Columns.Names.Any(n => n is not null);
+        string[][] headerLevels = multiCols ? Sparsified(LevelCells(t.Columns, o), t.NCols) : new[] { LabelCells(t.Columns, o) };
         var strcols = new List<List<string>>();
         for (int i = 0; i < t.NCols; i++)
         {
-            string head = headerLabels[i];
-            if (t.Data[i].Kind is Kind.Bool or Kind.Int or Kind.Float) head = " " + head;
-            var cheader = new List<string> { head };
+            var cheader = new List<string>();
+            for (int k = 0; k < nColLevels; k++)
+            {
+                string head = headerLevels[k][i];
+                if (!multiCols && t.Data[i].Kind is Kind.Bool or Kind.Int or Kind.Float) head = " " + head;
+                cheader.Add(head);
+            }
             if (showRowIdxNames) cheader.Add("");
             int hw = cheader.Max(x => x.Length);
             var values = MakeFixedWidth(FormatCells(t.Data[i], o), o.ColHeaderJustify, hw, o);
@@ -407,10 +482,10 @@ public static class Formatter
         }
         // index column
         var idxCells = new List<string>();
-        if (showRowIdxNames) idxCells.Add(Pp(t.Index.Name));
-        idxCells.AddRange(LabelCells(t.Index, o));
+        if (showRowIdxNames) idxCells.Add(rowHeader!);
+        idxCells.AddRange(rowCells);
         var idxFixed = MakeFixedWidth(idxCells, "left", 0, o).ToList();
-        var colHeader = new List<string> { showColIdxNames ? Pp(t.Columns.Name) : "" };
+        var colHeader = Enumerable.Range(0, nColLevels).Select(k => showColIdxNames && t.Columns.Names[k] is { } nm ? Pp(nm) : "").ToList();
         var strIndex = colHeader.Concat(idxFixed).ToList();
         strcols.Insert(0, strIndex);
         int indexLength = strIndex.Count;
@@ -442,6 +517,7 @@ public static class Formatter
     {
         var o = options ?? DisplayOptions.Current;
         string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
+        if (ix.IsMulti) return MultiIndexRepr(ix, o);
         if (ix.IsRange)
             return $"RangeIndex(start={ix.RangeStart}, stop={ix.RangeStop}, step={ix.RangeStep}{nameArg})";
         var items = new List<string>();

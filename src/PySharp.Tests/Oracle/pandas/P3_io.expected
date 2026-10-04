@@ -1,0 +1,146 @@
+   id     name  score     ok
+0   1      Ann   3.50   True
+1   2      Bob    NaN  False
+2   3  Lee, Jr   7.25   True
+id         int64
+name         str
+score    float64
+ok          bool
+dtype: object
+       name  score     ok
+id                       
+1       Ann   3.50   True
+2       Bob    NaN  False
+3   Lee, Jr   7.25   True
+RangeIndex(start=1, stop=4, step=1, name='id')
+      name  score
+0      Ann   3.50
+1      Bob    NaN
+2  Lee, Jr   7.25
+   id  score
+0   1   3.50
+1   2    NaN
+2   3   7.25
+   id name  score     ok
+0   1  Ann    3.5   True
+1   2  Bob    NaN  False
+  id     name  score     ok
+0  1      Ann   3.50   True
+1  2      Bob    NaN  False
+2  3  Lee, Jr   7.25   True
+id       float64
+name         str
+score    float64
+ok          bool
+dtype: object
+   0        1     2      3
+0  1      Ann  3.50   True
+1  2      Bob   NaN  False
+2  3  Lee, Jr  7.25   True
+   0  1
+0  1  2
+1  3  4
+   p  q
+0  1  2
+1  3  4
+   a  b
+0  1  2
+   a  b
+0  1  2
+   a  b
+0  1  2
+     a    b
+0  1.0  NaN
+1  2.0    x
+2  NaN    y
+   a    b
+0  1  NaN
+1  2    x
+   a    b
+0  1    -
+1  2  NaN
+    a     b
+0  NA  NULL
+   a  b
+0  1  2
+['a', 'a.1', 'b']
+['Unnamed: 0', 'x']
+a    float64
+b      int64
+dtype: object
+   a    b
+0  1  2.0
+1  3  NaN
+skip
+skip
+(0, 2) ['a', 'b']
+,id,name,score,ok
+0,1,Ann,3.5,True
+1,2,Bob,,False
+2,3,"Lee, Jr",7.25,True
+id,name,score,ok
+1,Ann,3.5,True
+2,Bob,,False
+3,"Lee, Jr",7.25,True
+id;name;score;ok
+1;Ann;3.5;True
+2;Bob;NA;False
+3;Lee, Jr;7.25;True
+name,score
+Ann,3.5
+Bob,
+"Lee, Jr",7.25
+0,1,Ann,3.5,True
+1,2,Bob,,False
+2,3,"Lee, Jr",7.25,True
+row,id,name,score,ok
+0,1,Ann,3.5,True
+1,2,Bob,,False
+2,3,"Lee, Jr",7.25,True
+id,name,score,ok
+1,Ann,3.5,True
+2,Bob,,False
+3,"Lee, Jr",7.2,True
+a,b
+1.0,"x,y"
+2.5,"q""r"
+1e-07,"line
+break"
+1e+20,
+,n
+0,1
+1,2
+,0
+a,1.5
+b,
+k1,k2,v
+a,1,1
+b,2,2
+True (3, 4)
+   id     name  score     ok
+0   1      Ann   3.50   True
+1   2      Bob    NaN  False
+2   3  Lee, Jr   7.25   True
+{'id': {0: 1, 1: 2, 2: 3}, 'name': {0: 'Ann', 1: 'Bob', 2: 'Lee, Jr'}, 'score': {0: 3.5, 1: nan, 2: 7.25}, 'ok': {0: True, 1: False, 2: True}}
+{'id': [1, 2, 3], 'name': ['Ann', 'Bob', 'Lee, Jr'], 'score': [3.5, nan, 7.25], 'ok': [True, False, True]}
+[{'id': 1, 'name': 'Ann', 'score': 3.5, 'ok': True}, {'id': 2, 'name': 'Bob', 'score': nan, 'ok': False}, {'id': 3, 'name': 'Lee, Jr', 'score': 7.25, 'ok': True}]
+{0: {'id': 1, 'name': 'Ann', 'score': 3.5, 'ok': True}, 1: {'id': 2, 'name': 'Bob', 'score': nan, 'ok': False}, 2: {'id': 3, 'name': 'Lee, Jr', 'score': 7.25, 'ok': True}}
+{'index': [0, 1, 2], 'columns': ['id', 'name', 'score', 'ok'], 'data': [[1, 'Ann', 3.5, True], [2, 'Bob', nan, False], [3, 'Lee, Jr', 7.25, True]]}
+{'index': [0, 1, 2], 'columns': ['id', 'name', 'score', 'ok'], 'data': [[1, 'Ann', 3.5, True], [2, 'Bob', nan, False], [3, 'Lee, Jr', 7.25, True]], 'index_names': [None], 'column_names': [None]}
+{0: 'Ann', 1: 'Bob', 2: 'Lee, Jr'}
+   a  b
+0  1  3
+1  2  4
+    x  y
+r1  1  2
+r2  3  4
+    x  y
+r1  1  2
+r2  3  4
+   n  s
+0  1  a
+1  2  b
+   n
+0  1
+1  2
+True

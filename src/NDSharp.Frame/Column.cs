@@ -71,6 +71,9 @@ public sealed class Column
         if (n == 0) return FromObjects(Array.Empty<object?>());
         int families = (anyBool ? 1 : 0) + ((anyInt || anyFloat) ? 1 : 0) + (anyStr ? 1 : 0) + (anyOther ? 1 : 0);
         if (families == 0) return FromObjects(values.ToArray()); // all None
+        // a string column with NaN placeholders (e.g. a missing name read back as float NaN) is still a str column
+        if (anyStr && anyFloat && !anyInt && !anyBool && !anyOther && values.All(v => v is null or string || v is double d && double.IsNaN(d)))
+            return FromStrings(values.Select(v => v as string).ToArray());
         if (families == 1 && !anyOther)
         {
             if (anyBool) return anyNone ? FromObjects(values.ToArray()) : FromBools(values.Select(v => (bool)v!).ToArray());

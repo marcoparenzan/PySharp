@@ -75,10 +75,16 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - [x] oracle snippets `Oracle/pandas/P2_*` (12 snippets, 1200+ lines of expected output) + 5 more native tests; samples `pandas_demo.py` and `pandas_analysis_demo.py` are byte-identical to CPython + pandas
 - [x] **Milestone M2:** operations / missing data / string methods snippets equal pandas' output
 
-### Phase 3 — Shaping and IO
-- [ ] `groupby`, `merge`/`join`, `concat`, `pivot`/`pivot_table`/`melt`/`crosstab`
-- [ ] `read_csv` / `to_csv`, `to_dict`, `from_records`, numpy interop
-- [ ] **Milestone M3:** all acceptance snippets (everything in scope) equal pandas' output
+### Phase 3 — Shaping and IO  ✅
+- [x] **MultiIndex** (rows and columns): construction (`from_tuples/from_arrays/from_product`, `set_index([...])`, groupby/pivot results), pandas-identical printing (sparsified levels, level names, header rows), `loc` with full and partial keys, `get_level_values`, `droplevel`, `names`, `sort_index`, `reset_index`
+- [x] **groupby**: one or several keys (labels, Series/arrays, levels, functions), `sort`, `as_index`, `dropna`; reductions (`sum mean median min max std var count prod first last nunique any all size quantile`), `agg` (name, callable, list, dict, named aggregation), `transform`, `apply`, `filter`, `cumsum/cumprod/cummax/cummin/cumcount/shift/diff/head/tail`, iteration, `get_group`, `groups`, column selection (`gb['x']`, `gb.x`)
+- [x] **merge / join**: `pd.merge`, `DataFrame.merge`, `DataFrame.join` — inner/left/right/outer/cross, `on`/`left_on`/`right_on`/`left_index`/`right_index`, suffixes, `indicator`, NaN keys match, outer keys sorted like pandas
+- [x] **concat**: Series and DataFrames, `axis=0/1`, `join`, `ignore_index`, `keys`/dict, column union in order of appearance
+- [x] **reshape**: `pivot_table` (values/index/columns lists, several aggfuncs, dict, callables, `fill_value`, `margins`), `pivot`, `melt`, `crosstab` (counts, values+aggfunc, margins, normalize), `stack`/`unstack`, `get_dummies`
+- [x] **IO**: `read_csv`/`read_table` (files, `StringIO`, quoting, `sep`, `header`, `names`, `index_col`, `usecols`, `dtype`, `na_values`, `keep_default_na`, `skiprows`, `nrows`, `comment`, `thousands`/`decimal`, duplicate and unnamed columns, pandas' type inference), `to_csv` (DataFrame and Series, files and strings, `sep`, `na_rep`, `float_format`, `columns`, `header`, `index`, `index_label`, MultiIndex rows), `to_dict` (all orients), `DataFrame.from_dict`, `from_records`
+- [x] oracle snippets `Oracle/pandas/P3_*` (7 snippets: multiindex, groupby, merge_concat, reshape, io, edge) + 5 more native tests; sample `pandas_report_demo.py` identical to CPython + pandas
+- [x] **Milestone M3:** every in-scope snippet equals pandas' output
+- Fixes found by the sample: a `str` column that meets NaN placeholders stays `str`; `read_csv(index_col=...)` of a regular integer column gives a RangeIndex; bool column labels print like pandas' object index; `unstack(fill_value=)` keeps ints; `stack()` keeps NaN (pandas 3)
 
 ### Phase 4 — Close-out
 - [ ] README / ROADMAP / RELEASE_NOTES / PROJECT_LOG, version lockstep, packages in the local feed, JupyterNet docs ("pandas in a notebook")
@@ -96,6 +102,9 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - `sort_values` is always stable (pandas' default quicksort is not stable on large inputs, so tie order can differ there).
 - `Series.corr` can differ from pandas in the last digit (BLAS rounding inside `np.corrcoef`); the oracle snippet rounds it. `describe(include=...)`, `ranking`, `rolling`, `interpolate`, `eval`/`query` are not implemented yet.
 - A binary operation between two Series with *different* duplicate labels raises (pandas joins them).
+- `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
+- MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
+- `read_csv`: no `parse_dates`/`converters`/`chunksize`/URLs; `to_json`/`read_json` are not implemented.
 
 ## Verification environment
 

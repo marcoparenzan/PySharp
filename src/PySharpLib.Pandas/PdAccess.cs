@@ -32,10 +32,12 @@ internal static class PdAccess
 
     public static object SeriesGet(Series s, object key, Mode mode)
     {
-        if (key is PyTuple && mode != Mode.Bracket) throw PyErr.IndexError("Too many indexers");
+        if (key is PyTuple && mode != Mode.Bracket && !s.Index.IsMulti) throw PyErr.IndexError("Too many indexers");
         var (pos, scalar) = SeriesAxis(s, key, mode);
         if (scalar) return PdConv.FromCell(s.Values, pos[0]);
-        return PdConv.Wrap(s.Take(pos));
+        var taken = s.Take(pos);
+        int depth = mode is Mode.Loc or Mode.Bracket ? PdSelect.PartialDepth(key, s.Index) : 0;
+        return PdConv.Wrap(depth > 0 ? new Series(taken.Values, taken.Index.DropLevels(depth), taken.Name) : taken);
     }
 
     public static void SeriesSet(Series s, object key, object value, Mode mode)
@@ -78,7 +80,7 @@ internal static class PdAccess
 
     public static object FrameGet(DataFrame df, object key)
     {
-        if (key is PyTuple) throw PyErr.NotImplementedError("DataFrame[tuple] (MultiIndex columns) is not supported");
+        if (key is PyTuple && !df.Columns.IsMulti) throw PyErr.NotImplementedError("DataFrame[tuple] needs MultiIndex columns");
         if (key is PyInstance { Native: DataFrame cond } && cond.Data.All(c => c.Kind == Kind.Bool))
             return PdConv.Wrap(new DataFrame(df.Data.Select((c, j) => FrameOps.Where(c, cond.Data[cond.Columns.Locs(df.Columns.Labels[j]).FirstOrDefault()].Bools, double.NaN)), df.Columns, df.Index));
         if (key is PySlice sl)
@@ -89,7 +91,7 @@ internal static class PdAccess
             if (mask.Length != df.NRows) throw PyErr.ValueError($"Item wrong length {mask.Length} instead of {df.NRows}.");
             return PdConv.Wrap(df.TakeRows(PdSelect.MaskPositions(mask)));
         }
-        if (PdConv.IsListLike(key))
+        if (PdConv.IsListLike(key) && !(key is PyTuple && df.Columns.IsMulti))
         {
             var pos = new List<int>();
             var cells = PdConv.Cells(key);
@@ -102,6 +104,14 @@ internal static class PdAccess
             if (missing.Count > 0)
                 throw PyErr.Raise(PyErr.KeyErrorClass, missing.Count == cells.Count ? $"\"None of [{Formatter.IndexRepr(new FIndex(Column.Infer(cells)))}] are in the [columns]\"" : $"\"[{string.Join(", ", missing)}] not in index\"");
             return PdConv.Wrap(df.TakeColumns(pos));
+        }
+        if (df.Columns.IsMulti && (key is PyTuple || !PdConv.IsListLike(key)))
+        {
+            var (cpos, cscalar) = PdSelect.LocAxis(key, df.Columns);
+            int depth = PdSelect.PartialDepth(key, df.Columns);
+            if (cscalar) return PdConv.Wrap(df.GetColumn(cpos[0]));
+            var sub = df.TakeColumns(cpos);
+            return PdConv.Wrap(depth > 0 ? new DataFrame(sub.Data, sub.Columns.DropLevels(depth), sub.Index) : sub);
         }
         var label = PdConv.ToCell(key);
         var locs = df.Columns.Locs(label);
@@ -132,12 +142,19 @@ internal static class PdAccess
     {
         object rowKey = key, colKey = null!;
         bool hasCols = false;
-        if (key is PyTuple t)
+        bool tupleIsRowKey = false;
+        if (key is PyTuple tk && df.Index.IsMulti && mode == Mode.Loc && tk.Items.Length <= df.Index.NLevels && tk.Items[0] is not (PyTuple or PySlice or PyList))
+        {
+            // a short tuple on a MultiIndex is a row key unless it names no row (then it is (row, column))
+            try { PdSelect.LocAxis(key, df.Index); tupleIsRowKey = true; } catch (PyRaise ex) when (ex.Value.Class == PyErr.KeyErrorClass) { }
+        }
+        if (key is PyTuple t && !tupleIsRowKey)
         {
             if (t.Items.Length != 2) throw PyErr.IndexError("Too many indexers");
             rowKey = t.Items[0]; colKey = t.Items[1]; hasCols = true;
         }
         var (rp, rs) = RowAxis(df, rowKey, mode);
+        int rowDepth = mode == Mode.Loc ? PdSelect.PartialDepth(rowKey, df.Index) : 0;
         var (cp, cs) = hasCols ? ColAxis(df, colKey, mode) : (Enumerable.Range(0, df.NCols).ToArray(), false);
         if (rs && cs) return PdConv.FromCell(df.Data[cp[0]], rp[0]);
         if (rs)
@@ -147,8 +164,12 @@ internal static class PdAccess
             return PdConv.Wrap(new Series(col, df.Columns.Take(cp), df.Index.Labels[rp[0]]));
         }
         if (cs)
-            return PdConv.Wrap(new Series(df.Data[cp[0]].Take(rp), df.Index.Take(rp), df.Columns.Labels[cp[0]]));
-        return PdConv.Wrap(df.TakeRows(rp).TakeColumns(cp));
+        {
+            var rix = df.Index.Take(rp);
+            return PdConv.Wrap(new Series(df.Data[cp[0]].Take(rp), rowDepth > 0 ? rix.DropLevels(rowDepth) : rix, df.Columns.Labels[cp[0]]));
+        }
+        var res = df.TakeRows(rp).TakeColumns(cp);
+        return PdConv.Wrap(rowDepth > 0 ? res.WithIndex(res.Index.DropLevels(rowDepth)) : res);
     }
 
     public static void FrameLocSet(DataFrame df, object key, object value, Mode mode)

@@ -44,6 +44,7 @@ internal static class PdClasses
         PdWrangle.Install();
         PdApply.Install();
         PdStats.Install();
+        PdGroupBy.Install();
         Conv.Converters.Add(o => o switch
         {
             PyInstance { Native: Series s } => PdArrays.ToNd(s.Values),
@@ -361,7 +362,28 @@ internal static class PdClasses
         Cmp("__gt__", np.Greater); Cmp("__ge__", np.GreaterEqual); Cmp("__lt__", np.Less); Cmp("__le__", np.LessEqual);
         Cmp("__eq__", np.Equal, true); Cmp("__ne__", np.NotEqual, false);
         cls.Dict["name"] = Prop(i => PdConv.FromLabel(Me(i).Name), (_, i, v) => Me(i).Name = PdConv.ToCell(v));
-        cls.Dict["names"] = Prop(i => new PyList(new object[] { PdConv.FromLabel(Me(i).Name) }));
+        cls.Dict["names"] = Prop(i => new PyList(Me(i).Names.Select(PdConv.FromLabel)), (_, i, v) => Me(i).Names = PdConv.Cells(v).ToArray());
+        cls.Dict["nlevels"] = Prop(i => new BigInteger(Me(i).NLevels));
+        Def("get_level_values", (i, a, k) =>
+        {
+            var ix = Me(a[0]);
+            int lvl = LevelNumber(ix, A("get_level_values", i, a, k, "level").Required(0));
+            return PdConv.Wrap(new FIndex(ix.Level(lvl), ix.Names[lvl]));
+        });
+        Def("droplevel", (i, a, k) =>
+        {
+            var ix = Me(a[0]);
+            var lv = A("droplevel", i, a, k, "level").Has(0) ? A("droplevel", i, a, k, "level")[0]! : (object)new BigInteger(0);
+            var list = PdConv.IsListLike(lv) ? PdConv.Cells(lv).Select(x => LevelNumber(ix, PdConv.FromLabel(x))).ToList() : new List<int> { LevelNumber(ix, lv) };
+            return PdConv.Wrap(ix.DropLevelList(list));
+        });
+        Def("set_names", (i, a, k) =>
+        {
+            var ix = Me(a[0]);
+            var nm = A("set_names", i, a, k, "names", "level").Required(0);
+            var names = PdConv.IsListLike(nm) ? PdConv.Cells(nm) : new List<object?> { PdConv.ToCell(nm) };
+            return PdConv.Wrap(ix.WithNames(names));
+        });
         cls.Dict["dtype"] = Prop(i => Me(i).IsRange ? Classes.DTypeObject(DType.Int64) : PdConv.WrapDType(Me(i).Labels));
         cls.Dict["shape"] = Prop(i => new PyTuple(new object[] { new BigInteger(Me(i).Length) }));
         cls.Dict["size"] = Prop(i => new BigInteger(Me(i).Length));
@@ -385,6 +407,14 @@ internal static class PdClasses
     }
 
     // ================================================================== loc / iloc / at / iat
+
+    internal static int LevelNumber(FIndex ix, object level)
+    {
+        if (PdConv.IsInt(level)) { int l = PdConv.ToInt(level); return l < 0 ? l + ix.NLevels : l; }
+        var cell = PdConv.ToCell(level);
+        for (int k = 0; k < ix.NLevels; k++) if (Equals(ix.Names[k], cell)) return k;
+        throw PyErr.KeyError(level);
+    }
 
     private static PyInstance MakeAccessor(string kind, object owner) => new(AccessorClass) { Native = new AccessorState(owner, kind) };
 

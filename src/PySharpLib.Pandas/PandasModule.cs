@@ -20,6 +20,34 @@ public static class PandasRegistration
 
 internal static class PandasModule
 {
+    private static PyClass MultiIndexClass()
+    {
+        var cls = new PyClass("MultiIndex", new List<PyClass> { PdClasses.Index });
+        cls.InstanceCheck = o => o is PyInstance { Native: FIndex { IsMulti: true } };
+        List<object?> Names(object? v) => v is null or PyNone ? new List<object?>() : PdConv.Cells(v);
+        cls.Dict["from_tuples"] = PdClasses.Fn("from_tuples", (i, a, k) =>
+        {
+            var p = new Args("from_tuples", i, a, k, "tuples", "sortorder", "names");
+            var rows = PdConv.Cells(p.Required(0)).Select(c => c is LabelTuple lt ? lt.Parts : new[] { c }).ToList();
+            return PdConv.Wrap(FIndex.MultiFromTuples(rows, p.Has(2) ? Names(p[2]) : null));
+        });
+        cls.Dict["from_arrays"] = PdClasses.Fn("from_arrays", (i, a, k) =>
+        {
+            var p = new Args("from_arrays", i, a, k, "arrays", "sortorder", "names");
+            var levels = (p.Required(0) is PyList l ? l.Items : ((PyTuple)p[0]!).Items.ToList()).Select(PdConv.ToColumn).ToList();
+            return PdConv.Wrap(FIndex.Multi(levels, p.Has(2) ? Names(p[2]) : null));
+        });
+        cls.Dict["from_product"] = PdClasses.Fn("from_product", (i, a, k) =>
+        {
+            var p = new Args("from_product", i, a, k, "iterables", "sortorder", "names");
+            var lists = (p.Required(0) is PyList l ? l.Items : ((PyTuple)p[0]!).Items.ToList()).Select(PdConv.Cells).ToList();
+            var rows = new List<object?[]> { Array.Empty<object?>() };
+            foreach (var lst in lists) rows = rows.SelectMany(r => lst.Select(x => r.Append(x).ToArray())).ToList();
+            return PdConv.Wrap(FIndex.MultiFromTuples(rows, p.Has(2) ? Names(p[2]) : lists.Select(_ => (object?)null).ToList()));
+        });
+        return cls;
+    }
+
     public static PyModule Create()
     {
         var m = new PyModule("pandas");
@@ -27,6 +55,7 @@ internal static class PandasModule
         m.Dict["Series"] = PdClasses.Series;
         m.Dict["DataFrame"] = PdClasses.DataFrame;
         m.Dict["Index"] = PdClasses.Index;
+        m.Dict["MultiIndex"] = MultiIndexClass();
         void Def(string name, BuiltinFn fn) => m.Dict[name] = PdClasses.Fn(name, fn);
 
         Def("RangeIndex", (i, a, k) =>
@@ -49,6 +78,14 @@ internal static class PandasModule
         Def("notna", (i, a, k) => PdFunctions.NotNa(a[0]));
         m.Dict["notnull"] = m.Dict["notna"];
         m.Dict["nan"] = double.NaN;
+        PdMerge.Install(m);
+        PdReshape.Install(m);
+        PdIO.Install(m);
+        Def("NamedAgg", (i, a, k) =>
+        {
+            var p = new Args("NamedAgg", i, a, k, "column", "aggfunc");
+            return new PyTuple(new[] { p.Required(0), p.Required(1) });
+        });
         return m;
     }
 }

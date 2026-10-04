@@ -140,4 +140,65 @@ public class FrameCoreTests
         Assert.StartsWith("<class 'pandas.DataFrame'>\nRangeIndex: 2 entries, 0 to 1\nData columns (total 1 columns):\n #   Column  Non-Null Count  Dtype", text);
         Assert.Contains("memory usage: 148.0 bytes", text);
     }
+
+    [Fact]
+    public void Grouping_sorts_keys_keeps_row_order_and_drops_missing_keys()
+    {
+        var k = Column.FromStrings(new string?[] { "b", "a", "b", null, "a" });
+        var g = new Grouping(new[] { k }, new object?[] { "k" }, 5);
+        Assert.Equal(2, g.Count);
+        Assert.Equal(new[] { 1, 4 }, g.Rows[0]);
+        Assert.Equal(new[] { 0, 2 }, g.Rows[1]);
+        Assert.Equal(-1, g.GroupOfRow[3]);
+        Assert.Equal("a", g.ResultIndex().Labels[0]);
+    }
+
+    [Fact]
+    public void MultiIndex_lookup_and_dropping_levels()
+    {
+        var ix = FIndex.MultiFromTuples(new[] { new object?[] { "a", 1L }, new object?[] { "a", 2L }, new object?[] { "b", 1L } }, new object?[] { "k1", "k2" });
+        Assert.True(ix.IsMulti);
+        Assert.Equal(2, ix.NLevels);
+        Assert.Single(ix.Locs(new LabelTuple(new object?[] { "b", 1L })));
+        var flat = ix.DropLevels(1);
+        Assert.False(flat.IsMulti);
+        Assert.Equal("k2", flat.Name);
+    }
+
+    [Fact]
+    public void Merge_outer_sorts_keys_and_promotes_unmatched_ints_to_float()
+    {
+        var l = new DataFrame(new[] { Column.FromLongs(new long[] { 1, 2 }), Column.FromLongs(new long[] { 10, 20 }) }, FIndex.OfStrings(new[] { "k", "a" }));
+        var r = new DataFrame(new[] { Column.FromLongs(new long[] { 2, 3 }), Column.FromLongs(new long[] { 5, 6 }) }, FIndex.OfStrings(new[] { "k", "b" }));
+        var m = Merge.Join(l, r, new Merge.Spec { LeftOn = new object?[] { "k" }, RightOn = new object?[] { "k" }, How = "outer" });
+        Assert.Equal(3, m.NRows);
+        Assert.Equal(new long[] { 1, 2, 3 }, m.Data[0].Longs);
+        Assert.Equal(Kind.Float, m.Data[1].Kind);
+        Assert.Equal(Kind.Float, m.Data[2].Kind);
+    }
+
+    [Fact]
+    public void Csv_infers_types_and_missing_values()
+    {
+        var text = string.Join("\n", "a,b,c,d", "1,x,1.5,True", "2,,NA,False") + "\n";
+        var (cols, names) = Csv.Read(text, new Csv.ReadOptions());
+        Assert.Equal(new object?[] { "a", "b", "c", "d" }, names.ToArray());
+        Assert.Equal("int64", cols[0].DTypeName);
+        Assert.Equal("str", cols[1].DTypeName);
+        Assert.True(cols[1].IsNa(1));
+        Assert.Equal("float64", cols[2].DTypeName);
+        Assert.Equal("bool", cols[3].DTypeName);
+        Assert.Equal("\"a,b\"", Csv.Quote("a,b", ',', '"'));
+    }
+
+    [Fact]
+    public void Unstack_reshapes_the_innermost_level_into_sorted_columns()
+    {
+        var ix = FIndex.MultiFromTuples(new[] { new object?[] { "x", "q" }, new object?[] { "x", "p" }, new object?[] { "y", "p" } }, new object?[] { "a", "b" });
+        var d = new DataFrame(new[] { Column.FromLongs(new long[] { 1, 2, 3 }) }, FIndex.OfStrings(new[] { "v" }), ix);
+        var u = Reshape.Unstack(d, -1, true);
+        Assert.Equal(new object?[] { "p", "q" }, u.Columns.Items().ToArray());
+        Assert.Equal(new[] { "x", "y" }, u.Index.Items().Cast<string>());
+        Assert.True(double.IsNaN(u.Data[1].DoubleAt(1)));
+    }
 }

@@ -35,6 +35,16 @@ internal static class PdWrangle
         return PyNone.Instance;
     }
 
+    internal static List<Column> IndexKeys(FIndex ix) => ix.IsMulti ? Enumerable.Range(0, ix.NLevels).Select(ix.Level).ToList() : new List<Column> { ix.Labels };
+
+    /// <summary>The index as columns for reset_index: one per level, named after the level (or index / level_k).</summary>
+    internal static (List<Column> cols, List<object?> names) IndexAsColumns(FIndex ix, bool frameHasIndexColumn = false)
+    {
+        if (ix.IsMulti)
+            return (Enumerable.Range(0, ix.NLevels).Select(ix.Level).ToList(), Enumerable.Range(0, ix.NLevels).Select(k => ix.Names[k] ?? $"level_{k}").ToList());
+        return (new List<Column> { ix.Labels }, new List<object?> { ix.Name ?? (frameHasIndexColumn ? "level_0" : "index") });
+    }
+
     private static Series NewSeries(Series like, Column c) => new(c, like.Index, like.Name);
 
     private static object Rebuild(object self, Func<Column, Column> f)
@@ -174,6 +184,19 @@ internal static class PdWrangle
                 return PdConv.Wrap(new DataFrame(d.Data.Select(c => Column.FromBools(FrameOps.IsIn(c, values))), d.Columns, d.Index));
             });
 
+            Def("droplevel", (i, a, k) =>
+            {
+                var p = A("droplevel", i, a, k, "level", "axis");
+                var lv = p.Required(0);
+                bool cols = a[0] is PyInstance { Native: DataFrame } && p.Has(1) && PdOps.AxisOf(p[1]!) == 1;
+                FIndex ix = a[0] is PyInstance { Native: Series sr } ? sr.Index : cols ? D(a[0]).Columns : D(a[0]).Index;
+                var list = PdConv.IsListLike(lv) ? PdConv.Cells(lv).Select(x => PdClasses.LevelNumber(ix, PdConv.FromLabel(x))).ToList() : new List<int> { PdClasses.LevelNumber(ix, lv) };
+                var nix = ix.DropLevelList(list);
+                if (a[0] is PyInstance { Native: Series s0 }) return PdConv.Wrap(new Series(s0.Values, nix, s0.Name));
+                var d0 = D(a[0]);
+                return PdConv.Wrap(cols ? d0.WithColumns(nix) : d0.WithIndex(nix));
+            });
+
             // ---- ordering
             Def("sort_values", (i, a, k) =>
             {
@@ -205,16 +228,16 @@ internal static class PdWrangle
                 bool naLast = !(p[5] is "first");
                 if (a[0] is PyInstance { Native: Series s })
                 {
-                    var r = s.Take(FrameOps.SortPositions(new[] { s.Index.Labels }, new[] { asc }, naLast));
+                    var r = s.Take(FrameOps.SortPositions(IndexKeys(s.Index), Enumerable.Repeat(asc, s.Index.NLevels).ToList(), naLast));
                     if (p.Bool(6, false)) r = new Series(r.Values, FIndex.Range(r.Length), r.Name);
                     return Finish(a[0], PdConv.Wrap(r), p.Bool(3, false));
                 }
                 var d = D(a[0]);
                 DataFrame res;
                 if (p.Has(0) && PdOps.AxisOf(p[0]!) == 1)
-                    res = d.TakeColumns(FrameOps.SortPositions(new[] { d.Columns.Labels }, new[] { asc }, naLast));
+                    res = d.TakeColumns(FrameOps.SortPositions(IndexKeys(d.Columns), Enumerable.Repeat(asc, d.Columns.NLevels).ToList(), naLast));
                 else
-                    res = d.TakeRows(FrameOps.SortPositions(new[] { d.Index.Labels }, new[] { asc }, naLast));
+                    res = d.TakeRows(FrameOps.SortPositions(IndexKeys(d.Index), Enumerable.Repeat(asc, d.Index.NLevels).ToList(), naLast));
                 if (p.Bool(6, false)) res = res.WithIndex(FIndex.Range(res.NRows));
                 return Finish(a[0], PdConv.Wrap(res), p.Bool(3, false));
             });
@@ -246,14 +269,14 @@ internal static class PdWrangle
                 {
                     if (drop) return Finish(a[0], PdConv.Wrap(new Series(s.Values, FIndex.Range(s.Length), s.Name)), p.Bool(3, false));
                     object? nm = p.Has(2) ? PdConv.ToCell(p[2]) : s.Name ?? 0L;
-                    var idxName = s.Index.Name ?? "index";
-                    return PdConv.Wrap(new DataFrame(new[] { s.Index.Labels, s.Values }, new FIndex(Column.Infer(new[] { idxName, nm })), FIndex.Range(s.Length)));
+                    var (ic, inames) = IndexAsColumns(s.Index);
+                    return PdConv.Wrap(new DataFrame(ic.Append(s.Values), new FIndex(Column.Infer(inames.Append(nm).ToList())), FIndex.Range(s.Length)));
                 }
                 var d = D(a[0]);
                 if (drop) return Finish(a[0], PdConv.Wrap(d.WithIndex(FIndex.Range(d.NRows))), p.Bool(3, false));
-                object lbl = d.Index.Name ?? (d.HasColumn("index") ? "level_0" : "index");
-                var cols = new List<Column> { d.Index.Labels }; cols.AddRange(d.Data);
-                var names = new List<object?> { lbl }; names.AddRange(d.Columns.Items());
+                var (ic2, inames2) = IndexAsColumns(d.Index, d.HasColumn("index"));
+                var cols = new List<Column>(ic2); cols.AddRange(d.Data);
+                var names = new List<object?>(inames2); names.AddRange(d.Columns.Items());
                 return Finish(a[0], PdConv.Wrap(new DataFrame(cols, new FIndex(Column.Infer(names), d.Columns.Name), FIndex.Range(d.NRows))), p.Bool(3, false));
             });
             Def("shift", (i, a, k) =>
@@ -482,7 +505,16 @@ internal static class PdWrangle
             }
             if (PdConv.IsListLike(keys) && PdConv.Cells(keys).Count == d.NRows && !(keys is PyList kl && kl.Items.All(x => x is string && d.HasColumn(x))))
                 return Finish(a[0], PdConv.Wrap(d.WithIndex(new FIndex(PdConv.ToColumn(keys)))), p.Bool(3, false));
-            throw PyErr.NotImplementedError("set_index with several keys needs a MultiIndex");
+            if (keys is PyList multi && multi.Items.All(x => d.HasColumn(PdConv.ToCell(x))))
+            {
+                var lbls = multi.Items.Select(PdConv.ToCell).ToList();
+                var posn = lbls.Select(l => d.ColumnPositions(l)[0]).ToList();
+                var mi = FIndex.Multi(posn.Select(q => d.Data[q]).ToList(), lbls);
+                var r2 = new DataFrame(d.Data, d.Columns, mi);
+                if (drop) r2 = r2.Drop(lbls, true).WithIndex(mi);
+                return Finish(a[0], PdConv.Wrap(r2), p.Bool(3, false));
+            }
+            throw PyErr.NotImplementedError("set_index with this key");
         });
         Def("rename", (i, a, k) =>
         {

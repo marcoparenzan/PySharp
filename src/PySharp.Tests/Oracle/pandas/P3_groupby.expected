@@ -1,0 +1,271 @@
+      kind  pts  avg
+team                
+blue    ab   60  7.0
+green    a   60  6.5
+red    aba   90  7.0
+        pts  avg
+team            
+blue   30.0  3.5
+green  60.0  6.5
+red    30.0  3.5
+        pts  avg
+team            
+blue   30.0  3.5
+green  60.0  6.5
+red    30.0  3.5
+team
+blue     60
+green    60
+red      90
+Name: pts, dtype: int64
+team
+blue     30.0
+green    60.0
+red      30.0
+Name: pts, dtype: float64 team
+blue     2
+green    1
+red      2
+Name: avg, dtype: int64
+team
+blue     2
+green    1
+red      3
+dtype: int64
+       kind  pts  avg
+team                 
+blue      2    2    2
+green     1    1    1
+red       3    3    2
+team
+blue     40
+green    60
+red      50
+Name: pts, dtype: int64 team
+blue     20
+green    60
+red      10
+Name: pts, dtype: int64 team
+blue     30.0
+green    60.0
+red      30.0
+Name: pts, dtype: float64 team
+blue     14.142136
+green          NaN
+red      20.000000
+Name: pts, dtype: float64 team
+blue     200.0
+green      NaN
+red      400.0
+Name: pts, dtype: float64
+team
+blue     20
+green    60
+red      10
+Name: pts, dtype: int64 team
+blue     40
+green    60
+red      50
+Name: pts, dtype: int64 team
+blue     2
+green    1
+red      3
+Name: pts, dtype: int64
+3 3
+            pts  avg
+team  kind          
+blue  a      20  2.5
+      b      40  4.5
+green a      60  6.5
+red   a      60  7.0
+      b      30  0.0
+team   kind
+blue   a       20
+       b       40
+green  a       60
+red    a       60
+       b       30
+Name: pts, dtype: int64
+    team kind   pts
+0   blue    a  20.0
+1   blue    b  40.0
+2  green    a  60.0
+3    red    a  30.0
+4    red    b  30.0
+    team  pts
+0   blue   60
+1  green   60
+2    red   90
+    team  pts  avg
+0   blue   60  3.5
+1  green   60  6.5
+2    red   90  3.5
+team
+red      90
+blue     60
+green    60
+Name: pts, dtype: int64
+       pts  avg
+team           
+blue    60  3.5
+green   60  6.5
+red     90  3.5
+      pts      avg
+      sum max  min
+team              
+blue   60  40  2.5
+green  60  60  6.5
+red    90  50  1.5
+       sum  mean  count
+team                   
+blue    60  30.0      2
+green   60  60.0      1
+red     90  30.0      3
+       total  best
+team              
+blue      60   4.5
+green     60   6.5
+red       90   5.5
+team
+blue     20
+green     0
+red      40
+Name: pts, dtype: int64
+      pts    
+      min max
+team         
+blue   20  40
+green  60  60
+red    10  50
+blue (2, 4) [20, 40]
+green (1, 4) [60]
+red (3, 4) [10, 30, 50]
+('blue', 'a') 1
+('blue', 'b') 1
+('green', 'a') 1
+('red', 'a') 2
+('red', 'b') 1
+  team kind  pts  avg
+0  red    a   10  1.5
+2  red    b   30  NaN
+4  red    a   50  5.5
+{'blue': [1, 3], 'green': [5], 'red': [0, 2, 4]}
+0    90
+1    60
+2    90
+3    60
+4    90
+5    60
+Name: pts, dtype: int64
+0   -20.0
+1   -10.0
+2     0.0
+3    10.0
+4    20.0
+5     0.0
+Name: pts, dtype: float64
+   pts  avg
+0   50  5.5
+1   40  4.5
+2   50  5.5
+3   40  4.5
+4   50  5.5
+5   60  6.5
+0    10
+1    20
+2    40
+3    60
+4    90
+5    60
+Name: pts, dtype: int64 0    0
+1    0
+2    1
+3    1
+4    2
+5    0
+dtype: int64 0     NaN
+1     NaN
+2    10.0
+3    20.0
+4    30.0
+5     NaN
+Name: pts, dtype: float64 0     NaN
+1     NaN
+2    20.0
+3    20.0
+4    20.0
+5     NaN
+Name: pts, dtype: float64
+    team kind  pts  avg
+0    red    a   10  1.5
+1   blue    a   20  2.5
+2    red    b   30  NaN
+3   blue    b   40  4.5
+4    red    a   50  5.5
+5  green    a   60  6.5
+team
+blue     60
+green    60
+red      90
+dtype: int64
+       pts
+team      
+blue    40
+green   60
+red     50
+    team kind  pts  avg
+0    red    a   10  1.5
+1   blue    a   20  2.5
+5  green    a   60  6.5     team kind  pts  avg
+3   blue    b   40  4.5
+4    red    a   50  5.5
+5  green    a   60  6.5
+team
+3    90
+4    60
+5    60
+Name: pts, dtype: int64
+pts    team 
+False  blue     1
+       red      1
+True   blue     1
+       green    1
+       red      2
+Name: pts, dtype: int64
+team
+blue     60
+green    60
+red      90
+Name: pts, dtype: int64
+team
+blue     60
+green    60
+red      90
+Name: pts, dtype: int64
+       min  max
+team           
+blue    20   40
+green   60   60
+red     10   50
+k
+a    4
+b    4
+Name: v, dtype: int64 k
+a      4
+b      4
+NaN    2
+Name: v, dtype: int64
+team
+blue     30.0
+green    60.0
+red      30.0
+Name: pts, dtype: float64
+team
+blue         [20, 40]
+green            [60]
+red      [10, 30, 50]
+Name: pts, dtype: object
+      n  total
+kind          
+a     4    140
+b     2     70
