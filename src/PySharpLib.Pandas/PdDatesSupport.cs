@@ -89,7 +89,7 @@ internal static class PdDatesSupport
                 return PdConv.Wrap(new FIndex(Column.Infer(all), Equals(x.Name, y.Name) ? x.Name : null));
             }
             var u = Ops.Union(x, y);
-            return PdConv.Wrap(Ops.SameLabels(x, y) ? x : u);
+            return PdConv.Wrap(Ops.SameLabels(x, y) && x.Labels.Tz == y.Labels.Tz ? x : u);
         });
         Def("intersection", (i, a, k) =>
         {

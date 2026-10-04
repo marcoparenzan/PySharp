@@ -26,7 +26,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
-_KINDS = ('line', 'bar', 'barh', 'hist', 'scatter', 'area', 'pie', 'box')
+_KINDS = ('line', 'bar', 'barh', 'hist', 'scatter', 'area', 'pie', 'box', 'kde', 'density')
 
 
 def _columns(obj, y):
@@ -64,6 +64,25 @@ def _date_numbers(idx):
 def _date_labels(idx):
     midnight = bool((idx == idx.normalize()).all())
     return list(idx.strftime('%Y-%m-%d' if midnight else '%Y-%m-%d %H:%M:%S'))
+
+
+def _kde(data, ind=None):
+    # Gaussian kernel density estimate, Scott's bandwidth (what scipy.stats.gaussian_kde and pandas use)
+    data = data[data == data]
+    n = len(data)
+    h = float(np.std(data, ddof=1)) * n ** (-1.0 / 5.0)
+    lo = float(data.min())
+    hi = float(data.max())
+    r = hi - lo
+    if ind is None:
+        ind = np.linspace(lo - 0.5 * r, hi + 0.5 * r, 1000)
+    elif isinstance(ind, int):
+        ind = np.linspace(lo - 0.5 * r, hi + 0.5 * r, ind)
+    else:
+        ind = np.asarray(ind, dtype=float)
+    z = (ind[:, None] - data[None, :]) / h
+    dens = np.exp(-0.5 * z * z).sum(axis=1) / (n * h * math.sqrt(2.0 * math.pi))
+    return ind, dens
 
 
 def _pie(ax, obj, y, autopct, startangle, color, labels=None):
@@ -179,7 +198,19 @@ def plot(obj, kind='line', x=None, y=None, ax=None, figsize=None, title=None, le
         if grid:
             ax.grid(True)
         return ax
-    if kind == 'scatter':
+    if kind in ('kde', 'density'):
+        for k, col in enumerate(cols):
+            xs, ys = _kde(_values(obj, col), kwargs.get('ind'))
+            kw = dict(style)
+            if color is not None:
+                kw['color'] = color[k] if isinstance(color, (list, tuple)) else color
+            if linestyle is not None:
+                kw['linestyle'] = linestyle
+            if linewidth is not None:
+                kw['linewidth'] = linewidth
+            ax.plot(xs, ys, label=label if (label is not None and n == 1) else _name(obj, col), **kw)
+        ax.set_ylabel('Density')
+    elif kind == 'scatter':
         xs = _values(obj, x)
         ys = _values(obj, y if not isinstance(y, (list, tuple)) else y[0])
         extra = {}
@@ -342,7 +373,7 @@ def hist_frame(obj, column=None, bins=10, figsize=None, layout=None, sharex=Fals
         }
 
         Accessor.Dict["__call__"] = PdClasses.Fn("plot.__call__", (i, a, k) => CallPlot(i, ((PyInstance)a[0]).Native!, null, a.Skip(1).ToArray(), k));
-        foreach (var kind in new[] { "line", "bar", "barh", "hist", "scatter", "area", "pie", "box" })
+        foreach (var kind in new[] { "line", "bar", "barh", "hist", "scatter", "area", "pie", "box", "kde", "density" })
         {
             var kd = kind;
             Accessor.Dict[kd] = PdClasses.Fn("plot." + kd, (i, a, k) =>
@@ -355,7 +386,7 @@ def hist_frame(obj, column=None, bins=10, figsize=None, layout=None, sharex=Fals
                 return CallPlot(i, owner, kd, Array.Empty<object>(), kwargs);
             });
         }
-        foreach (var kind in new[] { "kde", "density", "hexbin" })
+        foreach (var kind in new[] { "hexbin" })
         {
             var kd = kind;
             Accessor.Dict[kd] = PdClasses.Fn("plot." + kd, (_, _, _) => throw PyErr.NotImplementedError($"plot.{kd}() is not implemented"));

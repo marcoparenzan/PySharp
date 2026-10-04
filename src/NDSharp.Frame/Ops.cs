@@ -32,8 +32,9 @@ public static class Ops
         public Operand(object? s, int n) { Col = null; Scalar = s; Length = n; }
 
         public bool IsScalar => Col is null;
-        public Kind Kind => Col?.Kind ?? Scalar switch { bool => Kind.Bool, long => Kind.Int, double => Kind.Float, string => Kind.Str, Ts => Kind.DateTime, Td => Kind.Timedelta, _ => Kind.Object };
+        public Kind Kind => Col?.Kind ?? Scalar switch { bool => Kind.Bool, long => Kind.Int, double => Kind.Float, string => Kind.Str, Ts => Kind.DateTime, Td => Kind.Timedelta, Per => Kind.Period, _ => Kind.Object };
         public DateUnit Unit => Col is not null ? Col.Unit : Scalar is Ts t ? t.Unit : Scalar is Td d ? d.Unit : DateUnit.Micro;
+        public TzInfo? Tz => Col is not null ? Col.Tz : Scalar is Ts t ? t.Tz : null;
         public long Tk(int i) => Col is not null ? Col.Ticks[i] : Scalar is Ts t ? t.Ticks : Scalar is Td d ? d.Ticks : DateTimeCore.NaT;
         public bool IsNa(int i) => Col is not null ? Col.IsNa(i) : Scalar is null || (Scalar is double d && double.IsNaN(d));
         public double D(int i) => Col is not null ? Col.DoubleAt(i) : Column.ToDouble(Scalar!);
@@ -103,8 +104,19 @@ public static class Ops
         {
             string str = (string)(dtA ? b.Scalar! : a.Scalar!);
             if (!DateTimeCore.TryParseIso(str, out var tk, out var tu)) throw new FrameException($"Invalid comparison between dtype=datetime64 and str", "TypeError");
-            var parsed = new Operand(new Ts(tk, tu), n);
+            var zone = (dtA ? a : b).Tz;
+            var parsed = new Operand(zone is null ? new Ts(tk, tu) : new Ts(zone.FromWall(tk, tu), tu, zone), n);
             return dtA ? TimeOp(op, a, parsed, n) : TimeOp(op, parsed, b, n);
+        }
+        if (dtA && dtB && (a.Tz is null) != (b.Tz is null))
+        {
+            if (IsComparison(op) && op is not (BinOp.Eq or BinOp.Ne) && (a.IsScalar || b.IsScalar))
+            {
+                var colSide = a.IsScalar ? b : a;
+                throw new FrameException($"Invalid comparison between dtype={colSide.Col!.DTypeName} and Timestamp", "TypeError");
+            }
+            if (op is BinOp.Eq or BinOp.Ne) return Column.FromBools(Enumerable.Repeat(op == BinOp.Ne, n).ToArray());
+            throw new FrameException(IsComparison(op) ? "Cannot compare tz-naive and tz-aware datetime-like objects" : op == BinOp.Sub ? "Cannot subtract tz-naive and tz-aware datetime-like objects" : "unsupported operand type(s) for +: 'Timestamp' and 'Timestamp'", "TypeError");
         }
         if (IsComparison(op))
         {
@@ -129,11 +141,11 @@ public static class Ops
         switch (op)
         {
             case BinOp.Add when dtA && tdB || tdA && dtB:
-                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x + y); }), unit);
+                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x + y); }), unit, dtA ? a.Tz : b.Tz);
             case BinOp.Add when tdA && tdB:
                 return Column.FromTimedelta(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x + y); }), unit);
             case BinOp.Sub when dtA && tdB:
-                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x - y); }), unit);
+                return Column.FromDateTime(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x - y); }), unit, a.Tz);
             case BinOp.Sub when dtA && dtB || tdA && tdB:
                 return Column.FromTimedelta(Build(i => { long x = Get(a, i), y = Get(b, i); return x == DateTimeCore.NaT || y == DateTimeCore.NaT ? DateTimeCore.NaT : checked(x - y); }), unit);
             case BinOp.Mul when tdA && (kb is Kind.Int or Kind.Float or Kind.Bool) || tdB && (ka is Kind.Int or Kind.Float or Kind.Bool):
@@ -159,8 +171,58 @@ public static class Ops
         throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(dtA ? "datetime64" : tdA ? "timedelta64" : Name(a))}' and '{(dtB ? "datetime64" : tdB ? "timedelta64" : Name(b))}'", "TypeError");
     }
 
+    /// <summary>Period arithmetic (± integers shift, period − period counts steps) and comparison (same frequency only).</summary>
+    private static Column PeriodOp(BinOp op, Operand a, Operand b, int n)
+    {
+        PeriodFreq? FreqOf(Operand o) => o.Col is { Kind: Kind.Period } c ? c.PFreq : o.Scalar is Per p ? p.Freq : null;
+        long Ord(Operand o, int i) => o.Col is not null ? (o.Col.Kind == Kind.Period ? o.Col.Ticks[i] : o.Col.IsNa(i) ? PeriodCore.NaT : o.Col.Kind == Kind.Int ? o.Col.LongAt(i) : PeriodCore.NaT) : o.Scalar is Per p ? p.Ordinal : PeriodCore.NaT;
+        var fa = FreqOf(a); var fb = FreqOf(b);
+        if (fa is not null && fb is not null && fa != fb && IsComparison(op))
+        {
+            if (op is BinOp.Eq or BinOp.Ne) return Column.FromBools(Enumerable.Repeat(op == BinOp.Ne, n).ToArray());
+            throw new FrameException($"Invalid comparison between dtype={fa.DTypeName} and {(b.Col is not null ? "PeriodArray" : "Period")}", "TypeError");
+        }
+        if (fa is not null && fb is not null && fa != fb)
+            throw new FrameException($"Input has different freq={fb.Name} from {(a.Col is not null ? "PeriodArray" : "Period")}(freq={fa.Name})", "IncompatibleFrequency");
+        if (IsComparison(op))
+        {
+            // a string next to a period is parsed with the period's frequency
+            if (fa is not null && b.IsScalar && b.Scalar is string sb) { if (!PeriodCore.TryParse(sb, fa, out var o2, out _)) throw new FrameException($"Invalid comparison between dtype={fa.DTypeName} and str", "TypeError"); b = new Operand(new Per(o2, fa), n); fb = fa; }
+            else if (fb is not null && a.IsScalar && a.Scalar is string sa) { if (!PeriodCore.TryParse(sa, fb, out var o2, out _)) throw new FrameException($"Invalid comparison between dtype={fb.DTypeName} and str", "TypeError"); a = new Operand(new Per(o2, fb), n); fa = fb; }
+            if (fa is null || fb is null)
+            {
+                if (op is BinOp.Eq or BinOp.Ne) return Column.FromBools(Enumerable.Repeat(op == BinOp.Ne, n).ToArray());
+                throw TypeErr(op, a, b);
+            }
+            var r = new bool[n];
+            for (int i = 0; i < n; i++)
+            {
+                long x = Ord(a, i), y = Ord(b, i);
+                if (x == PeriodCore.NaT || y == PeriodCore.NaT) { r[i] = op == BinOp.Ne; continue; }
+                r[i] = CompareL(op, x.CompareTo(y), 0);
+            }
+            return Column.FromBools(r);
+        }
+        if (op == BinOp.Sub && fa is not null && fb is not null)
+        {
+            var cells = new object?[n];
+            for (int i = 0; i < n; i++) { long x = Ord(a, i), y = Ord(b, i); cells[i] = new PerDiff(x == PeriodCore.NaT || y == PeriodCore.NaT ? long.MinValue : x - y, fa); }
+            return Column.FromObjects(cells);
+        }
+        if (op is BinOp.Add or BinOp.Sub && (fa is not null) != (fb is not null))
+        {
+            var per = fa is not null ? a : b; var num = fa is not null ? b : a; var f = (fa ?? fb)!;
+            if (num.Kind is not (Kind.Int or Kind.Bool) || (op == BinOp.Sub && fa is null)) throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(fa is not null ? "Period" : Name(a))}' and '{(fb is not null ? "Period" : Name(b))}'", "TypeError");
+            var r = new long[n];
+            for (int i = 0; i < n; i++) { long x = Ord(per, i); r[i] = x == PeriodCore.NaT || num.IsNa(i) ? PeriodCore.NaT : op == BinOp.Add ? x + num.L(i) : x - num.L(i); }
+            return Column.FromPeriod(r, f);
+        }
+        throw new FrameException($"unsupported operand type(s) for {Sym(op)}: '{(fa is not null ? "Period" : Name(a))}' and '{(fb is not null ? "Period" : Name(b))}'", "TypeError");
+    }
+
     private static Column Run(BinOp op, Operand a, Operand b, int n)
     {
+        if (a.Kind == Kind.Period || b.Kind == Kind.Period) return PeriodOp(op, a, b, n);
         if (a.Kind is Kind.DateTime or Kind.Timedelta || b.Kind is Kind.DateTime or Kind.Timedelta) return TimeOp(op, a, b, n);
         if (a.Kind == Kind.Category || b.Kind == Kind.Category) return CategoryOp(op, a, b, n);
         Kind ka = a.Kind, kb = b.Kind;
@@ -403,15 +465,22 @@ public static class Ops
             }
             return ta.Parts.Length.CompareTo(tb.Parts.Length);
         }
+        if (a is Per pa && b is Per pb) return pa.Ordinal.CompareTo(pb.Ordinal);
         if (a is string sa && b is string sb) return string.CompareOrdinal(sa, sb);
         if (a is null || b is null) return a is null ? (b is null ? 0 : 1) : -1;
         if (a is string || b is string) throw new FrameException("'<' not supported between instances of 'str' and 'int'", "TypeError");
+        if (ObjectCompare is not null && !(a is long or double or bool or int) && !(b is long or double or bool or int)) return ObjectCompare(a, b);
         return Column.ToDouble(a).CompareTo(Column.ToDouble(b));
     }
+
+    /// <summary>Comparison of host objects (e.g. Python dates) that the engine cannot order itself; set by the language binding.</summary>
+    public static Func<object, object, int>? ObjectCompare { get; set; }
 
     /// <summary>The union of two labels sets, sorted when the labels are comparable (pandas sorts a union of different indexes).</summary>
     public static Index Union(Index x, Index y)
     {
+        if (x.Labels.Kind == Kind.DateTime && y.Labels.Kind == Kind.DateTime && x.Labels.Tz is not null && y.Labels.Tz is not null && x.Labels.Tz != y.Labels.Tz)
+        { x = new Index(x.Labels.WithTz(TzInfo.Utc), x.Name); y = new Index(y.Labels.WithTz(TzInfo.Utc), y.Name); }
         var seen = new HashSet<object>();
         var all = new List<object?>();
         foreach (var l in x.Items().Concat(y.Items()))

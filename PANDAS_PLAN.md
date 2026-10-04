@@ -131,13 +131,21 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - [x] `.dt` accessor and DatetimeIndex attributes (`year month day hour ... dayofweek quarter is_*_start/end day_name month_name date time normalize floor/ceil/round strftime isocalendar total_seconds days seconds`), partial-string indexing and slicing (`s['2020-03']`, `s['2020-01':'2020-02']`), `resample` (tick, week, month, quarter, year, business-day rules; `closed`/`label`; `sum mean first last min max count size median std agg apply ohlc asfreq ffill bfill`), `asfreq`, `reindex(method=)`, `shift(freq=)`, `rolling('3D')`, `read_csv(parse_dates=, date_format=)`, `to_csv(date_format=)`, `to_json`/`read_json` dates, `groupby(pd.Grouper(key=, freq=))`, `pivot_table` with array keys
 - [x] oracle snippets `P7_scalars`, `P7_range`, `P7_dt`, `P7_index`, `P7_resample`, `P7_io`, `P7_misc`, `P7_edge`; 16 more native tests (`DateTimeTests`); sample `pandas_timeseries_demo.py` byte-identical to CPython + pandas; `df.plot()` with a datetime index (days-since-epoch x axis, date tick labels)
 
+### Phase 8 — Closing the gaps  ✅
+- [x] numpy `Generator.standard_exponential`/`exponential`/`standard_gamma`/`gamma`/`poisson`, bit-exact (the exponential ziggurat `we`/`ke`/`fe` tables were recovered from numpy's own output, like `wi_double`); `Oracle/numpy/P10_distributions`, 4 native tests
+- [x] `DataFrame.eval` / `DataFrame.query` / `pd.eval`: PySharp's Python parser, rewritten with pandas' rules (`and`/`or`/`not` → `&`/`|`/`~` with pandas' precedence, chained comparisons, `in`/`not in`/`== [list]` → `isin`, `@name`, backtick names, `a = expr` assignments, `inplace`, numexpr-style math functions); `P8_evalquery`
+- [x] `plot.kde` / `plot.density` (Gaussian KDE with Scott's bandwidth on pandas' 1000-point grid; checked against a numpy reference because scipy is not in the oracle environment)
+- [x] `Period` / `PeriodIndex` / `period_range` (`Y`, `Q`, `M`, `W`, `D`, `h`, `min`, `s`, `ms`, `us`, `ns`, fiscal anchors such as `Q-MAR`, `Y-JUN`, `W-MON`), `to_period`/`to_timestamp`/`asfreq`, `.dt` on period data, arithmetic, comparisons, groupby/value_counts/sort, string selection (`s['2021']`), `PeriodArray` from `unique()`; `P8_period`, `P8_period_ops`
+- [x] time zones: `tz_localize` (`ambiguous`, `nonexistent`) / `tz_convert` on Timestamp, Series, DataFrame, DatetimeIndex and `.dt`, `Timestamp(tz=)`, offset strings (`+01:00`, `Z`), `to_datetime(utc=True)`, tz-aware `date_range`, DST-aware offsets (`Day` is a calendar day, `Hour`/`Timedelta` are absolute), resample/Grouper on the local clock, tz in printing, CSV and JSON; the OS time zone database supplies the rules; `P8_tz`, `P8_tz_edge`
+- [x] the Index repr now ports pandas' `format_object_summary` exactly (right-justification, wrapping, truncation); `PeriodTzTests` (9 native tests); sample `pandas_periods_tz_demo.py` byte-identical to CPython + pandas
+
 ---
 
 ## Known divergences (grows as phases land)
 
 - `np.asarray(series_of_str)` / `.values` of `str` and `object` columns: NDSharp has no object arrays, so these raise `NotImplementedError` (numeric and bool columns convert).
 - `Series.dtype` of a `str` column is a stand-in object (`str(dtype) == 'str'`, `repr` as pandas); there is no `StringDtype` class hierarchy.
-- Nullable dtypes and `pd.NA`: out of scope. Time zones (`tz=`, `utc=True`, `tz_localize`) and `Period`/`PeriodIndex` are not implemented and raise `NotImplementedError`.
+- Nullable dtypes and `pd.NA`: out of scope. Period frequencies with a multiple (`'2M'`) and business-day periods (`'B'`) raise `NotImplementedError`; `to_pydatetime()` of a tz-aware Timestamp raises (PySharp's `datetime` has no tz-aware instances); zone abbreviations (`%Z`) are known for common zones and fall back to the numeric offset elsewhere; historical zone rules follow the OS database, not pandas' bundled one.
 - A frame/Series element read from a `float32` column comes back as a Python float (pandas returns `np.float32`); reductions return plain Python `int`/`float` (the numpy binding's convention), not `np.int64`/`np.float64`.
 - `Series.unique()` of a `str`/`object` Series returns a Python list (pandas returns an extension array).
 - `sort_values` is always stable (pandas' default quicksort is not stable on large inputs, so tie order can differ there).
@@ -146,8 +154,8 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - `Series.groups` / `DataFrameGroupBy.groups` values are lists of labels; `merge(indicator=True)` gives a `str` column (pandas: category); `validate=` is accepted and ignored.
 - MultiIndex: `stack`/`unstack` of frames whose *columns* are a MultiIndex, `xs`, `swaplevel`, level-wise `loc` slicing are not implemented; `to_csv` with MultiIndex columns raises.
 - `read_csv`: no `converters`/`chunksize`/URLs and no combined-column `parse_dates=[[...]]`; `orient='table'` JSON is not implemented; `read_json` converts dates only for the default date-like column names or an explicit `convert_dates` list.
-- Datetimes: `.values`/`np.asarray` of a datetime column raise (NDSharp has no datetime64 arrays); `resample(origin=, offset=)` raises; `isocalendar()` columns are int64 where pandas has UInt32; `Series.unique()` returns a `DatetimeArray`/`TimedeltaArray` stand-in with `len`, iteration, indexing and `tolist`; numpy `Generator.poisson` is missing.
-- Not implemented: `plot.kde`, `eval`/`query`, `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
+- Datetimes: `.values`/`np.asarray` of a datetime column raise (NDSharp has no datetime64 arrays); `resample(origin=, offset=)` raises; `isocalendar()` columns are int64 where pandas has UInt32; `Series.unique()` returns a `DatetimeArray`/`TimedeltaArray` stand-in with `len`, iteration, indexing and `tolist`; `resample(kind='period')` is not implemented.
+- Not implemented: `describe(include=...)`, `interpolate`; plots are drawn by PySharp.Matplotlib, so pixels differ from Agg.
 
 ## Verification environment
 

@@ -481,5 +481,8 @@ dependency, a thin binding, and verification against the real library. Target se
 - **Categorical data**: `category` dtype (ordered or not), `pd.Categorical`, `pd.CategoricalDtype`, the `.cat` accessor, `pd.cut`/`pd.qcut` with `Interval` categories, categorical `groupby` (`observed=`), `value_counts` with unused categories, `CategoricalIndex`.
 - **Datetime and time series**: `datetime64`/`timedelta64` columns and indexes, `Timestamp`/`Timedelta`/`NaT`, `pd.to_datetime`/`to_timedelta`/`date_range`/`timedelta_range`, date offsets, the `.dt` accessor, partial-string indexing, `resample`/`asfreq`/`shift(freq=)`/time-window `rolling`, `pd.Grouper(freq=)`, `read_csv(parse_dates=)` and date formats in `to_csv`/`to_json`, `df.plot()` with a datetime index.
 - numpy: `Generator.choice(p=...)`. `datetime` objects now print microseconds like CPython; Python floats answer `.round()` / `.item()` / `.is_integer()` (np.float64 stand-in).
-- Known gaps (see the plan): time zones, `Period`, nullable dtypes, `eval`/`query`, `plot.kde`.
+- **Time zones and periods**: tz-aware datetimes (`tz_localize`/`tz_convert`, DST-aware `date_range`/offsets/resample, `utc=True`, offset strings), `Period`/`PeriodIndex`/`period_range` with fiscal frequencies, `to_period`/`to_timestamp`.
+- **`query`/`eval`/`pd.eval`** and **`plot.kde`**; numpy `Generator.exponential`/`gamma`/`poisson` (bit-exact with numpy).
+- The Index repr wraps and justifies exactly like pandas (`format_object_summary` ported).
+- Known gaps (see the plan): nullable dtypes, `describe(include=...)`, `interpolate`, multiple-of-unit and business-day periods.
 

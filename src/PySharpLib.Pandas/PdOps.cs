@@ -26,6 +26,7 @@ internal static class PdOps
         long l => new BigInteger(l),
         Ts t => PdTime.Wrap(t),
         Td t => PdTime.Wrap(t),
+        Per p => PdPeriod.Wrap(p),
         _ => v,
     };
 

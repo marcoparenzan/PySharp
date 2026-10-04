@@ -76,6 +76,36 @@ internal static partial class NumpyRandom
             if (p.DType(1) is DType dt && dt != DType.Float64) r = r.AsType(dt);
             return Out(r, size is null);
         });
+        Def("standard_exponential", (i, a, kw) =>
+        {
+            var p = new Args("standard_exponential", i, a.Skip(1).ToArray(), kw, "size", "dtype", "method", "out");
+            var size = SizeArg(p[0]);
+            return Out(Gen(a[0]).StandardExponential(size), size is null);
+        });
+        Def("exponential", (i, a, kw) =>
+        {
+            var p = new Args("exponential", i, a.Skip(1).ToArray(), kw, "scale", "size");
+            var size = SizeArg(p[1]);
+            return Out(Gen(a[0]).Exponential(p.Double(0, 1.0), size), size is null);
+        });
+        Def("standard_gamma", (i, a, kw) =>
+        {
+            var p = new Args("standard_gamma", i, a.Skip(1).ToArray(), kw, "shape", "size", "dtype", "out");
+            var size = SizeArg(p[1]);
+            return Out(Gen(a[0]).StandardGamma(p.Double(0, 1.0), size), size is null);
+        });
+        Def("gamma", (i, a, kw) =>
+        {
+            var p = new Args("gamma", i, a.Skip(1).ToArray(), kw, "shape", "scale", "size");
+            var size = SizeArg(p[2]);
+            return Out(Gen(a[0]).Gamma(p.Double(0, 1.0), p.Double(1, 1.0), size), size is null);
+        });
+        Def("poisson", (i, a, kw) =>
+        {
+            var p = new Args("poisson", i, a.Skip(1).ToArray(), kw, "lam", "size");
+            var size = SizeArg(p[1]);
+            return Out(Gen(a[0]).Poisson(p.Double(0, 1.0), size), size is null);
+        });
         Def("integers", (i, a, kw) =>
         {
             var p = new Args("integers", i, a.Skip(1).ToArray(), kw, "low", "high", "size", "dtype", "endpoint");

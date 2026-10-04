@@ -144,6 +144,7 @@ public static class TimeSeries
     /// <summary>Resolution of a datetime column: 2 day, 3 hour, 4 minute, 5 second, 6 millisecond, 7 microsecond, 8 nanosecond (the finest component present).</summary>
     public static int Resolution(Column c)
     {
+        if (c.Tz is not null) c = c.ToWall();
         int level = 2;
         foreach (var t in c.Ticks)
         {
@@ -171,6 +172,7 @@ public static class TimeSeries
             if (DateTimeCore.TryParseIso(key, out var t, out var u) || (DateTimeCore.GuessFormat(key) is { } g && DateTimeCore.TryStrptime(key, g, out t, out u)))
             {
                 long v = DateTimeCore.Scale(t, u, unit);
+                if (labels.Tz is { } zk) v = zk.FromWall(v, unit, "first", "shift_forward");
                 return (v, v, false);
             }
             return null;
@@ -200,6 +202,7 @@ public static class TimeSeries
             _ => DateTimeCore.Compose(y, mo, d, h, mi, s, hiNanos, unit),
         };
         int indexLevel = Resolution(labels);
+        if (labels.Tz is { } zone) { lo = zone.FromWall(lo, unit, "first", "shift_forward"); hi = zone.FromWall(hi, unit, "last", "shift_backward"); }
         return (lo, hi, level < indexLevel);
     }
 
@@ -207,7 +210,7 @@ public static class TimeSeries
 
     public sealed record Bins(long[] Labels, int[] BinOfRow, string FreqText);
 
-    public static Bins ResampleBins(long[] ticks, DateUnit unit, DateOffsetSpec off, string? closedArg, string? labelArg)
+    public static Bins ResampleBins(long[] ticks, DateUnit unit, DateOffsetSpec off, string? closedArg, string? labelArg, long? originTicks = null)
     {
         bool endAnchored = off is DateOffsetSpec.WeekOffset || off is DateOffsetSpec.MonthLike && off.FreqString.Contains('E');
         string closed = closedArg ?? (endAnchored ? "right" : "left");
@@ -222,7 +225,7 @@ public static class TimeSeries
         if (off is DateOffsetSpec.TickOffset tick)
         {
             long step = tick.StepTicks(unit);
-            long origin = NormalizeTicks(first, unit);
+            long origin = originTicks ?? NormalizeTicks(first, unit);
             long foffset = DateTimeCore.FloorMod(first - origin, step), loffset = DateTimeCore.FloorMod(last - origin, step);
             long fres, lres;
             if (closed == "right") { fres = foffset > 0 ? first - foffset : first - step; lres = loffset > 0 ? last + (step - loffset) : last + step; }

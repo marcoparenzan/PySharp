@@ -18,6 +18,7 @@ namespace PySharpLib.Pandas;
 internal static class PdDates
 {
     public static readonly PyClass DtAccessor = new("DatetimeProperties", new List<PyClass>());
+    public static readonly PyClass PeriodArrayClass = new("PeriodArray", new List<PyClass>());
     public static readonly PyClass TdAccessor = new("TimedeltaProperties", new List<PyClass>());
     public static readonly PyClass Resampler = new("Resampler", new List<PyClass>());
 
@@ -75,32 +76,44 @@ internal static class PdDates
 
     private static string Opt(Args p, int i, string dflt) => p.Has(i) ? (string)p[i]! : dflt;
 
-    public static Column ToDatetimeColumn(Column c, string errors, bool dayFirst, string? format, string? unit)
+    private static Column ParseStringsTz(IReadOnlyList<string?> strs, string? format, bool dayFirst, string errors, bool utc)
+    {
+        int n = strs.Count;
+        var naive = new string?[n]; var secs = new int[n]; var has = new bool[n];
+        for (int x = 0; x < n; x++)
+        {
+            if (strs[x] is { } s && PdTz.SplitOffset(s, out var nv, out var sc)) { naive[x] = nv; secs[x] = sc; has[x] = true; }
+            else naive[x] = strs[x];
+        }
+        var (t, u) = DateParse.ParseStrings(naive, format, dayFirst, errors);
+        if (!has.Any(h => h)) { var plain = Column.FromDateTime(t, u); return utc ? plain.Localize(TzInfo.Utc) : plain; }
+        var present = Enumerable.Range(0, n).Where(x => t[x] != DateTimeCore.NaT).ToList();
+        if (!utc && (present.Any(x => !has[x]) || present.Select(x => secs[x]).Distinct().Count() > 1))
+            throw PyErr.ValueError("Mixed timezones detected. Pass utc=True in to_datetime or tz='UTC' in DatetimeIndex to convert to a common timezone.");
+        var zone = utc ? TzInfo.Utc : TzInfo.Fixed(present.Count == 0 ? 0 : secs[present[0]]);
+        var ticks = t.Select((v, x) => v == DateTimeCore.NaT ? v : v - secs[x] * DateTimeCore.PerSecond(u)).ToArray();
+        return Column.FromDateTime(ticks, u, zone);
+    }
+
+    public static Column ToDatetimeColumn(Column c, string errors, bool dayFirst, string? format, string? unit, bool utc = false)
     {
         switch (c.Kind)
         {
-            case Kind.DateTime: return c;
-            case Kind.Category: return ToDatetimeColumn(c.Decategorized(), errors, dayFirst, format, unit);
+            case Kind.DateTime: return utc ? (c.Tz is null ? c.Localize(TzInfo.Utc) : c.WithTz(TzInfo.Utc)) : c;
+            case Kind.Category: return ToDatetimeColumn(c.Decategorized(), errors, dayFirst, format, unit, utc);
             case Kind.Int or Kind.Float:
             {
                 var (t, u) = Numbers(c, unit, errors);
-                return Column.FromDateTime(t, u);
+                return Column.FromDateTime(t, u, utc ? TzInfo.Utc : null);
             }
             case Kind.Str:
-            {
-                var (t, u) = DateParse.ParseStrings(Enumerable.Range(0, c.Length).Select(i => c.StrAt(i)).ToList(), format, dayFirst, errors);
-                return Column.FromDateTime(t, u);
-            }
+                return ParseStringsTz(Enumerable.Range(0, c.Length).Select(i => c.StrAt(i)).ToList(), format, dayFirst, errors, utc);
             case Kind.Object:
             {
                 var strs = new List<string?>();
                 bool allStr = true;
                 for (int i = 0; i < c.Length; i++) { var v = c[i]; if (v is string s) strs.Add(s); else if (v is null || v is double d && double.IsNaN(d)) strs.Add(null); else allStr = false; }
-                if (allStr)
-                {
-                    var (t, u) = DateParse.ParseStrings(strs, format, dayFirst, errors);
-                    return Column.FromDateTime(t, u);
-                }
+                if (allStr) return ParseStringsTz(strs, format, dayFirst, errors, utc);
                 var cells = new List<object?>();
                 for (int i = 0; i < c.Length; i++)
                 {
@@ -116,7 +129,9 @@ internal static class PdDates
                     else if (errors == "coerce") cells.Add(null);
                     else throw PyErr.TypeError($"<class '{PyOps.TypeName(PdConv.FromCell(v, Kind.Object))}'> is not convertible to datetime, at position {i}");
                 }
-                return Column.Infer(cells).Kind == Kind.DateTime ? Column.Infer(cells) : Column.FromDateTime(cells.Select(_ => DateTimeCore.NaT).ToArray(), DateUnit.Second);
+                var inferred = Column.Infer(cells);
+                if (inferred.Kind != Kind.DateTime) return Column.FromDateTime(cells.Select(_ => DateTimeCore.NaT).ToArray(), DateUnit.Second);
+                return utc ? (inferred.Tz is null ? inferred.Localize(TzInfo.Utc) : inferred.WithTz(TzInfo.Utc)) : inferred;
             }
         }
         throw PyErr.TypeError($"<class '{c.DTypeName}'> is not convertible to datetime");
@@ -126,6 +141,7 @@ internal static class PdDates
     {
         if (arg is PyNone || arg is PyInstance { Native: NaTMarker }) return PdTime.NaT;
         if (arg is PyInstance { Native: Ts }) return arg;
+        if (arg is string s0 && PdTz.TryParseAware(s0, out var awareTs)) return PdTime.Wrap(awareTs);
         if (arg is string s)
         {
             var (t, u) = DateParse.ParseStrings(new List<string?> { s }, format, dayFirst, errors);
@@ -182,13 +198,18 @@ internal static class PdDates
         var p = A("to_datetime", i, a, k, "arg", "errors", "dayfirst", "yearfirst", "utc", "format", "exact", "unit", "origin", "cache");
         var arg = p.Required(0);
         string errors = Opt(p, 1, "raise");
-        if (p.Bool(4, false)) throw PyErr.NotImplementedError("to_datetime(utc=True): time zones are not supported");
+        bool utcFlag = p.Bool(4, false);
         bool dayFirst = p.Bool(2, false);
         string? format = p.Has(5) ? (string)p[5]! : null;
         string? unit = p.Has(7) ? (string)p[7]! : null;
         if (arg is PyInstance { Native: DataFrame df }) return DataFrameDatetime(df, errors);
-        if (!PdConv.IsListLike(arg)) return ScalarDatetime(arg, errors, dayFirst, format, unit);
-        var col = ToDatetimeColumn(ColumnOf(arg), errors, dayFirst, format, unit);
+        if (!PdConv.IsListLike(arg))
+        {
+            var sc = ScalarDatetime(arg, errors, dayFirst, format, unit);
+            if (utcFlag && sc is PyInstance { Native: Ts st }) { var cc = st.Tz is null ? Column.FromDateTime(new[] { st.Ticks }, st.Unit).Localize(TzInfo.Utc) : Column.FromDateTime(new[] { st.Ticks }, st.Unit, st.Tz).WithTz(TzInfo.Utc); return PdTime.Wrap(new Ts(cc.Ticks[0], cc.Unit, cc.Tz)); }
+            return sc;
+        }
+        var col = ToDatetimeColumn(ColumnOf(arg), errors, dayFirst, format, unit, utcFlag);
         if (arg is PyInstance { Native: FIndex ixsrc } && ixsrc.Freq is not null && ixsrc.Labels.Kind == Kind.DateTime) return PdConv.Wrap(ixsrc);
         return Rewrap(arg, col);
     }
@@ -267,7 +288,6 @@ internal static class PdDates
     private static object DateRange(Interp i, object[] a, Dictionary<string, object>? k)
     {
         var p = A("date_range", i, a, k, "start", "end", "periods", "freq", "tz", "normalize", "name", "inclusive", "unit");
-        if (p.Has(4)) throw PyErr.NotImplementedError("date_range(tz=...): time zones are not supported");
         Ts? start = null, end = null;
         if (p.Has(0)) start = PdTime.TryTs(p[0], out var s0) ? s0 : throw PyErr.ValueError($"Given date string \"{PyOps.Str(i, p[0]!)}\" not likely a datetime");
         if (p.Has(1)) end = PdTime.TryTs(p[1], out var e0) ? e0 : throw PyErr.ValueError($"Given date string \"{PyOps.Str(i, p[1]!)}\" not likely a datetime");
@@ -281,6 +301,8 @@ internal static class PdDates
         else if (start is null || end is null || true) unit = start is Ts || end is Ts ? (unit < DateUnit.Micro ? unit : unit) : DateUnit.Micro;
         long? st = null, en = null;
         long Conv(Ts t) => DateTimeCore.Scale(t.Ticks, t.Unit, unit);
+        var zone = PdTz.TzArg(p.Has(4) ? p[4] : null) ?? start?.Tz ?? end?.Tz;
+        long Wall(Ts t) => zone is not null && t.Tz is not null ? zone.ToWall(DateTimeCore.Scale(t.Ticks, t.Unit, unit), unit) : DateTimeCore.Scale(t.Ticks, t.Unit, unit);
 
         if (!p.Has(3) && periods is not null && start is not null && end is not null)
         {
@@ -288,12 +310,12 @@ internal static class PdDates
             long a0 = Conv(start.Value), b0 = Conv(end.Value);
             var lin = new long[periods.Value];
             for (int n = 0; n < lin.Length; n++) lin[n] = lin.Length == 1 ? a0 : a0 + (long)Math.Round((double)(b0 - a0) * n / (lin.Length - 1));
-            return PdConv.Wrap(new FIndex(Column.FromDateTime(lin, unit), name));
+            return PdConv.Wrap(new FIndex(Column.FromDateTime(lin, unit, zone), name));
         }
         var off = OffsetArg(p.Has(3) ? p[3] : null);
         if (off.RequiredUnit > unit && p.Has(3)) unit = off.RequiredUnit;
-        if (start is Ts s1) st = DateTimeCore.Scale(s1.Ticks, s1.Unit, unit);
-        if (end is Ts e1) en = DateTimeCore.Scale(e1.Ticks, e1.Unit, unit);
+        if (start is Ts s1) st = Wall(s1);
+        if (end is Ts e1) en = Wall(e1);
         if (normalize)
         {
             if (st is long sv) st = TimeSeries.NormalizeTicks(sv, unit);
@@ -301,6 +323,8 @@ internal static class PdDates
         }
         if (start is null && end is null) throw PyErr.ValueError("Of the four parameters: start, end, periods, and freq, exactly three must be specified");
         if (periods is null && (start is null || end is null)) throw PyErr.ValueError("Of the four parameters: start, end, periods, and freq, exactly three must be specified");
+        bool absolute = zone is not null && PdTz.IsAbsolute(off);
+        if (absolute) { if (st is long sa) st = zone!.FromWall(sa, unit); if (en is long ea) en = zone!.FromWall(ea, unit); }
         var ticks = TimeSeries.DateRange(st, en, periods, off, unit);
         if (inclusive != "both" && ticks.Length > 0)
         {
@@ -309,7 +333,8 @@ internal static class PdDates
             if ((inclusive is "left" or "neither") && en is long e2) keep = keep.Where(t => t != e2);
             ticks = keep.ToArray();
         }
-        var ix = new FIndex(Column.FromDateTime(ticks, unit), name) { Freq = off.IsTick && off.N == 1 || true ? off.FreqString : null };
+        if (zone is not null && !absolute) ticks = ticks.Select(w => zone.FromWall(w, unit)).ToArray();
+        var ix = new FIndex(Column.FromDateTime(ticks, unit, zone), name) { Freq = off.FreqString };
         return PdConv.Wrap(ix);
     }
 
@@ -368,12 +393,13 @@ internal static class PdDates
         isMethod = false;
         if (c.Kind == Kind.DateTime)
         {
+            if (name is "tz" or "tzinfo") return PdTz.Wrap(c.Tz);
+            if (c.Tz is not null) c = c.ToWall();
             if (Array.IndexOf(TimeSeries.DateTimeFields, name) >= 0) return TimeSeries.Field(c, name);
             switch (name)
             {
                 case "date": return DateObjects(c, false);
                 case "time": return DateObjects(c, true);
-                case "tz": case "tzinfo": return PyNone.Instance;
                 case "unit": return DateTimeCore.UnitName(c.Unit);
             }
         }
@@ -387,6 +413,15 @@ internal static class PdDates
 
     private static Column MethodOn(Column c, string name, Interp i, Args p)
     {
+        if (c.Kind == Kind.DateTime && c.Tz is { } zone)
+        {
+            if (name == "strftime") { var f = (string)p.Required(0); return Column.FromStrings(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : DateTimeCore.StrftimeAware(t, c.Unit, zone, f)).ToArray()); }
+            var wallResult = MethodOn(c.ToWall(), name, i, p);
+            if (wallResult.Kind == Kind.DateTime && wallResult.Tz is null && name is "normalize" or "floor" or "ceil" or "round")
+                return wallResult.Localize(zone);
+            if (name == "as_unit") return c.WithUnit(UnitNames[(string)p.Required(0)]);
+            return wallResult;
+        }
         bool dt = c.Kind == Kind.DateTime;
         switch (name)
         {
@@ -496,11 +531,11 @@ internal static class PdDates
                 if (ix.Labels.Kind is not (Kind.DateTime or Kind.Timedelta)) throw PyErr.AttributeError($"'Index' object has no attribute '{name}'");
                 var p = new Args(name, i, a.Skip(1).ToArray(), k, "arg0", "arg1", "arg2");
                 var r = MethodOn(ix.Labels, name, i, p);
-                return PdConv.Wrap(new FIndex(r, ix.Name) { Freq = name == "normalize" ? ix.Freq : null });
+                return PdConv.Wrap(new FIndex(r, ix.Name) { Freq = name == "normalize" && ix.Labels.Tz is null ? ix.Freq : null });
             });
         }
         // arithmetic and comparisons of datetime-like indexes go through the Series machinery
-        FIndex AsIndexResult(FIndex src, Series r, bool keepFreq) => new(r.Values, src.Name) { Freq = keepFreq ? src.Freq : null };
+        FIndex AsIndexResult(FIndex src, Series r, bool keepFreq) => new(r.Values, src.Name) { Freq = keepFreq && (src.Labels.Tz is null || src.Freq is { } sf && PdTz.IsAbsolute(DateOffsetSpec.Parse(sf))) ? src.Freq : null };
         Series AsSeries(FIndex ix) => new(ix.Labels, FIndex.Range(ix.Length));
         foreach (var (dunder, op, rev) in new[]
         {
@@ -598,22 +633,24 @@ internal static class PdDates
     {
         if (ix.Labels.Kind != Kind.DateTime) throw PyErr.TypeError("shift(freq=...) requires a DatetimeIndex");
         var spec = off.WithN(off.N * periods);
+        if (ix.Labels.Tz is not null) return new FIndex(PdTz.ApplyOffsetAware(ix.Labels, spec), ix.Name) { Freq = ix.Freq };
         var u = DateTimeCore.Finer(ix.Labels.Unit, spec.RequiredUnit);
         var sc = ix.Labels.WithUnit(u);
         var ticks = sc.Ticks.Select(t => t == DateTimeCore.NaT ? t : spec.Add(t, u)).ToArray();
         return new FIndex(Column.FromDateTime(ticks, u), ix.Name) { Freq = ix.Freq };
     }
 
-    private static string? InferFreq(FIndex ix)
+    internal static string? InferFreq(FIndex ix)
     {
         if (ix.Labels.Kind != Kind.DateTime || ix.Length < 3) return null;
         if (ix.Freq is not null) return ix.Freq;
-        foreach (var cand in new[] { "D", "h", "min", "s", "ms", "B", "W-SUN", "ME", "MS", "QE-DEC", "QS-JAN", "YE-DEC", "YS-JAN" })
+        foreach (var cand in new[] { "D", "h", "min", "s", "ms", "B", "W-SUN", "W-MON", "W-TUE", "W-WED", "W-THU", "W-FRI", "W-SAT", "ME", "MS", "QE-DEC", "QS-OCT", "YE-DEC", "YS-JAN" })
         {
             var off = DateOffsetSpec.Parse(cand);
             var u = DateTimeCore.Finer(ix.Labels.Unit, off.RequiredUnit);
             var t = ix.Labels.WithUnit(u).Ticks;
             if (t.Length < 2) continue;
+            if (!off.IsTick && !DateTimeCore.AllMidnight(t, u)) continue;
             bool ok = true;
             for (int n = 0; n + 1 < t.Length && ok; n++) ok = off.Add(t[n], u) == t[n + 1];
             if (ok) return cand;
@@ -644,12 +681,28 @@ internal static class PdDates
         if (keySource.Kind != Kind.DateTime)
             throw PyErr.TypeError($"Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex, but got an instance of '{(isSeries ? "RangeIndex" : "Index")}'");
         string? closed = p.Has(2) ? (string)p[2]! : null, label2 = p.Has(3) ? (string)p[3]! : null;
-        var bins = TimeSeries.ResampleBins(keySource.Ticks, keySource.Unit, off, closed, label2);
+        var (binLabels, binOfRow, freqText) = BinsFor(keySource, off, closed, label2);
         var unit = keySource.Unit;
-        var rowKeys = Column.FromDateTime(bins.BinOfRow.Select(b => b < 0 ? DateTimeCore.NaT : bins.Labels[b]).ToArray(), unit);
-        var forced = bins.Labels.Select(l => new object?[] { new Ts(l, unit) }).ToList();
-        var g = new Grouping(new[] { rowKeys }, new[] { keyName }, frame.NRows, true, true, true, forced) { Freq = bins.FreqText };
+        var rowKeys = Column.FromDateTime(binOfRow.Select(b => b < 0 ? DateTimeCore.NaT : binLabels[b]).ToArray(), unit, keySource.Tz);
+        var forced = binLabels.Select(l => new object?[] { new Ts(l, unit, keySource.Tz) }).ToList();
+        var g = new Grouping(new[] { rowKeys }, new[] { keyName }, frame.NRows, true, true, true, forced) { Freq = freqText };
         return PdGroupBy.FromGrouping(self, frame, g, keyPos, isSeries, keySource);
+    }
+
+    /// <summary>Resample bins of a datetime column; for tz-aware data calendar rules (days, weeks, months ...) bin the local wall clock, fixed sub-day steps bin absolute time from the first local midnight.</summary>
+    private static (long[] labels, int[] binOfRow, string freq) BinsFor(Column source, DateOffsetSpec off, string? closed, string? label)
+    {
+        var zone = source.Tz;
+        if (zone is null) { var b = TimeSeries.ResampleBins(source.Ticks, source.Unit, off, closed, label); return (b.Labels, b.BinOfRow, b.FreqText); }
+        if (PdTz.IsAbsolute(off))
+        {
+            var valid = source.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
+            long? origin = valid.Length == 0 ? null : zone.FromWall(TimeSeries.NormalizeTicks(zone.ToWall(valid.Min(), source.Unit), source.Unit), source.Unit, "first", "shift_forward");
+            var b = TimeSeries.ResampleBins(source.Ticks, source.Unit, off, closed, label, origin);
+            return (b.Labels, b.BinOfRow, b.FreqText);
+        }
+        var wb = TimeSeries.ResampleBins(source.ToWall().Ticks, source.Unit, off, closed, label);
+        return (wb.Labels.Select(l => zone.FromWall(l, source.Unit, "first", "shift_forward")).ToArray(), wb.BinOfRow, wb.FreqText);
     }
 
     /// <summary>The row keys of a <c>pd.Grouper</c> (binned when it has a frequency).</summary>
@@ -664,9 +717,9 @@ internal static class PdDates
         if (source.Kind != Kind.DateTime) throw PyErr.TypeError("Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex");
         var off = OffsetArg(freqObj);
         string? closed = gd.TryGet("closed", out var cv) && cv is string cs ? cs : null, label = gd.TryGet("label", out var lv) && lv is string ls ? ls : null;
-        var bins = TimeSeries.ResampleBins(source.Ticks, source.Unit, off, closed, label);
-        var rowKeys = Column.FromDateTime(bins.BinOfRow.Select(b => b < 0 ? DateTimeCore.NaT : bins.Labels[b]).ToArray(), source.Unit);
-        return (rowKeys, name, bins.Labels.Select(l => new object?[] { new Ts(l, source.Unit) }).ToList(), bins.FreqText, pos);
+        var (binLabels, binOfRow, freqText) = BinsFor(source, off, closed, label);
+        var rowKeys = Column.FromDateTime(binOfRow.Select(b => b < 0 ? DateTimeCore.NaT : binLabels[b]).ToArray(), source.Unit, source.Tz);
+        return (rowKeys, name, binLabels.Select(l => new object?[] { new Ts(l, source.Unit, source.Tz) }).ToList(), freqText, pos);
     }
 
     // ------------------------------------------------------------------ clip, DatetimeArray
@@ -685,11 +738,11 @@ internal static class PdDates
     public static readonly PyClass DatetimeArrayClass = new("DatetimeArray", new List<PyClass>());
     public static readonly PyClass TimedeltaArrayClass = new("TimedeltaArray", new List<PyClass>());
 
-    public static object WrapTimeArray(Column c) => new PyInstance(c.Kind == Kind.DateTime ? DatetimeArrayClass : TimedeltaArrayClass) { Native = c };
+    public static object WrapTimeArray(Column c) => new PyInstance(c.Kind == Kind.Period ? PeriodArrayClass : c.Kind == Kind.DateTime ? DatetimeArrayClass : TimedeltaArrayClass) { Native = c };
 
     private static void BuildTimeArrays()
     {
-        foreach (var cls in new[] { DatetimeArrayClass, TimedeltaArrayClass })
+        foreach (var cls in new[] { DatetimeArrayClass, TimedeltaArrayClass, PeriodArrayClass })
         {
             Column Me(object o) => (Column)((PyInstance)o).Native!;
             void Def(string n, BuiltinFn f) => cls.Dict[n] = Fn(cls.Name + "." + n, f);
@@ -745,6 +798,7 @@ internal static class PdDates
             var p = A("DatetimeIndex", i, a, k, "data", "freq", "tz", "normalize", "closed", "ambiguous", "dayfirst", "yearfirst", "dtype", "copy", "name");
             var data = p.Has(0) ? p[0]! : new PyList();
             var col = ToDatetimeColumn(ColumnOf(data), "raise", p.Bool(6, false), null, null);
+            if (PdTz.TzArg(p.Has(2) ? p[2] : null) is { } zone) col = col.Tz is null ? PdTz.Localize(col, zone, null, null) : col.WithTz(zone);
             string? freq = p.Has(1) && p[1] is not "infer" ? OffsetArg(p[1]).FreqString : null;
             var ix = new FIndex(col, p.Has(10) ? PdConv.ToCell(p[10]) : data is PyInstance { Native: FIndex src } ? src.Name : null) { Freq = freq };
             return PdConv.Wrap(ix);

@@ -140,6 +140,17 @@ public static class Formatter
                 return FormatFloats(c.Doubles, o, leadingSpace);
             case Kind.Category:
                 return FormatCategory(c, o, leadingSpace);
+            case Kind.Period:
+                for (int i = 0; i < r.Length; i++) r[i] = sp + (c.Ticks[i] == DateTimeCore.NaT ? "NaT" : PeriodCore.Format(c.Ticks[i], c.PFreq));
+                break;
+            case Kind.DateTime when c.Tz is { } zone:
+            {
+                var wall = c.Ticks.Select(t => t == DateTimeCore.NaT ? t : zone.ToWall(t, c.Unit)).ToArray();
+                int digits = DateTimeCore.FractionDigits(wall, c.Unit);
+                for (int i = 0; i < r.Length; i++)
+                    r[i] = c.Ticks[i] == DateTimeCore.NaT ? "NaT" : DateTimeCore.FormatDateTime(DateTimeCore.Decompose(wall[i], c.Unit), digits) + DateTimeCore.OffsetText(zone, c.Ticks[i], c.Unit);
+                break;
+            }
             case Kind.DateTime:
             {
                 bool dateOnly = DateTimeCore.AllMidnight(c.Ticks, c.Unit);
@@ -311,7 +322,7 @@ public static class Formatter
             var padded = raw.Select(x => x.PadRight(w)).ToArray();
             return padded.Select(x => x[1..]).ToArray();
         }
-        if (l.Kind is Kind.DateTime or Kind.Timedelta) return FormatCells(l, o, false);
+        if (l.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) return FormatCells(l, o, false);
         if (l.Kind == Kind.Category)
         {
             if (l.Categories.Kind == Kind.Object && l.Categories.Length > 0 && l.Categories[0] is IntervalValue)
@@ -404,7 +415,7 @@ public static class Formatter
         string footerBase = (s.Name is null ? "" : $"Name: {Pp(s.Name)}");
         if (s.Length == 0)
         {
-            string fqE = s.Index.Freq is { } fr ? $"Freq: {fr}" : "";
+            string fqE = (s.Index.Freq ?? (s.Index.Labels.Kind == Kind.Period ? s.Index.Labels.PFreq.Name : null)) is { } fr ? $"Freq: {fr}" : "";
             string f = (fqE.Length > 0 ? fqE + ", " : "") + footerBase + (footerBase.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
             return $"Series([], {f})";
         }
@@ -430,7 +441,7 @@ public static class Formatter
         }
         string body = Adjoin(3, new[] { idx, vals });
         if (idxHeader is not null) body = idxHeader + "\n" + body;
-        string footer = s.Index.Freq is { } fq ? "Freq: " + fq + (footerBase.Length > 0 ? ", " : "") + footerBase : footerBase;
+        string footer = (s.Index.Freq ?? (s.Index.Labels.Kind == Kind.Period && !s.Index.IsMulti ? s.Index.Labels.PFreq.Name : null)) is { } fq ? "Freq: " + fq + (footerBase.Length > 0 ? ", " : "") + footerBase : footerBase;
         if (trunc) footer += (footer.Length > 0 ? ", " : "") + $"Length: {s.Length}";
         footer += (footer.Length > 0 ? ", " : "") + $"dtype: {s.DType}";
         if (s.Values.Kind == Kind.Category) footer += "\n" + CategoriesLine(s.Values, o);
@@ -612,6 +623,7 @@ public static class Formatter
         var o = options ?? DisplayOptions.Current;
         string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
         if (ix.IsMulti) return MultiIndexRepr(ix, o);
+        if (ix.Labels.Kind == Kind.Period) return PeriodIndexRepr(ix, o);
         if (ix.Labels.Kind is Kind.DateTime or Kind.Timedelta) return TimeIndexRepr(ix, o);
         if (ix.Labels.Kind == Kind.Category) return CategoricalIndexRepr(ix, o);
         if (ix.Labels.Kind == Kind.Object && ix.Length > 0 && ix.Labels[0] is IntervalValue) return IntervalIndexRepr(ix);
@@ -620,27 +632,54 @@ public static class Formatter
         var items = new List<string>();
         var l = ix.Labels;
         for (int i = 0; i < l.Length; i++) items.Add(ReprLabel(l, i));
-        string dtype = $", dtype='{l.DTypeName}'";
-        string head = "Index([";
-        string tail = "]" + dtype + nameArg + ")";
-        string joined = string.Join(", ", items);
-        if (joined.Length < o.Width) return head + joined + tail;
-        var sb = new StringBuilder(head);
-        string pad = new string(' ', head.Length);
-        int lineLen = head.Length;
-        for (int i = 0; i < items.Count; i++)
+        bool inferredString = l.Kind == Kind.Str || l.Kind == Kind.Object && l.Length > 0 && Enumerable.Range(0, l.Length).All(i => l[i] is string);
+        string dtype = $"dtype='{l.DTypeName}'";
+        return "Index(" + ObjectSummary(items, "Index", !inferredString, o.Width) + dtype + nameArg + ")";
+    }
+
+    /// <summary>Port of pandas' <c>format_object_summary</c>: the bracketed list of an Index repr, wrapped at the display width, right-justified when it does not fit on a line,
+    /// truncated beyond <c>max_seq_items</c>; the result ends so that the attributes (<c>dtype=...</c>) can follow directly.</summary>
+    public static string ObjectSummary(IReadOnlyList<string> objs, string name, bool justify, int displayWidth, int maxSeqItems = 100)
+    {
+        string space1 = "\n" + new string(' ', name.Length + 1), space2 = "\n" + new string(' ', name.Length + 2);
+        int n = objs.Count;
+        string close = ", ";
+        if (n == 0) return "[]" + close;
+        if (n == 1) return $"[{objs[0]}]{close}";
+        if (n == 2) return $"[{objs[0]}, {objs[1]}]{close}";
+        bool truncated = n > maxSeqItems;
+        List<string> head, tail;
+        if (truncated) { int k = Math.Min(maxSeqItems / 2, 10); head = objs.Take(k).ToList(); tail = objs.Skip(n - k).ToList(); }
+        else { head = new List<string>(); tail = objs.ToList(); }
+        if (justify && (truncated || !(string.Join(", ", head).Length < displayWidth && string.Join(", ", tail).Length < displayWidth)))
         {
-            string it = items[i] + (i < items.Count - 1 ? "," : "");
-            if (lineLen + it.Length + (lineLen > head.Length ? 1 : 0) > o.Width && lineLen > head.Length)
-            {
-                sb.Append('\n').Append(pad); lineLen = pad.Length;
-            }
-            else if (i > 0) { sb.Append(' '); lineLen++; }
-            sb.Append(it); lineLen += it.Length;
+            int max = Math.Max(head.Count == 0 ? 0 : head.Max(x => x.Length), tail.Max(x => x.Length));
+            head = head.Select(x => x.PadLeft(max)).ToList();
+            tail = tail.Select(x => x.PadLeft(max)).ToList();
         }
-        // like pandas, the attributes move to their own line once the values wrapped
-        tail = "],\n" + new string(' ', "Index(".Length) + tail[3..];
-        return sb.Append(tail).ToString();
+        var summary = new StringBuilder();
+        string line = space2;
+        void Extend(string value, int width)
+        {
+            if (line.TrimEnd().Length + value.TrimEnd().Length >= width) { summary.Append(line.TrimEnd()); line = space2; }
+            line += value;
+        }
+        foreach (var h in head) Extend(h + ", ", displayWidth);
+        if (truncated) { summary.Append(line.TrimEnd()).Append(space2).Append("..."); line = space2; }
+        for (int i = 0; i < tail.Count - 1; i++) Extend(tail[i] + ", ", displayWidth);
+        Extend(tail[^1], displayWidth - 2);
+        summary.Append(line);
+        summary.Append("],");
+        summary.Append(summary.Length > displayWidth ? space1 : " ");
+        return "[" + summary.ToString().Substring(space2.Length);
+    }
+
+    private static string PeriodIndexRepr(Index ix, DisplayOptions o)
+    {
+        var l = ix.Labels;
+        var items = Enumerable.Range(0, l.Length).Select(i => "'" + (l.IsNa(i) ? "NaT" : PeriodCore.Format(l.Ticks[i], l.PFreq)) + "'").ToList();
+        string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
+        return "PeriodIndex(" + ObjectSummary(items, "PeriodIndex", true, o.Width) + $"dtype='{l.DTypeName}'{nameArg})";
     }
 
     private static string TimeIndexRepr(Index ix, DisplayOptions o)
@@ -648,25 +687,14 @@ public static class Formatter
         var l = ix.Labels;
         string cls = l.Kind == Kind.DateTime ? "DatetimeIndex" : "TimedeltaIndex";
         var cells = FormatCells(l, o, false);
-        if (l.Kind == Kind.DateTime && !DateTimeCore.AllMidnight(l.Ticks, l.Unit))
+        if (l.Kind == Kind.DateTime && l.Tz is { } lz)
+            cells = l.Ticks.Select(t => t == DateTimeCore.NaT ? "NaT" : DateTimeCore.FormatAware(t, l.Unit, lz)).ToArray();
+        else if (l.Kind == Kind.DateTime && !DateTimeCore.AllMidnight(l.Ticks, l.Unit))
             cells = l.Ticks.Select(t => t == DateTimeCore.NaT ? "NaT" : DateTimeCore.FormatTimestamp(t, l.Unit)).ToArray();
         var items = Enumerable.Range(0, l.Length).Select(i => "'" + (l.IsNa(i) ? "NaT" : cells[i]) + "'").ToList();
         string nameArg = ix.Name is null ? "" : $", name={QuoteLabel(ix.Name)}";
-        string tail = $"], dtype='{l.DTypeName}'{nameArg}, freq={(ix.Freq is null ? "None" : "'" + ix.Freq + "'")})";
-        string head = cls + "([";
-        string joined = string.Join(", ", items);
-        if (head.Length + joined.Length < o.Width) return head + joined + tail;
-        var sb = new StringBuilder(head);
-        string pad = new string(' ', head.Length);
-        int lineLen = head.Length;
-        for (int i = 0; i < items.Count; i++)
-        {
-            string it = items[i] + (i < items.Count - 1 ? "," : "");
-            if (lineLen + it.Length + (lineLen > head.Length ? 1 : 0) > o.Width && lineLen > head.Length) { sb.Append('\n').Append(pad); lineLen = pad.Length; }
-            else if (i > 0) { sb.Append(' '); lineLen++; }
-            sb.Append(it); lineLen += it.Length;
-        }
-        return sb.Append("],\n").Append(' ', cls.Length + 1).Append(tail[3..]).ToString();
+        string freqAttr = $", freq={(ix.Freq is null ? "None" : "'" + ix.Freq + "'")}";
+        return cls + "(" + ObjectSummary(items, cls, true, o.Width) + $"dtype='{l.DTypeName}'{nameArg}{freqAttr})";
     }
 
     private static string CategoricalIndexRepr(Index ix, DisplayOptions o)

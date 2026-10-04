@@ -123,7 +123,7 @@ public static class FrameOps
                 }
                 int r = c.Kind switch
                 {
-                    Kind.DateTime or Kind.Timedelta => c.Ticks[a].CompareTo(c.Ticks[b]),
+                    Kind.DateTime or Kind.Timedelta or Kind.Period => c.Ticks[a].CompareTo(c.Ticks[b]),
                     Kind.Category => c.Codes[a].CompareTo(c.Codes[b]),
                     Kind.Int => c.LongAt(a).CompareTo(c.LongAt(b)),
                     Kind.Float => c.DoubleAt(a).CompareTo(c.DoubleAt(b)),
@@ -218,7 +218,7 @@ public static class FrameOps
 
     public static Column Diff(Column c, int periods)
     {
-        if (c.Kind is Kind.DateTime or Kind.Timedelta) return Ops.Binary(BinOp.Sub, c, Shift(c, periods));
+        if (c.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) return Ops.Binary(BinOp.Sub, c, Shift(c, periods));
         if (!Reduce.IsNumeric(c)) throw new FrameException("unsupported operand type(s) for -", "TypeError");
         var f = c.Kind == Kind.Bool ? Column.FromLongs(c.Bools.Select(b => b ? 1L : 0L).ToArray()) : c;
         var prev = Shift(f, periods);

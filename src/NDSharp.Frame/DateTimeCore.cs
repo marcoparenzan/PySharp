@@ -12,9 +12,9 @@ namespace NDSharp.Frame;
 public enum DateUnit : byte { Second = 0, Milli = 1, Micro = 2, Nano = 3 }
 
 /// <summary>A timestamp value (naive, UTC-agnostic wall clock) in a given unit. Equality is by instant, whatever the unit.</summary>
-public readonly record struct Ts(long Ticks, DateUnit Unit)
+public readonly record struct Ts(long Ticks, DateUnit Unit, TzInfo? Tz = null)
 {
-    public override string ToString() => DateTimeCore.FormatTimestamp(Ticks, Unit);
+    public override string ToString() => Tz is null ? DateTimeCore.FormatTimestamp(Ticks, Unit) : DateTimeCore.FormatAware(Ticks, Unit, Tz);
 }
 
 /// <summary>A timedelta value in a given unit.</summary>
@@ -184,6 +184,29 @@ public static class DateTimeCore
         var p = Decompose(ticks, unit);
         int digits = p.Nanos == 0 ? 0 : p.Nanos % 1000 == 0 ? 6 : 9;
         return FormatDateTime(p, digits);
+    }
+
+    /// <summary>The offset text <c>+01:00</c> of a zone at an instant.</summary>
+    public static string OffsetText(TzInfo tz, long utcTicks, DateUnit unit, bool colon = true)
+    {
+        int off = tz.OffsetSeconds(utcTicks, unit);
+        int a = Math.Abs(off);
+        return (off < 0 ? "-" : "+") + (a / 3600).ToString("D2") + (colon ? ":" : "") + (a % 3600 / 60).ToString("D2");
+    }
+
+    /// <summary>A tz-aware timestamp as pandas prints it: the local wall clock followed by the UTC offset.</summary>
+    public static string FormatAware(long utcTicks, DateUnit unit, TzInfo tz)
+    {
+        if (utcTicks == NaT) return "NaT";
+        return FormatTimestamp(tz.ToWall(utcTicks, unit), unit) + OffsetText(tz, utcTicks, unit);
+    }
+
+    /// <summary>strftime of a tz-aware instant: the wall clock, with <c>%z</c> (+0100) and <c>%Z</c> (CET) resolved for the zone.</summary>
+    public static string StrftimeAware(long utcTicks, DateUnit unit, TzInfo tz, string fmt)
+    {
+        if (utcTicks == NaT) return "NaT";
+        string f = fmt.Replace("%z", OffsetText(tz, utcTicks, unit, false)).Replace("%Z", tz.Abbreviation(utcTicks, unit));
+        return Strftime(tz.ToWall(utcTicks, unit), unit, f);
     }
 
     public static string FormatIso(long ticks, DateUnit unit, int fracDigits = -1)

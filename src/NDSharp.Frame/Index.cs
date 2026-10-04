@@ -191,6 +191,17 @@ public sealed class Index
         {
             if (Labels.Kind == Kind.DateTime) { var kb = TimeSeries.KeyBounds(text, Labels); if (kb is { } b && !b.partial) key = new Ts(b.lo, Labels.Unit); else if (kb is { } b2) return Enumerable.Range(0, Length).Where(i => Labels.Ticks[i] >= b2.lo && Labels.Ticks[i] <= b2.hi).ToArray(); }
             else if (Labels.Kind == Kind.Timedelta && DateTimeCore.TryParseTimedelta(text, out var tk, out var tu)) key = new Td(tk, tu);
+            else if (Labels.Kind == Kind.Period && PeriodCore.TryParse(text, null, out var po, out var pf))
+            {
+                if (pf.Unit <= Labels.PFreq.Unit && pf != Labels.PFreq && pf.Unit != Labels.PFreq.Unit)
+                {
+                    // a coarser string selects every period it covers
+                    var (lo, hi) = PeriodCore.Span(pf, po, DateUnit.Nano);
+                    var f = Labels.PFreq;
+                    return Enumerable.Range(0, Length).Where(i => Labels.Ticks[i] != PeriodCore.NaT && PeriodCore.Span(f, Labels.Ticks[i], DateUnit.Nano) is var (s, e) && s >= lo && e <= hi).ToArray();
+                }
+                key = new Per(PeriodCore.Asfreq(po, pf, Labels.PFreq, false), Labels.PFreq);
+            }
         }
         return Lookup.TryGetValue(Column.Key(key) ?? Column.NaNKey, out var l) ? l : Array.Empty<int>();
     }

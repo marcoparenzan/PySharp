@@ -73,7 +73,7 @@ internal static class PdTime
             _ => "DateOffset",
         };
         if (s is DateOffsetSpec.Relative r) return "<DateOffset: " + r.Describe + ">";
-        string extra = s is DateOffsetSpec.WeekOffset w ? $": weekday={w.Weekday}" : s is DateOffsetSpec.MonthLike && s.FreqString.Contains('-') ? $": startingMonth=" : "";
+        string extra = s is DateOffsetSpec.WeekOffset w ? $": weekday={w.Weekday}" : "";
         if (s is DateOffsetSpec.WeekOffset ww && ww.Weekday == 6) extra = ": weekday=6";
         return s.N == 1 ? $"<{name}{(s is DateOffsetSpec.WeekOffset ? extra : "")}>" : $"<{s.N} * {name}s{(s is DateOffsetSpec.WeekOffset ? extra : "")}>";
     }
@@ -97,6 +97,7 @@ internal static class PdTime
                 return true;
             }
             case string s:
+                if (PdTz.TryParseAware(s, out var aware)) { ts = aware; return true; }
                 if (DateTimeCore.TryParseIso(s, out var tk, out var tu)) { ts = new Ts(tk, tu); return true; }
                 var g = DateTimeCore.GuessFormat(s);
                 if (g is not null && DateTimeCore.TryStrptime(s, g, out tk, out tu)) { ts = new Ts(tk, tu); return true; }
@@ -127,7 +128,7 @@ internal static class PdTime
     {
         cell = null;
         if (v is PyInstance { Native: NaTMarker }) return true;
-        if (v is PyInstance { Native: Ts or Td } pi) { cell = pi.Native; return true; }
+        if (v is PyInstance { Native: Ts or Td or Per } pi) { cell = pi.Native; return true; }
         if (v is PyInstance pi2 && pi2.Class == DateTimeModule.DateTimeClass && TryTs(v, out var ts)) { cell = ts; return true; }
         if (v is PyInstance pi3 && pi3.Class == DateTimeModule.TimeDeltaClass && TryTd(v, out var td)) { cell = td; return true; }
         return false;
@@ -135,10 +136,11 @@ internal static class PdTime
 
     private static Ts GetTs(object self) => (Ts)((PyInstance)self).Native!;
     private static Td GetTd(object self) => (Td)((PyInstance)self).Native!;
-    private static DateTimeCore.Parts PartsOf(Ts t) => DateTimeCore.Decompose(t.Ticks, t.Unit);
+    private static DateTimeCore.Parts PartsOf(Ts t) => DateTimeCore.Decompose(t.Tz is null ? t.Ticks : t.Tz.ToWall(t.Ticks, t.Unit), t.Unit);
 
     private static DateTime ToDotNet(Ts t)
     {
+        if (t.Tz is not null) t = new Ts(t.Tz.ToWall(t.Ticks, t.Unit), t.Unit);
         long ticks100 = t.Unit switch { DateUnit.Second => t.Ticks * 10_000_000, DateUnit.Milli => t.Ticks * 10_000, DateUnit.Micro => t.Ticks * 10, _ => DateTimeCore.FloorDiv(t.Ticks, 100) };
         return DateTime.UnixEpoch.AddTicks(ticks100);
     }
@@ -161,7 +163,7 @@ internal static class PdTime
     {
         if (a.Ticks == DateTimeCore.NaT || b.Ticks == DateTimeCore.NaT) return NaT;
         var u = DateTimeCore.Finer(a.Unit, b.Unit);
-        return Wrap(new Ts(checked(DateTimeCore.Scale(a.Ticks, a.Unit, u) + DateTimeCore.Scale(b.Ticks, b.Unit, u)), u));
+        return Wrap(new Ts(checked(DateTimeCore.Scale(a.Ticks, a.Unit, u) + DateTimeCore.Scale(b.Ticks, b.Unit, u)), u, a.Tz));
     }
 
     private static object ScalarAdd(object self, object other, bool reversed)
@@ -172,6 +174,7 @@ internal static class PdTime
             if (TryTd(other is string ? null : other, out var td)) return AddTd(a, td);
             if (OffsetOf(other) is { } off)
             {
+                if (a.Tz is not null && a.Ticks != DateTimeCore.NaT) { var col = PdTz.ApplyOffsetAware(Column.FromDateTime(new[] { a.Ticks }, a.Unit, a.Tz), off); return Wrap(new Ts(col.Ticks[0], col.Unit, col.Tz)); }
                 var u = DateTimeCore.Finer(a.Unit, off.RequiredUnit);
                 return Wrap(new Ts(off.Add(DateTimeCore.Scale(a.Ticks, a.Unit, u), u), u));
             }
@@ -200,16 +203,18 @@ internal static class PdTime
                 {
                     if (a.Ticks == DateTimeCore.NaT || td.Ticks == DateTimeCore.NaT) return NaT;
                     var u = DateTimeCore.Finer(a.Unit, td.Unit);
-                    return Wrap(new Ts(checked(DateTimeCore.Scale(a.Ticks, a.Unit, u) - DateTimeCore.Scale(td.Ticks, td.Unit, u)), u));
+                    return Wrap(new Ts(checked(DateTimeCore.Scale(a.Ticks, a.Unit, u) - DateTimeCore.Scale(td.Ticks, td.Unit, u)), u, a.Tz));
                 }
                 if (OffsetOf(other) is { } off)
                 {
+                    if (a.Tz is not null && a.Ticks != DateTimeCore.NaT) { var col = PdTz.ApplyOffsetAware(Column.FromDateTime(new[] { a.Ticks }, a.Unit, a.Tz), off.WithN(-off.N)); return Wrap(new Ts(col.Ticks[0], col.Unit, col.Tz)); }
                     var u = DateTimeCore.Finer(a.Unit, off.RequiredUnit);
                     return Wrap(new Ts(off.WithN(-off.N).Add(DateTimeCore.Scale(a.Ticks, a.Unit, u), u), u));
                 }
             }
             if (TryTs(other is string ? null : other, out var b))
             {
+                if ((a.Tz is null) != (b.Tz is null) && a.Ticks != DateTimeCore.NaT && b.Ticks != DateTimeCore.NaT) throw PyErr.TypeError("Cannot subtract tz-naive and tz-aware datetime-like objects.");
                 if (a.Ticks == DateTimeCore.NaT || b.Ticks == DateTimeCore.NaT) return NaT;
                 var u = DateTimeCore.Finer(a.Unit, b.Unit);
                 long x = DateTimeCore.Scale(a.Ticks, a.Unit, u), y = DateTimeCore.Scale(b.Ticks, b.Unit, u);
@@ -244,6 +249,11 @@ internal static class PdTime
                 throw Unorderable(self, other);
             }
             if (a.Ticks == DateTimeCore.NaT || b.Ticks == DateTimeCore.NaT) { result = op == "ne"; return true; }
+            if ((a.Tz is null) != (b.Tz is null))
+            {
+                if (op is "eq" or "ne") { result = op == "ne"; return true; }
+                throw PyErr.TypeError("Cannot compare tz-naive and tz-aware timestamps");
+            }
             int c = DateTimeCore.Compare(a.Ticks, a.Unit, b.Ticks, b.Unit);
             result = Decide(op, c); return true;
         }
@@ -697,6 +707,7 @@ internal static class PdTime
     public static Column ApplyOffset(Column c, DateOffsetSpec spec)
     {
         if (c.Kind != Kind.DateTime) throw PyErr.TypeError($"cannot add DateOffset to a column of dtype {c.DTypeName}");
+        if (c.Tz is not null) return PdTz.ApplyOffsetAware(c, spec);
         var u = DateTimeCore.Finer(c.Unit, spec.RequiredUnit);
         var scaled = c.WithUnit(u);
         return Column.FromDateTime(scaled.Ticks.Select(t => t == DateTimeCore.NaT ? t : spec.Add(t, u)).ToArray(), u);

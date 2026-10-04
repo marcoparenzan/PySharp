@@ -35,8 +35,11 @@ internal static class PdClasses
             IntervalValue iv => iv.ToString(),
             PyList l => "[" + string.Join(", ", l.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + "]",
             PyTuple t => "(" + string.Join(", ", t.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + (t.Items.Length == 1 ? ",)" : ")"),
+            PerDiff pd => pd.ToString(),
             _ => PyOps.Str(PdConv.Interp!, o),
         };
+        Ops.ObjectCompare = (a, b) => PdConv.Interp is { } ip ? ip.Compare(a, b) : throw new InvalidOperationException("no interpreter to compare host objects");
+        Column.ObjectKey = o => o is PyInstance { Native: null } pi && pi.Dict.TryGet("__value__", out _) ? new PyKey(pi) : null;
         BuildSeries();
         BuildDataFrame();
         BuildIndex();
@@ -76,6 +79,8 @@ internal static class PdClasses
         "IndexError" => PyErr.IndexError(ex.Message),
         "NotImplementedError" => PyErr.NotImplementedError(ex.Message),
         "DateParseError" => PyErr.Raise(PdTime.DateParseErrorClass, ex.Message),
+        "IncompatibleFrequency" => PyErr.Raise(PdPeriod.IncompatibleFrequency, ex.Message),
+        "ZoneInfoNotFoundError" => PyErr.Raise(PdTz.ZoneInfoNotFoundError, ex.Message),
         _ => PyErr.ValueError(ex.Message),
     };
 

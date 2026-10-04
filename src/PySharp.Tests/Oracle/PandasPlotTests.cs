@@ -40,6 +40,8 @@ public class PandasPlotTests
     [InlineData("df.hist()")]
     [InlineData("df['a'].plot.pie(autopct='%1.1f%%')")]
     [InlineData("df.plot.box()")]
+    [InlineData("df['a'].plot.kde()")]
+    [InlineData("df.plot(kind='density')")]
     [InlineData("df.plot(kind='pie', y='a')")]
     [InlineData("pd.Series([1.0, 2.0, 4.0], index=[1, 2, 3]).plot(color='red', marker='o')")]
     public void Supported_kinds_draw_a_png(string body) => Assert.True(long.Parse(Render(body)) > 1000);
@@ -47,7 +49,7 @@ public class PandasPlotTests
     [Fact]
     public void Unsupported_kind_raises_a_clear_error()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => Py.Run("import pandas as pd\npd.DataFrame({'a': [1, 2]}).plot.kde()"));
+        var ex = Assert.ThrowsAny<Exception>(() => Py.Run("import pandas as pd\npd.DataFrame({'a': [1, 2]}).plot.hexbin(x='a', y='a')"));
         Assert.Contains("not implemented", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

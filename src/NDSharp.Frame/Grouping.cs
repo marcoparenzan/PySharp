@@ -86,7 +86,8 @@ public sealed class Grouping
             for (int i = 0; i < source.Categories.Length; i++) lookup[Column.Key(source.Categories[i]) ?? Column.NaNKey] = i;
             return Column.FromCodes(values.Select(v => v is null ? -1 : lookup.TryGetValue(Column.Key(v)!, out var c) ? c : -1).ToArray(), source.Categories, source.Ordered);
         }
-        if (source.Kind == Kind.DateTime) return Column.FromDateTime(values.Select(v => v is Ts t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit);
+        if (source.Kind == Kind.Period) return Column.FromPeriod(values.Select(v => v is Per p ? p.Ordinal : DateTimeCore.NaT).ToArray(), source.PFreq);
+        if (source.Kind == Kind.DateTime) return Column.FromDateTime(values.Select(v => v is Ts t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit, source.Tz);
         if (source.Kind == Kind.Timedelta) return Column.FromTimedelta(values.Select(v => v is Td t ? DateTimeCore.Scale(t.Ticks, t.Unit, source.Unit) : DateTimeCore.NaT).ToArray(), source.Unit);
         var inferred = Column.Infer(values);
         return source.Kind == Kind.Str && inferred.Kind != Kind.Str ? Column.FromStrings(values.Select(v => v as string).ToArray()) : inferred;

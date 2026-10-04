@@ -424,7 +424,7 @@ internal static class PdWrangle
             var u = s.Values.Take(FrameOps.UniquePositions(s.Values));
             if (u.Kind == Kind.Category) return PdCategorical.WrapCategorical(u);
             if (Reduce.IsNumeric(u)) return PdArrays.Values(u);
-            if (u.Kind is Kind.DateTime or Kind.Timedelta) return PdDates.WrapTimeArray(u);
+            if (u.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) return PdDates.WrapTimeArray(u);
             return new PyList(Enumerable.Range(0, u.Length).Select(x => PdConv.FromCell(u, x)));
         });
         Def("value_counts", (i, a, k) =>

@@ -34,10 +34,23 @@ public static class Reduce
 
     public static object? Scalar(string name, Column c, bool skipna = true, int ddof = 1, int minCount = 0)
     {
+        if (c.Kind == Kind.Period)
+        {
+            var valid = c.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
+            switch (name)
+            {
+                case "count": return (long)valid.Length;
+                case "nunique": return (long)valid.Distinct().Count();
+                case "min": case "max":
+                    if (valid.Length < c.Length && !skipna || valid.Length == 0) return new Per(PeriodCore.NaT, c.PFreq);
+                    return new Per(name == "min" ? valid.Min() : valid.Max(), c.PFreq);
+                default: throw new FrameException($"'PeriodArray' with dtype {c.DTypeName} does not support reduction '{name}'", "TypeError");
+            }
+        }
         if (c.Kind is Kind.DateTime or Kind.Timedelta)
         {
             bool isDt = c.Kind == Kind.DateTime;
-            object Wrap(long ticks) => isDt ? new Ts(ticks, c.Unit) : new Td(ticks, c.Unit);
+            object Wrap(long ticks) => isDt ? new Ts(ticks, c.Unit, c.Tz) : new Td(ticks, c.Unit);
             var valid = c.Ticks.Where(t => t != DateTimeCore.NaT).ToArray();
             switch (name)
             {
@@ -152,7 +165,7 @@ public static class Reduce
 
     private static int CompareCells(Column c, int i, int j) => c.Kind switch
     {
-        Kind.DateTime or Kind.Timedelta => c.Ticks[i].CompareTo(c.Ticks[j]),
+        Kind.DateTime or Kind.Timedelta or Kind.Period => c.Ticks[i].CompareTo(c.Ticks[j]),
         Kind.Category => c.Codes[i].CompareTo(c.Codes[j]),
         Kind.Int => c.LongAt(i).CompareTo(c.LongAt(j)),
         Kind.Float => c.DoubleAt(i).CompareTo(c.DoubleAt(j)),
@@ -184,7 +197,7 @@ public static class Reduce
             int lo = (int)Math.Floor(pos), hi = (int)Math.Ceiling(pos);
             result = (long)(valid[lo] + (valid[hi] - valid[lo]) * (pos - lo));
         }
-        return c.Kind == Kind.DateTime ? new Ts(result, c.Unit) : new Td(result, c.Unit);
+        return c.Kind == Kind.DateTime ? new Ts(result, c.Unit, c.Tz) : new Td(result, c.Unit);
     }
 
     public static double Quantile(Column c, double q, bool skipna = true)
@@ -214,7 +227,7 @@ public static class Reduce
                 acc = !have ? tv : name switch { "cumsum" => acc + tv, "cummax" => Math.Max(acc, tv), _ => Math.Min(acc, tv) };
                 have = true; tk[i] = acc;
             }
-            return c.Kind == Kind.DateTime ? Column.FromDateTime(tk, c.Unit) : Column.FromTimedelta(tk, c.Unit);
+            return c.Kind == Kind.DateTime ? Column.FromDateTime(tk, c.Unit, c.Tz) : Column.FromTimedelta(tk, c.Unit);
         }
         if (c.Kind is Kind.Int or Kind.Bool && name is "cumsum" or "cumprod" or "cummax" or "cummin")
         {

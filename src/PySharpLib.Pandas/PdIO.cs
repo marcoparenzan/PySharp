@@ -191,16 +191,16 @@ internal static class PdIO
     private static Column TimeText(Column c, string? dateFormat)
     {
         if (c.Kind == Kind.DateTime && dateFormat is not null)
-            return Column.FromStrings(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : DateTimeCore.Strftime(t, c.Unit, dateFormat)).ToArray());
+            return Column.FromStrings(c.Ticks.Select(t => t == DateTimeCore.NaT ? null : c.Tz is { } zn ? DateTimeCore.StrftimeAware(t, c.Unit, zn, dateFormat) : DateTimeCore.Strftime(t, c.Unit, dateFormat)).ToArray());
         var cells = Formatter.FormatCells(c, PdOptions.Display, false);
         return Column.FromStrings(Enumerable.Range(0, c.Length).Select(i => c.IsNa(i) ? null : cells[i]).ToArray());
     }
 
     private static DataFrame TimesAsText(DataFrame d, string? dateFormat)
     {
-        if (!d.Data.Any(c => c.Kind is Kind.DateTime or Kind.Timedelta) && !(d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta)) return d;
-        var idx = d.Index.IsMulti ? d.Index : d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta ? new FIndex(TimeText(d.Index.Labels, dateFormat), d.Index.Name) : d.Index;
-        return new DataFrame(d.Data.Select(c => c.Kind is Kind.DateTime or Kind.Timedelta ? TimeText(c, dateFormat) : c), d.Columns, idx);
+        if (!d.Data.Any(c => c.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period) && !(d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period)) return d;
+        var idx = d.Index.IsMulti ? d.Index : d.Index.Labels.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period ? new FIndex(TimeText(d.Index.Labels, dateFormat), d.Index.Name) : d.Index;
+        return new DataFrame(d.Data.Select(c => c.Kind is Kind.DateTime or Kind.Timedelta or Kind.Period ? TimeText(c, dateFormat) : c), d.Columns, idx);
     }
 
     private static string CellText(Column c, int r, string naRep, string? floatFormat)

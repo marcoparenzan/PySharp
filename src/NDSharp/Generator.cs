@@ -10,7 +10,7 @@ namespace NDSharp.Random;
 /// <summary>numpy's <c>Generator</c> (<c>np.random.default_rng</c>): the same algorithms as numpy
 /// (PCG64 bit stream, Lemire bounded integers, ziggurat normals, Floyd's sampling) so that a given
 /// seed produces numpy's exact values.</summary>
-public sealed class Generator
+public sealed partial class Generator
 {
     private readonly PCG64 _bits;
 

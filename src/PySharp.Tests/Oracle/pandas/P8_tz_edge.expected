@@ -1,0 +1,191 @@
+amb raise -> raised ValueError Cannot infer dst time from 2020-10-25 02:30:00, try using the 'ambiguous' argument
+amb infer -> DatetimeIndex(['2020-10-25 01:30:00+02:00', '2020-10-25 02:30:00+02:00',
+               '2020-10-25 02:30:00+01:00', '2020-10-25 03:30:00+01:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+amb array -> DatetimeIndex(['2020-10-25 01:30:00+02:00', '2020-10-25 02:30:00+02:00',
+               '2020-10-25 02:30:00+01:00', '2020-10-25 03:30:00+01:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+amb NaT -> DatetimeIndex(['2020-10-25 01:30:00+02:00', 'NaT', 'NaT',
+               '2020-10-25 03:30:00+01:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+gap raise -> raised ValueError 2020-03-29 02:30:00 is a nonexistent time due to daylight savings time. Try using the 'nonexistent' 
+gap forward -> DatetimeIndex(['2020-03-29 01:30:00+01:00', '2020-03-29 03:00:00+02:00',
+               '2020-03-29 03:30:00+02:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+gap backward -> DatetimeIndex([       '2020-03-29 01:30:00+01:00',
+               '2020-03-29 01:59:59.999999+01:00',
+                      '2020-03-29 03:30:00+02:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+gap NaT -> DatetimeIndex(['2020-03-29 01:30:00+01:00', 'NaT',
+               '2020-03-29 03:30:00+02:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+gap timedelta -> DatetimeIndex(['2020-03-29 01:30:00+01:00', '2020-03-29 03:30:00+02:00',
+               '2020-03-29 03:30:00+02:00'],
+              dtype='datetime64[us, Europe/Rome]', freq=None)
+bad zone -> raised ZoneInfoNotFoundError 'No time zone found with key Mars/Base'
+localize twice -> raised TypeError Cannot localize tz-aware Timestamp, use tz_convert for conversions
+convert naive -> raised TypeError Cannot convert tz-naive Timestamp, use tz_localize to localize
+series convert naive -> raised TypeError Cannot convert tz-naive timestamps, use tz_localize to localize
+2020-10-24 20:00:00+02:00    0
+2020-10-24 22:00:00+02:00    1
+2020-10-25 00:00:00+02:00    2
+2020-10-25 02:00:00+02:00    3
+2020-10-25 03:00:00+01:00    4
+2020-10-25 05:00:00+01:00    5
+Freq: 2h, dtype: int64
+[20, 22, 0, 2, 3, 5] [5, 5, 6, 6, 6, 6]
+2020-10-25 00:00:00+02:00    2
+2020-10-25 02:00:00+02:00    3
+2020-10-25 03:00:00+01:00    4
+2020-10-25 05:00:00+01:00    5
+Freq: 2h, dtype: int64
+2020-10-25 00:00:00+02:00    2
+2020-10-25 02:00:00+02:00    3
+2020-10-25 03:00:00+01:00    4
+Freq: 2h, dtype: int64
+2
+2020-10-24 00:00:00+02:00     1
+2020-10-25 00:00:00+02:00    14
+Freq: D, dtype: int64
+2020-10-24 18:00:00+02:00    0
+2020-10-24 21:00:00+02:00    1
+2020-10-25 00:00:00+02:00    5
+2020-10-25 02:00:00+01:00    4
+2020-10-25 05:00:00+01:00    5
+Freq: 3h, dtype: int64
+2020-10-24     1
+2020-10-25    14
+dtype: int64
+2020-10-24 00:00:00+02:00     1
+2020-10-25 00:00:00+02:00    14
+Freq: D, dtype: int64
+2020-10-24 20:00:00+02:00    False
+2020-10-24 22:00:00+02:00    False
+2020-10-25 00:00:00+02:00    False
+2020-10-25 02:00:00+02:00     True
+2020-10-25 03:00:00+01:00     True
+2020-10-25 05:00:00+01:00     True
+Freq: 2h, dtype: bool
+[False False False  True  True  True]
+2020-10-24 20:00:00+02:00 2020-10-25 05:00:00+01:00
+naive cmp series -> raised TypeError Invalid comparison between dtype=datetime64[us, Europe/Rome] and Timestamp
+naive sub series -> raised TypeError Cannot subtract tz-naive and tz-aware datetime-like objects
+TimedeltaIndex(['0 days 20:00:00', '0 days 22:00:00', '1 days 00:00:00',
+                '1 days 02:00:00', '1 days 04:00:00', '1 days 06:00:00'],
+               dtype='timedelta64[us]', freq='2h')
+[NaT, Timedelta('0 days 02:00:00'), Timedelta('0 days 02:00:00'), Timedelta('0 days 02:00:00'), Timedelta('0 days 02:00:00'), Timedelta('0 days 02:00:00')]
+[18, 20, 22, 0, 2, 4]
+DatetimeIndex(['2020-10-24 20:00:00', '2020-10-24 22:00:00',
+               '2020-10-25 00:00:00', '2020-10-25 02:00:00',
+               '2020-10-25 03:00:00', '2020-10-25 05:00:00'],
+              dtype='datetime64[us]', freq=None)
+Index(['2020-10-24 20:00 +0200 CEST', '2020-10-24 22:00 +0200 CEST',
+       '2020-10-25 00:00 +0200 CEST', '2020-10-25 02:00 +0200 CEST',
+       '2020-10-25 03:00 +0100 CET', '2020-10-25 05:00 +0100 CET'],
+      dtype='str')
+floor ambiguous -> raised ValueError Cannot infer dst time from 2020-10-25 02:00:00, try using the 'ambiguous' argument
+                      index  0
+0 2020-10-24 20:00:00+02:00  0
+1 2020-10-24 22:00:00+02:00  1
+2 2020-10-25 00:00:00+02:00  2
+3 2020-10-25 02:00:00+02:00  3
+4 2020-10-25 03:00:00+01:00  4
+5 2020-10-25 05:00:00+01:00  5
+[datetime.date(2020, 10, 24), datetime.date(2020, 10, 24)] [datetime.time(20, 0), datetime.time(22, 0)]
+                          t  v
+5 2020-10-25 05:00:00+01:00  5
+4 2020-10-25 03:00:00+01:00  4
+3 2020-10-25 02:00:00+02:00  3
+object
+2020-10-24 20:00:00+02:00    0
+2020-10-24 22:00:00+02:00    1
+2020-10-25 03:00:00+01:00    4
+2020-10-25 05:00:00+01:00    5
+dtype: int64
+datetime64[us, UTC]
+Europe/Rome 0   2020-10-24 18:00:00
+1   2020-10-24 20:00:00
+2   2020-10-24 22:00:00
+3   2020-10-25 00:00:00
+4   2020-10-25 02:00:00
+5   2020-10-25 04:00:00
+dtype: datetime64[us]
+0   2020-10-24 18:00:00+00:00
+1   2020-10-24 20:00:00+00:00
+2   2020-10-24 22:00:00+00:00
+3   2020-10-25 00:00:00+00:00
+4   2020-10-25 02:00:00+00:00
+5   2020-10-25 04:00:00+00:00
+dtype: datetime64[us, UTC]
+['2020-10-24 20:00:00+02:00', '2020-10-24 22:00:00+02:00']
+2020-10-25 05:00:00+01:00 2020-10-24 20:00:00+02:00
+count                            6
+mean     2020-10-25 01:00:00+02:00
+min      2020-10-24 20:00:00+02:00
+25%      2020-10-24 22:30:00+02:00
+50%      2020-10-25 01:00:00+02:00
+75%      2020-10-25 02:30:00+01:00
+max      2020-10-25 05:00:00+01:00
+dtype: object
+6 0
+[NaT, Timestamp('2020-10-24 20:00:00+0200', tz='Europe/Rome')]
+[Timestamp('2020-10-24 00:00:00+0200', tz='Europe/Rome'), Timestamp('2020-10-24 00:00:00+0200', tz='Europe/Rome')]
+[Timestamp('2020-10-24 00:00:00+0200', tz='Europe/Rome'), Timestamp('2020-10-24 00:00:00+0200', tz='Europe/Rome')]
+
+{"0":"2020-10-24T18:00:00.000","1":"2020-10-24T20:00:00.000","2":"2020-10-24T22:00:00.000","3":"2020-10-25T00:00:00.000","4":"2020-10-25T02:00:00.000","5":"2020-10-25T04:00:00.000"}
+0
+2020-10-24 20:00:00+02:00
+2020-10-24 22:00:00+02:00
+2020-10-25 00:00:00+02:00
+2020-10-25 02:00:00+02:00
+2020-10-25 03:00:00+01:00
+2020-10-25 05:00:00+01:00
+t
+24/10 20:00
+24/10 22:00
+25/10 00:00
+25/10 02:00
+25/10 03:00
+25/10 05:00
+DatetimeIndex(['2020-06-01 00:00:00+00:00', '2020-06-02 00:00:00+00:00',
+               '2020-06-03 00:00:00+00:00'],
+              dtype='datetime64[us, UTC]', freq='D') DatetimeIndex(['2020-06-01 05:30:00+05:30', '2020-06-02 05:30:00+05:30',
+               '2020-06-03 05:30:00+05:30'],
+              dtype='datetime64[us, Asia/Kolkata]', freq=None) Index(['05:30 IST', '05:30 IST', '05:30 IST'], dtype='str')
+DatetimeIndex(['2020-01-01 00:00:00-05:00', '2020-01-01 12:00:00-05:00',
+               '2020-01-02 00:00:00-05:00', '2020-01-02 12:00:00-05:00',
+               '2020-01-03 00:00:00-05:00'],
+              dtype='datetime64[us, America/New_York]', freq='12h')
+DatetimeIndex(['2020-03-07 00:00:00-05:00', '2020-03-08 00:00:00-05:00',
+               '2020-03-09 00:00:00-04:00'],
+              dtype='datetime64[us, America/New_York]', freq='D')
+DatetimeIndex(['2020-03-07 00:00:00-05:00', '2020-03-08 00:00:00-05:00',
+               '2020-03-09 00:00:00-04:00', '2020-03-10 00:00:00-04:00'],
+              dtype='datetime64[us, America/New_York]', freq='D')
+DatetimeIndex(['2020-03-07 00:00:00-05:00', '2020-03-08 00:00:00-05:00',
+               '2020-03-09 01:00:00-04:00', '2020-03-10 01:00:00-04:00'],
+              dtype='datetime64[us, America/New_York]', freq='24h')
+DatetimeIndex(['2020-03-07 00:00:00+01:00', '2020-03-08 00:00:00+01:00',
+               '2020-03-09 00:00:00+01:00'],
+              dtype='datetime64[us, Europe/Rome]', freq='D')
+2020-03-31 12:00:00+02:00
+2020-03-30 13:00:00+02:00
+2020-03-30 12:00:00+02:00
+2020-03-29 13:00:00+02:00
+CEST 9:00:00
+2020-07-01 12:00:00+02:00 2020-07-01 15:30:00+05:30
+True
+True
+2020-07-01 2020-07-02
+2020-01-01 10:00:00+00:00 DatetimeIndex(['2020-01-01 08:00:00+00:00'], dtype='datetime64[us, UTC]', freq=None)
+0   2020-01-01 05:00:00-05:00
+1   2020-01-02 06:00:00-05:00
+dtype: datetime64[us, America/New_York]
+DatetimeIndex(['2020-01-01 00:00:00+00:00'], dtype='datetime64[s, UTC]', freq=None)
+DatetimeIndex(['2020-01-01 00:00:00+00:00'], dtype='datetime64[us, UTC]', freq=None)
+DatetimeIndex(['2019-12-31 15:00:00+00:00'], dtype='datetime64[us, UTC]', freq=None)
+
+0   2020-01-01 00:00:00+00:00
+1                         NaT
+dtype: datetime64[us, UTC]
+UTC

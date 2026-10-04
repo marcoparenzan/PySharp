@@ -46,11 +46,13 @@ internal static class PdConv
     /// <summary>A frame cell as a Python value for the column it came from (missing str → NaN, missing object → None).</summary>
     public static object FromCell(object? v, Kind kind) => v switch
     {
-        null => kind is Kind.DateTime or Kind.Timedelta ? PdTime.NaT : kind is Kind.Str or Kind.Category ? double.NaN : PyNone.Instance,
+        null => kind is Kind.DateTime or Kind.Timedelta or Kind.Period ? PdTime.NaT : kind is Kind.Str or Kind.Category ? double.NaN : PyNone.Instance,
         long l => new BigInteger(l),
         IntervalValue iv => PdCategorical.WrapInterval(iv),
         Ts t => PdTime.Wrap(t),
         Td t => PdTime.Wrap(t),
+        Per p => PdPeriod.Wrap(p),
+        PerDiff pd => PdPeriod.WrapDiff(pd),
         bool or double or string => v,
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         _ => v,
@@ -65,6 +67,7 @@ internal static class PdConv
         IntervalValue iv => PdCategorical.WrapInterval(iv),
         Ts t => PdTime.Wrap(t),
         Td t => PdTime.Wrap(t),
+        Per p => PdPeriod.Wrap(p),
         LabelTuple lt => new PyTuple(lt.Parts.Select(x => FromLabel(x)).ToArray()),
         double d when double.IsNaN(d) => d,
         _ => v,
@@ -156,6 +159,7 @@ internal static class PdConv
         if (c.Kind == Kind.Category) c = c.Decategorized();
         int n = c.Length;
         if (name.StartsWith("datetime64") || name.StartsWith("timedelta64")) return TimeAsType(c, name);
+        if (name.StartsWith("period[")) return PdPeriod.ToPeriodColumn(c, PdPeriod.FreqArg(name.Substring(7, name.Length - 8)));
         if (c.Kind is Kind.DateTime or Kind.Timedelta && name is "int64")
             return Column.FromLongs(c.Ticks.Select(t => t == DateTimeCore.NaT ? throw PyErr.ValueError("Cannot convert NaT values to integer") : t).ToArray());
         switch (name)
@@ -200,7 +204,18 @@ internal static class PdConv
     {
         bool dt = name.StartsWith("datetime64");
         int b = name.IndexOf('[');
-        DateUnit? unit = b < 0 ? null : PdDates.UnitNames.TryGetValue(name.Substring(b + 1, name.Length - b - 2), out var u) ? u : throw PyErr.TypeError($"data type '{name}' not understood");
+        string inner = b < 0 ? "" : name.Substring(b + 1, name.Length - b - 2);
+        TzInfo? zone = null;
+        int comma = inner.IndexOf(',');
+        if (comma >= 0) { zone = TzInfo.Parse(inner.Substring(comma + 1).Trim()); inner = inner.Substring(0, comma); }
+        DateUnit? unit = b < 0 ? null : PdDates.UnitNames.TryGetValue(inner, out var u) ? u : throw PyErr.TypeError($"data type '{name}' not understood");
+        if (dt && zone is not null)
+        {
+            var naive = c.Kind == Kind.DateTime ? c : PdDates.ToDatetimeColumn(c, "raise", false, null, null);
+            var shown = naive.Tz is null ? naive.Localize(zone) : naive.WithTz(zone);
+            return unit is { } uz ? shown.WithUnit(uz) : shown;
+        }
+        if (dt && c.Kind == Kind.DateTime && c.Tz is not null) c = c.ToWall();
         if (c.Kind == (dt ? Kind.DateTime : Kind.Timedelta)) return unit is { } uu ? c.WithUnit(uu) : c;
         if (c.Kind is Kind.Int)
         {
@@ -213,7 +228,8 @@ internal static class PdConv
 
     private static string Fmt(Column c, int i) => c.Kind switch
     {
-        Kind.DateTime => DateTimeCore.FormatTimestamp(c.Ticks[i], c.Unit),
+        Kind.Period => PeriodCore.Format(c.Ticks[i], c.PFreq),
+        Kind.DateTime => c.Tz is { } z ? DateTimeCore.FormatAware(c.Ticks[i], c.Unit, z) : DateTimeCore.FormatTimestamp(c.Ticks[i], c.Unit),
         Kind.Timedelta => DateTimeCore.FormatTimedelta(c.Ticks[i], c.Unit),
         Kind.Float => PyOps.ReprDouble(c.DoubleAt(i)),
         Kind.Bool => c.BoolAt(i) ? "True" : "False",
@@ -278,7 +294,7 @@ internal static class PdConv
         Kind.Str => PdDType.StrInstance,
         Kind.Object => PdDType.ObjectInstance,
         Kind.Category => PdCategorical.WrapDType(c),
-        Kind.DateTime or Kind.Timedelta => PdDType.Time(c.DTypeName),
+        Kind.DateTime or Kind.Timedelta or Kind.Period => PdDType.Time(c.DTypeName),
         _ => Classes.DTypeObject(c.Num!.Value),
     };
 
@@ -313,7 +329,7 @@ internal sealed class PdDType
     public static readonly PyInstance StrInstance;
     public static readonly PyInstance ObjectInstance;
 
-    private static string TimeRepr(string name) => "dtype('<" + (name.StartsWith("datetime") ? "M8" : "m8") + name.Substring(name.IndexOf('['), name.Length - name.IndexOf('[')) + "')";
+    private static string TimeRepr(string name) => name.StartsWith("period") || name.Contains(',') ? name : "dtype('<" + (name.StartsWith("datetime") ? "M8" : "m8") + name.Substring(name.IndexOf('['), name.Length - name.IndexOf('[')) + "')";
 
     static PdDType()
     {

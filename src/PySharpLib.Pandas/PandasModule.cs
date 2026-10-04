@@ -84,7 +84,10 @@ internal static class PandasModule
         m.Dict["nan"] = double.NaN;
         PdCategorical.Install(m);
         PdTime.Install(m);
+        PdEval.Install(m);
         PdDates.Install(m);
+        PdPeriod.Install(m);
+        PdTz.Install(m);
         PdMerge.Install(m);
         PdReshape.Install(m);
         PdIO.Install(m);

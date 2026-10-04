@@ -17,7 +17,7 @@ public static class Info
     private static int ItemSize(Column c) => c.Kind switch
     {
         Kind.Bool or Kind.Category => 1,
-        Kind.DateTime or Kind.Timedelta => 8,
+        Kind.DateTime or Kind.Timedelta or Kind.Period => 8,
         Kind.Str or Kind.Object => 8,
         _ => c.Num!.Value switch
         {
