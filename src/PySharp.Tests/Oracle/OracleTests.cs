@@ -33,6 +33,7 @@ public class OracleTests
     public static IEnumerable<object[]> Matplotlib() => Snippets("matplotlib");
     public static IEnumerable<object[]> Torch() => Snippets("torch");
     public static IEnumerable<object[]> Torchvision() => Snippets("torchvision");
+    public static IEnumerable<object[]> Pandas() => Snippets("pandas");
 
     private static void RunCase(string lib, string name)
     {
@@ -55,6 +56,9 @@ public class OracleTests
 
     [Theory, MemberData(nameof(Matplotlib))]
     public void Matplotlib_snippet_matches_real_matplotlib(string name) => RunCase("matplotlib", name);
+
+    [Theory, MemberData(nameof(Pandas))]
+    public void Pandas_snippet_matches_real_pandas(string name) => RunCase("pandas", name);
 
     [Theory, MemberData(nameof(Torch))]
     public void Torch_snippet_matches_real_torch(string name) => RunCase("torch", name);

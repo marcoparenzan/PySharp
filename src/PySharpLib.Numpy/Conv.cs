@@ -142,9 +142,15 @@ internal static class Conv
             case PyRange rg: nd = FromSequence(new PyList(rg.Enumerate()), null); return true;
             case ClrObject { Instance: Array arr }: nd = FromClrArray(arr); return true;
             case PyInstance { Native: INdArrayConvertible conv }: nd = conv.ToNDArray(); return true;
-            default: nd = null!; return false;
+            default:
+                foreach (var hook in Converters)
+                    if (hook(o) is { } converted) { nd = converted; return true; }
+                nd = null!; return false;
         }
     }
+
+    /// <summary>Hooks other bindings install to make their objects array-likes (pandas Series/DataFrame), tried when no built-in case matches.</summary>
+    public static readonly List<Func<object, NDArray?>> Converters = new();
 
     public static NDArray ND(object o)
         => TryND(o, out var nd) ? nd : throw PyErr.TypeError($"unsupported operand type for numpy: '{PyOps.TypeName(o)}'");

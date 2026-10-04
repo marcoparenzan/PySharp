@@ -1,0 +1,34 @@
+60 80 6
+0      0
+1      1
+2      2
+      ..
+17    17
+18    18
+19    19
+Length: 20, dtype: int64
+     a
+0    0
+1    1
+2    2
+..  ..
+17  17
+18  18
+19  19
+
+[20 rows x 1 columns]
+0      0
+1      1
+      ..
+18    18
+19    19
+Length: 20, dtype: int64
+      a
+0  1.23
+1  2.35
+           t
+0  a very...
+1      short
+                           t
+0  a very long string indeed
+1                      short

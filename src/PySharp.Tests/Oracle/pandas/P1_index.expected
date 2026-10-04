@@ -1,0 +1,22 @@
+Index([1, 2, 3], dtype='int64')
+Index(['a', 'b', 'c'], dtype='str')
+Index([1.5, 2.5], dtype='float64')
+RangeIndex(start=0, stop=5, step=1)
+RangeIndex(start=2, stop=10, step=3)
+Index([1, 2, 3], dtype='int64', name='ids')
+False 4 ['a', 'b', 'c', 'b'] a Index(['b', 'c'], dtype='str')
+0 True
+letters
+a    1
+b    2
+c    3
+dtype: int64
+     v
+key   
+p    1
+q    2
+key None
+Index([1, 10, 100, 1000, 10000], dtype='int64')
+Index(['aaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbb', 'cccccccccccccccccccc',
+       'dddddddddddddddddddd', 'eeeeeeeeeeeeeeeeeeee'],
+      dtype='str')

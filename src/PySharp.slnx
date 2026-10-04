@@ -9,6 +9,9 @@
   <Project Path="NDSharp.Plot/NDSharp.Plot.csproj" />
   <Project Path="PySharpLib.Cv2/PySharpLib.Cv2.csproj" />
   <Project Path="PySharpLib.Pywt/PySharpLib.Pywt.csproj" />
+  <Project Path="NDSharp.Frame/NDSharp.Frame.csproj" />
+  <Project Path="NDSharp.Frame.Tests/NDSharp.Frame.Tests.csproj" />
+  <Project Path="PySharpLib.Pandas/PySharpLib.Pandas.csproj" />
   <Project Path="PySharpLib.Matplotlib/PySharpLib.Matplotlib.csproj" />
   <Project Path="PySharpLib.Torch/PySharpLib.Torch.csproj" />
   <Project Path="PipSharpLib/PipSharpLib.csproj" />

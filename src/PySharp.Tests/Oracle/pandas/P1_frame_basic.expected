@@ -1,0 +1,40 @@
+   a    b    c      d
+0  1  1.5    x   True
+1  2  2.5  NaN  False
+2  3  NaN   zz   True
+a      int64
+b    float64
+c        str
+d       bool
+dtype: object
+(3, 4) 12 3 2
+Index(['a', 'b', 'c', 'd'], dtype='str')
+RangeIndex(start=0, stop=3, step=1)
+['a', 'b', 'c', 'd']
+   0  1
+0  1  2
+1  3  4
+    p  q
+r1  1  2
+r2  3  4
+   a    b    c
+0  1  2.0  NaN
+1  3  NaN  4.0
+   a
+u  1
+v  2
+Empty DataFrame
+Columns: []
+Index: []
+Empty DataFrame
+Columns: [a, b]
+Index: []
+     x  y
+0  1.0  k
+1  1.0  k
+   a    b    c      d
+0  1  1.5    x   True
+1  2  2.5  NaN  False
+   a   b   c     d
+2  3 NaN  zz  True
+False

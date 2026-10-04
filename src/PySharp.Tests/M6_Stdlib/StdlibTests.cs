@@ -2638,7 +2638,7 @@ public class TracebackTests
 
     [Fact]
     public void Bare_reraise_preserves_the_same_exception()
-        => Assert.Equal("re-raised x", Py.Run("""
+        => Assert.Equal("re-raised 'x'", Py.Run("""
             try:
                 try:
                     raise KeyError("x")

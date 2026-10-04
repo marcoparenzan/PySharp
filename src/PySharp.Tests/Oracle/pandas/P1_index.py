@@ -1,0 +1,18 @@
+import pandas as pd
+
+print(pd.Index([1, 2, 3]))
+print(pd.Index(['a', 'b', 'c']))
+print(pd.Index([1.5, 2.5]))
+print(pd.RangeIndex(5))
+print(pd.RangeIndex(2, 10, 3))
+print(pd.Index([1, 2, 3], name='ids'))
+ix = pd.Index(['a', 'b', 'c', 'b'])
+print(ix.is_unique, len(ix), ix.tolist(), ix[0], ix[1:3])
+print(ix.get_loc('a'), 'a' in ix)
+s = pd.Series([1, 2, 3], index=pd.Index(['a', 'b', 'c'], name='letters'))
+print(s)
+df = pd.DataFrame({'v': [1, 2]}, index=pd.Index(['p', 'q'], name='key'))
+print(df)
+print(df.index.name, df.columns.name)
+print(pd.Index([10 ** i for i in range(5)]))
+print(pd.Index(['a' * 20, 'b' * 20, 'c' * 20, 'd' * 20, 'e' * 20]))

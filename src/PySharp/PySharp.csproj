@@ -5,6 +5,7 @@
     <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
     <ProjectReference Include="..\PySharpLib.Cv2\PySharpLib.Cv2.csproj" />
     <ProjectReference Include="..\PySharpLib.Pywt\PySharpLib.Pywt.csproj" />
+    <ProjectReference Include="..\PySharpLib.Pandas\PySharpLib.Pandas.csproj" />
     <ProjectReference Include="..\PySharpLib.Matplotlib\PySharpLib.Matplotlib.csproj" />
     <ProjectReference Include="..\PySharpLib.Torch\PySharpLib.Torch.csproj" />
     <ProjectReference Include="..\PipSharpLib\PipSharpLib.csproj" />

@@ -1,0 +1,32 @@
+0    1.0
+1    2.0
+2    3.0
+dtype: float64
+0    1
+1    2
+2    3
+dtype: str
+int32
+0    1
+1    2
+dtype: int64
+0    1
+1    2
+dtype: int64
+0     True
+1    False
+2     True
+dtype: bool
+object
+     a    b
+0  1.0  3.5
+1  2.0  4.5
+a    int64
+b      str
+dtype: object
+int8 uint8
+float32
+str object object
+float64 object str
+int64 str
+True True

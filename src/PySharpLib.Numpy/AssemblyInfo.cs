@@ -10,4 +10,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("PySharpLib.Cv2")]
 [assembly: InternalsVisibleTo("PySharpLib.Matplotlib")]
 [assembly: InternalsVisibleTo("PySharpLib.Pywt")]
+[assembly: InternalsVisibleTo("PySharpLib.Pandas")]
 [assembly: InternalsVisibleTo("PySharpLib.Torch")]

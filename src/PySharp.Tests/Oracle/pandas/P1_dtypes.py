@@ -1,0 +1,18 @@
+import pandas as pd
+
+s = pd.Series([1, 2, 3])
+print(s.astype('float64'))
+print(s.astype(str))
+print(s.astype('int32').dtype)
+print(pd.Series([1.0, 2.0]).astype(int))
+print(pd.Series(['1', '2']).astype(int))
+print(pd.Series([1, 0, 2]).astype(bool))
+print(s.astype('object').dtype)
+print(pd.DataFrame({'a': [1, 2], 'b': [3.5, 4.5]}).astype({'a': 'float64'}))
+print(pd.DataFrame({'a': [1, 2], 'b': ['x', 'y']}).dtypes)
+print(pd.Series([1, 2, 3], dtype='int8').dtype, pd.Series([1, 2, 3], dtype='uint8').dtype)
+print(pd.Series([1.5, 2.5], dtype='float32').dtype)
+print(pd.Series(['a', 'b']).dtype, pd.Series([1, 'a']).dtype, pd.Series([True, 1]).dtype)
+print(pd.Series([1, None]).dtype, pd.Series([None, None]).dtype, pd.Series([None, 'a']).dtype)
+print(str(pd.Series([1]).dtype), str(pd.Series(['a']).dtype))
+print(pd.Series([1, 2, 3]).dtype == 'int64', pd.Series(['a']).dtype == 'str')

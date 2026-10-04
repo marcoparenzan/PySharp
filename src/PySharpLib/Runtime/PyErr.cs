@@ -116,6 +116,18 @@ public static class PyErr
             return $"{inst.Class.Name}({args})";
         });
 
+        // CPython: str(KeyError('a')) is "'a'" (the repr of a single key), unlike every other exception.
+        KeyErrorClass.Dict["__str__"] = new PyBuiltinFunction("KeyError.__str__", (interp, a, _) =>
+        {
+            var inst = (PyInstance)a[0];
+            if (inst.Dict.TryGet("args", out var argsObj) && argsObj is PyTuple t)
+            {
+                if (t.Items.Length == 1) return PyOps.Repr(interp, t.Items[0]);
+                return t.Items.Length == 0 ? "" : PyOps.Repr(interp, argsObj);
+            }
+            return "";
+        });
+
         // Real CPython OSError.__str__: when a real errno/strerror pair is set, formats as
         // "[Errno N] strerror" (plus ": 'filename'" when a filename is set too) instead of the
         // generic args-tuple formatting every other exception uses — found via real pika's own
