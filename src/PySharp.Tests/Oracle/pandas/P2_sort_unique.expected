@@ -1,0 +1,203 @@
+b    1
+d    1
+c    2
+a    3
+dtype: int64
+a    3
+c    2
+b    1
+d    1
+dtype: int64
+a    3
+b    1
+c    2
+d    1
+dtype: int64
+d    1
+c    2
+b    1
+a    3
+dtype: int64
+2    1.0
+0    2.0
+1    NaN
+dtype: float64
+1    NaN
+2    1.0
+0    2.0
+dtype: float64
+2    C
+1    a
+0    b
+dtype: str
+a    3
+c    2
+dtype: int64 b    1
+d    1
+dtype: int64
+[3 1 2] 3
+[1 2 3]
+1    2
+3    1
+2    1
+Name: count, dtype: int64
+x    3
+y    2
+z    1
+Name: count, dtype: int64
+x    0.666667
+y    0.333333
+Name: proportion, dtype: float64
+x    2
+y    2
+Name: count, dtype: int64
+1.5    2
+Name: count, dtype: int64 1.5    2
+NaN    1
+Name: count, dtype: int64
+0    False
+1    False
+2     True
+3    False
+4     True
+dtype: bool 0     True
+1     True
+2    False
+3    False
+4    False
+dtype: bool 0     True
+1    False
+2     True
+dtype: bool
+0    1
+1    2
+3    3
+dtype: int64
+   k  v    w
+3  a  1  4.0
+2  b  2  3.0
+1  a  3  2.0
+0  b  4  1.0
+   k  v    w
+3  a  1  4.0
+1  a  3  2.0
+2  b  2  3.0
+0  b  4  1.0
+   k  v    w
+1  a  3  2.0
+3  a  1  4.0
+0  b  4  1.0
+2  b  2  3.0
+   k  v    w
+0  b  4  1.0
+2  b  2  3.0
+1  a  3  2.0
+3  a  1  4.0
+   k  v    w
+0  a  1  4.0
+1  b  2  3.0
+2  a  3  2.0
+3  b  4  1.0
+   k  v    w
+3  a  1  4.0
+2  b  2  3.0
+1  a  3  2.0
+0  b  4  1.0
+     w  v  k
+0  1.0  4  b
+1  2.0  3  a
+2  3.0  2  b
+3  4.0  1  a
+   k  v    w
+0  b  4  1.0
+1  a  3  2.0    k  v    w
+0  b  4  1.0
+1  a  3  2.0
+0    False
+1    False
+2    False
+3    False
+dtype: bool 0    False
+1    False
+2     True
+3     True
+dtype: bool    k  v    w
+0  b  4  1.0
+1  a  3  2.0    k  v    w
+2  b  2  3.0
+3  a  1  4.0
+   index  k  v    w
+0      0  b  4  1.0
+1      1  a  3  2.0
+2      2  b  2  3.0
+3      3  a  1  4.0    k  v    w
+0  b  4  1.0
+1  a  3  2.0
+2  b  2  3.0
+3  a  1  4.0
+   v    w
+k        
+b  4  1.0
+a  3  2.0
+b  2  3.0
+a  1  4.0
+   k  v    w
+k           
+b  b  4  1.0
+a  a  3  2.0
+b  b  2  3.0
+a  a  1  4.0
+   k  v    w
+0  b  4  1.0
+1  a  3  2.0
+2  b  2  3.0
+3  a  1  4.0
+   v    w
+k        
+a  3  2.0
+a  1  4.0
+b  4  1.0
+b  2  3.0
+  index  0
+0     a  3
+1     b  1
+2     c  2
+3     d  1 0    3
+1    1
+2    2
+3    1
+dtype: int64
+   index  n
+0      0  5
+1      1  6
+  key  val    w
+0   b    4  1.0
+1   a    3  2.0
+2   b    2  3.0
+3   a    1  4.0
+       k  v    w
+zero   b  4  1.0
+1      a  3  2.0
+2      b  2  3.0
+three  a  1  4.0
+   K  V    W
+0  b  4  1.0
+1  a  3  2.0
+2  b  2  3.0
+3  a  1  4.0
+a    3
+b    1
+c    2
+d    1
+Name: new, dtype: int64 A    3
+b    1
+c    2
+d    1
+dtype: int64
+     0    1    2    3
+k    b    a    b    a
+v    4    3    2    1
+w  1.0  2.0  3.0  4.0
+     0    1    2    3
+v  4.0  3.0  2.0  1.0
+w  1.0  2.0  3.0  4.0

@@ -21,7 +21,7 @@ internal static class Operators
         void Bin(string dunder, string? reflected, Func<NDArray, NDArray, NDArray> f)
         {
             Add(dunder, (_, a, _) =>
-                Conv.TryND(a[1], out var other) ? Conv.Result(f(Conv.ND(a[0]), other)) : PyNotImplemented.Instance);
+                !Conv.Defers(a[1]) && Conv.TryND(a[1], out var other) ? Conv.Result(f(Conv.ND(a[0]), other)) : PyNotImplemented.Instance);
             if (reflected is not null)
                 Add(reflected, (_, a, _) =>
                     Conv.TryND(a[1], out var other) ? Conv.Result(f(other, Conv.ND(a[0]))) : PyNotImplemented.Instance);

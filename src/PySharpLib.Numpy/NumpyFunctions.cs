@@ -35,13 +35,13 @@ internal static class NumpyFunctions
         void Unary(string name, Func<NDArray, NDArray> f) => Def(name, (i, a, k) =>
         {
             var p = new Args(name, i, a, k, "x", "out");
-            return p.Finish(1, f(p.ND(0)));
+            return Conv.WrapUfunc(a, p.Finish(1, f(p.ND(0))));
         });
 
         void Binary(string name, Func<NDArray, NDArray, NDArray> f) => Def(name, (i, a, k) =>
         {
             var p = new Args(name, i, a, k, "x1", "x2", "out");
-            return p.Finish(2, f(p.ND(0), p.ND(1)));
+            return Conv.WrapUfunc(a, p.Finish(2, f(p.ND(0), p.ND(1))));
         });
 
         // ---------------------------------------------------------------- arithmetic ufuncs

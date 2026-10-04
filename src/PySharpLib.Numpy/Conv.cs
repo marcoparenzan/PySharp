@@ -152,6 +152,21 @@ internal static class Conv
     /// <summary>Hooks other bindings install to make their objects array-likes (pandas Series/DataFrame), tried when no built-in case matches.</summary>
     public static readonly List<Func<object, NDArray?>> Converters = new();
 
+    /// <summary>Hooks that re-wrap a ufunc result (np.sqrt(series) → Series): given the call's arguments and the result array, return the wrapped object or null.</summary>
+    public static readonly List<Func<object[], PyInstance, object?>> UfuncWrappers = new();
+
+    /// <summary>Objects (pandas Series/DataFrame) whose own operators must win over ndarray's: <c>ndarray + series</c> returns NotImplemented so <c>series.__radd__</c> runs.</summary>
+    public static readonly List<Func<object, bool>> DeferToOther = new();
+
+    public static bool Defers(object o) { foreach (var d in DeferToOther) if (d(o)) return true; return false; }
+
+    public static object WrapUfunc(object[] args, object result)
+    {
+        if (UfuncWrappers.Count == 0 || result is not PyInstance { Native: NDArray } pi) return result;
+        foreach (var w in UfuncWrappers) if (w(args, pi) is { } wrapped) return wrapped;
+        return result;
+    }
+
     public static NDArray ND(object o)
         => TryND(o, out var nd) ? nd : throw PyErr.TypeError($"unsupported operand type for numpy: '{PyOps.TypeName(o)}'");
 

@@ -1,0 +1,42 @@
+import pandas as pd
+
+a = pd.Series([1, 2, 3, 4])
+b = pd.Series([10, 20, 30, 40])
+print(a + b)
+print(a - b)
+print(a * b)
+print(b / a)
+print(b // 3)
+print(b % 7)
+print(a ** 2)
+print(a + 1.5)
+print(1 - a)
+print(10 / a)
+print(2 ** a)
+print(-a)
+print(abs(pd.Series([-1.5, 2.0, -3.25])))
+print(a * 2.0)
+print(a / 0)
+print(a // 0)
+print(pd.Series([1.0, None, 3.0]) + 1)
+print(pd.Series([1, 2]) + pd.Series([0.5, 0.25]))
+print(pd.Series([True, False]) + pd.Series([True, True]))
+print(pd.Series(['a', 'b']) + 'x')
+print('x' + pd.Series(['a', 'b']))
+print(pd.Series(['a', None]) + pd.Series(['1', '2']))
+print(pd.Series(['ab', 'c']) * 2)
+print(pd.Series([1, 2, 3], dtype='int32') + 1)
+print((pd.Series([1, 2, 3], dtype='int32') + 1).dtype)
+print((pd.Series([1.5, 2.5], dtype='float32') * 2).dtype)
+print((pd.Series([1, 2], dtype='int8') + pd.Series([1, 2], dtype='int16')).dtype)
+print(pd.Series([7, -7]) // 2, pd.Series([7, -7]) % 3)
+print(pd.Series([7.5, -7.5]) // 2, pd.Series([7.5, -7.5]) % 2)
+print(a.add(b), a.sub(1), a.mul(2), a.truediv(2), a.floordiv(2), a.mod(2), a.pow(2), a.radd(1), a.rsub(10))
+try:
+    a + pd.Series(['x', 'y', 'z', 'w'])
+except TypeError as e:
+    print('TypeError')
+try:
+    pd.Series([1, 2]) ** -1
+except ValueError as e:
+    print('ValueError', e)

@@ -63,9 +63,17 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - [x] **Milestone M1:** the "object creation / viewing data / selection" snippets print exactly what pandas 3.0.6 prints
 - Interpreter fix found on the way: `str(KeyError('x'))` is `'x'` (the repr of a single key), as in CPython; one test expectation that encoded the old behavior was corrected.
 
-### Phase 2 — Computation
-- [ ] arithmetic/comparison with alignment, reductions, `describe`, `info`, missing data, sorting, uniqueness, `apply/map/agg`, `.str`
-- [ ] **Milestone M2:** acceptance snippets "operations / missing data / string methods"
+### Phase 2 — Computation  ✅
+- [x] arithmetic / comparison / logic (`+ - * / // % **`, `== != < <= > >=`, `& | ^ ~`, unary, `abs`, `add/sub/mul/...` named forms) on Series and DataFrame with index alignment, scalar/list/ndarray/Series operands, pandas dtype rules (int/float/bool/str/object, weak scalars, `int // 0`, bool arithmetic)
+- [x] reductions with NaN skipping (`sum prod mean median std var min max count nunique any all quantile idxmin idxmax`, `axis=0/1`, `skipna`, `numeric_only`, `min_count`, `ddof`) — float sums use NDSharp's pairwise summation, so results equal numpy's to the last digit; cumulative `cumsum cumprod cummax cummin`, `diff shift pct_change`
+- [x] missing data: `isna notna isnull fillna ffill bfill dropna where mask replace clip round`, `inplace=`
+- [x] ordering and uniqueness: `sort_values sort_index nlargest nsmallest unique value_counts duplicated drop_duplicates isin between`, `reset_index set_index rename T`, `select_dtypes`
+- [x] `apply map agg/aggregate pipe` calling back into Python (Series; DataFrame `axis=0/1`, `map`), `items iterrows`
+- [x] `.str` accessor: `lower upper title capitalize swapcase strip lstrip rstrip len contains startswith endswith match replace count find slice get split(expand) cat zfill pad center ljust rjust repeat removeprefix removesuffix is*`
+- [x] `describe` (numeric and categorical), `info`, `corr`, `cov`
+- [x] numpy interop: `np.sqrt(series)` / `np.add(df, 1)` return Series/DataFrame, `ndarray + series` defers to the Series operator (new hooks in `PySharp.Numpy`: `Conv.UfuncWrappers`, `Conv.DeferToOther`)
+- [x] oracle snippets `Oracle/pandas/P2_*` (12 snippets, 1200+ lines of expected output) + 5 more native tests; samples `pandas_demo.py` and `pandas_analysis_demo.py` are byte-identical to CPython + pandas
+- [x] **Milestone M2:** operations / missing data / string methods snippets equal pandas' output
 
 ### Phase 3 — Shaping and IO
 - [ ] `groupby`, `merge`/`join`, `concat`, `pivot`/`pivot_table`/`melt`/`crosstab`
@@ -83,7 +91,11 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
 - `np.asarray(series_of_str)` / `.values` of `str` and `object` columns: NDSharp has no object arrays, so these raise `NotImplementedError` (numeric and bool columns convert).
 - `Series.dtype` of a `str` column is a stand-in object (`str(dtype) == 'str'`, `repr` as pandas); there is no `StringDtype` class hierarchy.
 - Nullable dtypes, `pd.NA`, datetime and categorical dtypes: out of scope (see above).
-- A frame/Series element read from a `float32` column comes back as a Python float (pandas returns `np.float32`).
+- A frame/Series element read from a `float32` column comes back as a Python float (pandas returns `np.float32`); reductions return plain Python `int`/`float` (the numpy binding's convention), not `np.int64`/`np.float64`.
+- `Series.unique()` of a `str`/`object` Series returns a Python list (pandas returns an extension array).
+- `sort_values` is always stable (pandas' default quicksort is not stable on large inputs, so tie order can differ there).
+- `Series.corr` can differ from pandas in the last digit (BLAS rounding inside `np.corrcoef`); the oracle snippet rounds it. `describe(include=...)`, `ranking`, `rolling`, `interpolate`, `eval`/`query` are not implemented yet.
+- A binary operation between two Series with *different* duplicate labels raises (pandas joins them).
 
 ## Verification environment
 

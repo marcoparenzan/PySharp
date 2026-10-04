@@ -79,6 +79,8 @@ internal static class PdAccess
     public static object FrameGet(DataFrame df, object key)
     {
         if (key is PyTuple) throw PyErr.NotImplementedError("DataFrame[tuple] (MultiIndex columns) is not supported");
+        if (key is PyInstance { Native: DataFrame cond } && cond.Data.All(c => c.Kind == Kind.Bool))
+            return PdConv.Wrap(new DataFrame(df.Data.Select((c, j) => FrameOps.Where(c, cond.Data[cond.Columns.Locs(df.Columns.Labels[j]).FirstOrDefault()].Bools, double.NaN)), df.Columns, df.Index));
         if (key is PySlice sl)
             return PdConv.Wrap(df.TakeRows(PdSelect.IsPositionalSlice(sl) ? PdSelect.PositionalSlice(sl, df.NRows) : PdSelect.LabelSlice(sl, df.Index)));
         var mask = PdSelect.TryMask(key, df.Index);

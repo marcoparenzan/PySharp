@@ -1,0 +1,80 @@
+31 3.875 3.5 1 9 8 6480
+2.748376143938713 7.553571428571429 2.5708704751503917 6.609375
+7 5 1
+1.75 0.1    1.0
+0.5    3.5
+0.9    6.9
+dtype: float64
+8.0 2.6666666666666665 1.5 4.0 3 1.2583057392117916 2.5
+nan nan nan
+0.0 nan 0
+2 0.6666666666666666 True False
+a c xy 1 2
+1.0 505.0 5.05 2.901149197588202
+a     6.0
+b    10.5
+c     2.0
+dtype: float64
+a    2.000000
+b    5.250000
+c    0.666667
+dtype: float64
+a        1
+b      4.5
+c    False
+dtype: object a       3
+b     6.0
+c    True
+dtype: object a    3
+b    2
+c    3
+dtype: int64
+a    1.00000
+b    1.06066
+dtype: float64
+0     6.5
+1       2
+2    10.0
+dtype: object
+0    2.166667
+1         1.0
+2    3.333333
+dtype: object
+a    2.00
+b    5.25
+c    1.00
+dtype: float64
+a    2
+b    2
+c    0
+dtype: int64 a    3
+b    2
+c    2
+dtype: int64
+a    2.00
+b    5.25
+Name: 0.5, dtype: float64
+        a      b
+0.25  1.5  4.875
+0.75  2.5  5.625
+a     6.0
+b    27.0
+dtype: float64
+a     6.0
+b    10.5
+c     2.0
+dtype: float64
+a     3
+s    xy
+dtype: object
+a    2
+s    2
+dtype: int64
+a    True
+b    True
+c    True
+dtype: bool a     True
+b     True
+c    False
+dtype: bool
+TypeError

@@ -1,0 +1,37 @@
+import pandas as pd
+
+s = pd.Series([1, 5, 3, None, 7])
+print(s > 2)
+print(s == 5)
+print(s != 5)
+print(s <= 3)
+print(2 < s)
+print((s > 2) & (s < 7))
+print((s > 6) | (s < 2))
+print(~(s > 2))
+print((s > 2) ^ (s < 5))
+t = pd.Series(['a', 'b', None, 'a'])
+print(t == 'a')
+print(t != 'a')
+print(t < 'b')
+print(pd.Series([1, 2, 3]) == pd.Series([1, 0, 3]))
+print(pd.Series([1, 2, 3]).eq(2), pd.Series([1, 2, 3]).gt(1), pd.Series([1, 2, 3]).le(2))
+print(pd.Series([1, 2, 3]) == [1, 2, 4])
+print(pd.Series([3, 1, 2]).between(1, 2))
+print(pd.Series([3, 1, 2]).between(1, 2, inclusive='neither'))
+print(pd.Series([1, 2, 3]).isin([2, 3, 9]), pd.Series(['a', 'b']).isin(['b']))
+df = pd.DataFrame({'a': [1, 2, 3], 'b': [3, 2, 1]})
+print(df > 1)
+print(df == df)
+print(df[df > 1])
+print(df[df['a'] > 1])
+print(df[(df['a'] > 1) & (df['b'] > 1)])
+print(df['a'] > df['b'])
+try:
+    pd.Series([1, 2]) == pd.Series([1, 2, 3])
+except ValueError as e:
+    print('ValueError', e)
+try:
+    bool(s > 2)
+except ValueError as e:
+    print('ValueError')

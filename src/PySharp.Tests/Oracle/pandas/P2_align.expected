@@ -1,0 +1,72 @@
+w     NaN
+x     NaN
+y    12.0
+z    23.0
+dtype: float64
+w     NaN
+x     NaN
+y    20.0
+z    60.0
+dtype: float64
+w     NaN
+x     NaN
+y    -8.0
+z   -17.0
+dtype: float64
+w     NaN
+x     NaN
+y    0.20
+z    0.15
+dtype: float64
+1    3.5
+2    3.5
+3    NaN
+dtype: float64
+a    4
+b    6
+Name: n, dtype: int64
+a    4
+b    6
+dtype: int64
+     a     b   c
+r1 NaN   NaN NaN
+r2 NaN  14.0 NaN
+r3 NaN   NaN NaN
+    a  b
+r1  2  6
+r2  4  8
+      a    b
+r1  101  203
+r2  102  204
+      a    b
+r1  101  103
+r2  202  204
+    a  b
+r1  0  0
+r2  0  0
+      a    b
+r1  0.5  1.5
+r2  1.0  2.0
+    a  b
+r1  2  4
+r2  3  5
+    a  b
+r1  2  5
+r2  3  6
+    a   b
+r1  1   9
+r2  4  16
+    a  b
+r1  0  1
+r2  1  2     a  b
+r1  1  1
+r2  0  0
+    a  b
+r1 -1 -3
+r2 -2 -4
+    a  b
+r1  2  6
+r2  4  8
+a    2
+a    4
+dtype: int64

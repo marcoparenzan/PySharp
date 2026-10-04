@@ -1,0 +1,33 @@
+import pandas as pd
+import math
+
+s = pd.Series([1, 2, 3, 4])
+print(s.apply(lambda x: x * x))
+print(s.apply(lambda x: x / 2))
+print(s.apply(str))
+print(s.map(lambda x: x + 1))
+print(s.map({1: 'one', 2: 'two'}))
+print(pd.Series(['a', 'b']).map({'a': 1, 'b': 2}))
+print(pd.Series(['a', 'b', 'a']).map(pd.Series({'a': 10, 'b': 20})))
+print(s.apply(math.sqrt))
+print(s.agg('sum'), s.agg(['sum', 'mean', 'max']))
+print(s.agg(lambda x: x.max() - x.min()))
+print(s.pipe(lambda x: x * 2))
+df = pd.DataFrame({'a': [1, 2, 3], 'b': [4.0, 5.0, 6.0]})
+print(df.apply(sum))
+print(df.apply(lambda col: col.max() - col.min()))
+print(df.apply(lambda row: row['a'] + row['b'], axis=1))
+print(df.apply(lambda col: col * 2))
+print(df.apply(lambda row: row * 2, axis=1))
+print(df.map(lambda x: x * 10))
+print(df.agg('sum'), df.agg(['sum', 'min']), df.agg({'a': 'sum', 'b': 'mean'}), df.agg({'a': ['sum', 'max'], 'b': 'min'}))
+print(df.agg(lambda col: col.sum()))
+print(df.pipe(lambda d: d + 1))
+print(df['a'].items().__class__.__name__ != '', [(k, v) for k, v in df['a'].items()])
+for label, row in df.iterrows():
+    print(label, row['a'], row['b'])
+for name, col in df.items():
+    print(name, col.tolist())
+print(df.select_dtypes(include='number').columns.tolist(), df.select_dtypes(exclude='float64').columns.tolist())
+print(pd.DataFrame({'x': [1], 's': ['a'], 'f': [1.5]}).select_dtypes(include=['int64', 'float64']))
+print(df.assign(c=df['a'] * 2, d=lambda x: x['a'] + x['b']))

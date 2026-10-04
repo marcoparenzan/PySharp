@@ -1,0 +1,112 @@
+0.0 nan 0 nan
+a    0.0
+dtype: float64
+a   NaN
+dtype: float64
+Series([], dtype: float64)
+0    False
+1    False
+2    False
+3     True
+dtype: bool 3
+0     True
+1    False
+2    False
+3    False
+dtype: bool
+0      2
+1      3
+2    NaN
+dtype: object
+0    4
+1    6
+dtype: int64 0    3
+1    7
+dtype: int64 0    3
+1    7
+dtype: int64     0   1
+0  10  20
+1  30  40
+0    1
+1    2
+Name: 0, dtype: int64 0    2
+1    4
+Name: 1, dtype: int64
+    a  b
+lo  1  3
+hi  2  4
+   x  y
+0  2  6
+1  3  8
+          a         b
+0  1.000000  1.732051
+1  1.414214  2.000000
+[3, 7]
+   a  b
+0 -1  3
+1  2  4    a  b
+0  1  0
+1  0  0
+(1, 2) (2, 2)
+a    1
+a    2
+dtype: int64 3 6 False
+a    1
+a    2
+b    3
+dtype: int64   index  0
+0     a  1
+1     a  2
+2     b  3
+0    3.0
+3    2.0
+2    1.0
+1    NaN
+dtype: float64
+2      a
+0      b
+1    NaN
+dtype: str
+   a    b
+1  1  5.0
+2  2  4.0
+0  2  NaN
+3    40
+4    50
+dtype: int64 1    20
+2    30
+3    40
+dtype: int64 1    20
+2    30
+3    40
+dtype: int64
+[30.0, 40.0, 50.0] [10.0, 10.0, 10.0, 10.0]
+0   -1.264911
+1   -0.632456
+2    0.000000
+3    0.632456
+4    1.264911
+dtype: float64
+0    0.067
+1    0.133
+2    0.200
+3    0.267
+4    0.333
+dtype: float64
+count     5.000000
+mean     30.000000
+std      15.811388
+min      10.000000
+25%      20.000000
+50%      30.000000
+75%      40.000000
+max      50.000000
+Name: score, dtype: float64
+float64 int64 int64
+int64 float64 uint8
+2.0
+10 4
+[4.5, 10.0]
+['1', '2', '3'] [1, 2]
+[1, 2, 0] 0
+norolling

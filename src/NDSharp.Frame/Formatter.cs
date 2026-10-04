@@ -216,7 +216,7 @@ public static class Formatter
         if (l.Kind is Kind.Int or Kind.Float)
         {
             // numbers go through the array formatter (sign space, shared decimals) and the common leading blanks are trimmed (pandas' trim_front)
-            var cells = FormatCells(l, o, true);
+            var cells = FormatCells(l, o, l.Kind == Kind.Int);
             if (cells.Length == 0) return cells;
             int lead = cells.Min(x => x.Length - x.TrimStart().Length);
             return lead > 0 ? cells.Select(x => x[lead..]).ToArray() : cells;

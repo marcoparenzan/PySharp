@@ -65,7 +65,7 @@ internal static class PdBuild
             default:
                 if (PdConv.IsListLike(data))
                 {
-                    col = PdConv.ToColumn(data);
+                    col = dtype is not null and not PyNone && PdConv.DTypeName(dtype) == "object" && data is PyList or PyTuple ? Column.FromObjects(PdConv.Cells(data).ToArray()) : PdConv.ToColumn(data);
                     ix = index is null or PyNone ? FIndex.Range(col.Length) : Index(index, col.Length);
                     if (ix.Length != col.Length) throw PyErr.ValueError($"Length of values ({col.Length}) does not match length of index ({ix.Length})");
                 }

@@ -32,12 +32,18 @@ internal static class PdClasses
             string s => s,
             long l => l.ToString(),
             double d => PyOps.ReprDouble(d),
+            PyList l => "[" + string.Join(", ", l.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + "]",
+            PyTuple t => "(" + string.Join(", ", t.Items.Select(x => Formatter.ObjectStr(PdConv.ToCell(x)))) + (t.Items.Length == 1 ? ",)" : ")"),
             _ => PyOps.Str(PdConv.Interp!, o),
         };
         BuildSeries();
         BuildDataFrame();
         BuildIndex();
         BuildAccessor();
+        PdOps.Install();
+        PdWrangle.Install();
+        PdApply.Install();
+        PdStats.Install();
         Conv.Converters.Add(o => o switch
         {
             PyInstance { Native: Series s } => PdArrays.ToNd(s.Values),

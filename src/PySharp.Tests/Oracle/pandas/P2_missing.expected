@@ -1,0 +1,188 @@
+0    False
+1     True
+2    False
+3     True
+dtype: bool 0     True
+1    False
+2     True
+3    False
+dtype: bool 0    False
+1     True
+2    False
+3     True
+dtype: bool
+0    1.0
+1    0.0
+2    3.0
+3    0.0
+dtype: float64
+0    1.0
+1   -1.5
+2    3.0
+3   -1.5
+dtype: float64
+0    1.0
+1    1.0
+2    3.0
+3    3.0
+dtype: float64 0    1.0
+1    3.0
+2    3.0
+3    NaN
+dtype: float64
+0    1.0
+2    3.0
+dtype: float64
+0    a
+1    ?
+2    c
+dtype: str
+0    False
+1     True
+2    False
+dtype: bool
+       a      b      c
+0  False   True  False
+1   True  False  False
+2  False  False   True
+3   True   True   True
+a    2
+b    2
+c    2
+dtype: int64
+     a  b    c
+0  1.0  0  1.5
+1  0.0  x  2.5
+2  3.0  y  0.0
+3  0.0  0  0.0
+     a     b    c
+0  1.0  none  1.5
+1 -1.0     x  2.5
+2  3.0     y  NaN
+3 -1.0  none  NaN
+Empty DataFrame
+Columns: [a, b, c]
+Index: []
+     a    b    c
+0  1.0  NaN  1.5
+1  NaN    x  2.5
+2  3.0    y  NaN
+     a    b    c
+0  1.0  NaN  1.5
+2  3.0    y  NaN
+Empty DataFrame
+Columns: []
+Index: [0, 1, 2, 3]
+     a    b    c
+0  1.0  NaN  1.5
+1  NaN    x  2.5
+2  3.0    y  NaN
+3  NaN  NaN  NaN
+     a    b    c
+0  1.0  NaN  1.5
+1  NaN    x  2.5
+2  3.0    y  NaN
+     a    b    c
+0  1.0  NaN  1.5
+1  1.0    x  2.5
+2  3.0    y  2.5
+3  3.0    y  2.5
+     a    b    c
+0  1.0    x  1.5
+1  3.0    x  2.5
+2  3.0    y  NaN
+3  NaN  NaN  NaN
+True True False True
+[False  True  True]
+0    NaN
+1    NaN
+2    3.0
+3    4.0
+dtype: float64
+0    0
+1    0
+2    3
+3    4
+dtype: int64
+0    1.0
+1    2.0
+2    NaN
+3    NaN
+dtype: float64
+0    1
+1    2
+2   -1
+3   -1
+dtype: int64
+0     1
+1    20
+2     3
+3     4
+dtype: int64 0    0
+1    0
+2    3
+3    4
+dtype: int64 0     1
+1     2
+2    30
+3    40
+dtype: int64 0    10
+1    20
+2     3
+3     4
+dtype: int64
+0    z
+1    b
+2    z
+dtype: str
+0    2
+1    2
+2    3
+3    3
+dtype: int64 0    3
+1    3
+2    3
+3    4
+dtype: int64 0    1
+1    2
+2    2
+3    2
+dtype: int64
+0    1.2
+1    5.7
+2    2.5
+3    3.5
+dtype: float64 0    1.0
+1    6.0
+2    2.0
+3    4.0
+dtype: float64 0    1200
+1    5700
+dtype: int64
+0    1.0
+1    2.0
+2    3.0
+3    2.0
+Name: a, dtype: float64
+     p  q
+0  NaN  4
+1  NaN  5
+2  3.0  6    p  q
+0  1  0
+1  2  0
+2  0  0    p  q
+0  2  4
+1  2  5
+2  3  5     p  q
+0   1  4
+1  99  5
+2   3  6    p  q
+0  1  4
+1  2  5
+2  3  6
+0    1.0
+1    0.0
+2    3.0
+dtype: float64
+     a
+0  1.0

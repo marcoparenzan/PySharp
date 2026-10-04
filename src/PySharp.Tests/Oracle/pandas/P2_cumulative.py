@@ -1,0 +1,15 @@
+import pandas as pd
+
+s = pd.Series([1, 2, 3, 4])
+print(s.cumsum(), s.cumprod(), s.cummax(), s.cummin())
+f = pd.Series([1.0, None, 3.0, 2.0])
+print(f.cumsum(), f.cumsum(skipna=False), f.cummax(), f.cumprod())
+print(pd.Series([True, True, False]).cumsum())
+df = pd.DataFrame({'a': [1, 2, 3], 'b': [0.5, 1.5, None]})
+print(df.cumsum())
+print(s.diff(), s.diff(2), f.diff())
+print(s.shift(1), s.shift(-1), s.shift(2, fill_value=0))
+print(f.shift(1))
+print(s.pct_change())
+print(df.shift(1))
+print(df.diff())

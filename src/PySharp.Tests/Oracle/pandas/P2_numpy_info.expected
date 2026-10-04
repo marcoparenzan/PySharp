@@ -1,0 +1,103 @@
+a    1.0
+b    2.0
+c    3.0
+Name: v, dtype: float64
+a    0.000000
+b    1.386294
+c    2.197225
+Name: v, dtype: float64
+4.666666666666667 14.0 9.0
+[ 2.  8. 18.]
+[1. 4. 9.]
+0    0
+1    1
+2    2
+3    3
+4    4
+dtype: int64
+0    0.5
+1    1.5
+dtype: float64
+   x  y
+0  0  1
+1  2  3
+2  4  5
+[[0 1]
+ [2 3]
+ [4 5]]
+[[0 1]
+ [2 3]
+ [4 5]]
+          x         y
+0  0.000000  1.000000
+1  1.414214  1.732051
+2  2.000000  2.236068
+15
+          a         b         c
+0  0.125730 -0.132105  0.640423
+1  0.104900 -0.535669  0.361595
+2  1.304000  0.947081 -0.703735
+3 -1.265421 -0.623274  0.041326
+4 -2.325031 -0.218792 -1.245911
+              a         b         c
+count  5.000000  5.000000  5.000000
+mean  -0.411164 -0.112552 -0.181260
+std    1.404369  0.627367  0.778759
+min   -2.325031 -0.623274 -1.245911
+25%   -1.265421 -0.535669 -0.703735
+50%    0.104900 -0.218792  0.041326
+75%    0.125730 -0.132105  0.361595
+max    1.304000  0.947081  0.640423
+a   -0.411164
+b   -0.112552
+c   -0.181260
+dtype: float64
+          a         b         c
+a  1.000000  0.632256  0.382345
+b  0.632256  1.000000 -0.409340
+c  0.382345 -0.409340  1.000000
+0.6322559589
+          a         b         c
+a  1.972252  0.557052  0.418157
+b  0.557052  0.393589 -0.199990
+c  0.418157 -0.199990  0.606465
+a     2.0
+b     5.0
+c    10.0
+Name: v, dtype: float64
+a     2.0
+b     6.0
+c    12.0
+Name: v, dtype: float64
+a     2.0
+b     6.0
+c    12.0
+Name: v, dtype: float64
+<class 'pandas.DataFrame'>
+RangeIndex: 3 entries, 0 to 2
+Data columns (total 2 columns):
+ #   Column  Non-Null Count  Dtype  
+---  ------  --------------  -----  
+ 0   a       3 non-null      int64  
+ 1   b       3 non-null      float64
+dtypes: float64(1), int64(1)
+memory usage: 180.0 bytes
+None
+<class 'pandas.Series'>
+RangeIndex: 3 entries, 0 to 2
+Series name: None
+Non-Null Count  Dtype
+--------------  -----
+3 non-null      int64
+dtypes: int64(1)
+memory usage: 156.0 bytes
+None
+<class 'pandas.DataFrame'>
+RangeIndex: 2 entries, 0 to 1
+Data columns (total 2 columns):
+ #   Column  Non-Null Count  Dtype  
+---  ------  --------------  -----  
+ 0   a       1 non-null      float64
+ 1   s       2 non-null      str    
+dtypes: float64(1), str(1)
+memory usage: 164.0 bytes
