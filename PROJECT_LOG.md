@@ -113,3 +113,15 @@ Phase 9 (version lockstep, packages in the local feed, docs) follows these commi
 - `6e46e64` Phase 3: MultiIndex, groupby, merge/join/concat, pivot/melt/crosstab/stack/unstack, read_csv/to_csv/to_dict
 
 - `334f6ac` Phase 4: rolling/expanding/rank, `df.plot()`, HTML tables and last-expression echo in the kernel, exact numpy ziggurat table, 2.2.0 packages, docs
+
+---
+
+## Scenario 14b - pandas (Phases 5-8)
+
+**4 commits - +12880/-248 across 151 file-touches (summed across commits) - ~0h00m active by the commit-gap rule** (four single-commit blocks, 93, 297 and 100 minutes apart; a single-commit
+block counts as 0m, so the figure understates the effort: each phase closes with one commit after hours of uncommitted work).
+
+- `4fbbaf3` Phase 5: `to_json`/`read_json`, `ewm`, `plot.pie`/`plot.box`
+- `7f57b8b` Phase 6: categorical dtype, `Interval`, `pd.cut`/`pd.qcut`, numpy `Generator.choice(p=)`
+- `8cfa374` Phase 7: datetime/timedelta dtypes, `Timestamp`/`Timedelta`, `to_datetime`/`date_range`, `.dt`, `resample`, time-window `rolling`, `parse_dates`
+- `8c170b1` Phase 8: `Period`/`PeriodIndex`, time zones, `query`/`eval`, `plot.kde`, bit-exact numpy exponential/gamma/poisson, pandas-exact Index repr wrapping

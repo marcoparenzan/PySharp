@@ -13,7 +13,7 @@
 
     <!-- NuGet package metadata: the pandas module, a Python binding over NDSharp.Frame. -->
     <PackageId>PySharp.Pandas</PackageId>
-    <Version>2.2.0</Version>
+    <Version>2.3.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's pandas module (Series, DataFrame, Index) — a Python binding over NDSharp.Frame. Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

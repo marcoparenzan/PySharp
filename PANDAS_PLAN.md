@@ -93,7 +93,7 @@ Datetime/timedelta/period dtypes and everything time-based (`to_datetime`, `resa
       follows pandas' defaults); `pie`, `box`, `kde`, `hexbin` raise `NotImplementedError`; tests check that every supported kind saves a PNG
 - [x] **notebooks**: `DataFrame._repr_html_` / `to_html` (pandas' HTML layout, verified), the JupyterNet kernel echoes the last expression of a cell (HTML for DataFrames, `repr` otherwise),
       `display()`, `max_columns = 20`; guide `JupyterNet/docs/pandas-in-notebooks.md`
-- [x] README / ROADMAP / RELEASE_NOTES (v2.2.0) / PROJECT_LOG; version lockstep **2.2.0** for all `PySharp.*` / `NDSharp.*` packages; the 16 library packages are in `D:/Dev/NuGetLocalFeed`
+- [x] README / ROADMAP / RELEASE_NOTES (v2.2.0) / PROJECT_LOG; version lockstep **2.2.0** for all `PySharp.*` / `NDSharp.*` packages (**2.3.0** after Phase 8, 17 packages); packages are in `D:/Dev/NuGetLocalFeed`
       (a consumer project restored from the feed runs pandas + groupby + rolling). The `PySharp` global tool is **not** packed (about 410 MB because of libtorch)
 - [x] samples `pandas_demo.py`, `pandas_analysis_demo.py`, `pandas_report_demo.py`, `pandas_rolling_demo.py` — byte-identical to CPython + pandas
 - Bug found by the rolling oracle: `Generator.normal` used a ziggurat table recomputed from the layer areas, which differs from numpy's in the last bit for most draws; the exact `wi_double`

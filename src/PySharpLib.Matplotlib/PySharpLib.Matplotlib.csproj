@@ -13,7 +13,7 @@
 
     <!-- NuGet package metadata: the matplotlib module, a Python binding over NDSharp.Plot. -->
     <PackageId>PySharp.Matplotlib</PackageId>
-    <Version>2.2.0</Version>
+    <Version>2.3.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's matplotlib.pyplot module — a Python binding over NDSharp.Plot (SkiaSharp renderer). Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -17,7 +17,7 @@
 
     <!-- NuGet package metadata: the torch module, a Python binding over TorchSharp (libtorch). -->
     <PackageId>PySharp.Torch</PackageId>
-    <Version>2.2.0</Version>
+    <Version>2.3.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's torch module (tensors, autograd, torch.nn, torch.optim) — a Python binding over TorchSharp/libtorch. Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -450,7 +450,7 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 
 ---
 
-## v2.2.0 — pandas
+## v2.3.0 — pandas (complete)
 
 **`import pandas as pd` on PySharp** — scenario 14 ([PANDAS_PLAN.md](PANDAS_PLAN.md)). Same method as numpy / cv2 / torch: a native .NET library with no Python
 dependency, a thin binding, and verification against the real library. Target semantics are **pandas 3.0** (default `str` dtype, always-on copy-on-write).
@@ -476,7 +476,7 @@ dependency, a thin binding, and verification against the real library. Target se
 - **Verification**: 30 golden snippets under `Oracle/pandas` (about 3000 lines of expected output produced by real pandas 3.0.6) plus the four samples
   `pandas_demo.py`, `pandas_analysis_demo.py`, `pandas_report_demo.py`, `pandas_rolling_demo.py`, whose output is byte-identical to CPython + pandas;
   18 native tests in `NDSharp.Frame.Tests`.
-- **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.2.0 (lockstep); the 16 library packages are in the local feed.
+- **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.3.0 (lockstep, 2.2.0 shipped the first four pandas phases); the 17 packages are in the local feed.
 - **JSON, ewm, pie/box**: `to_json`/`read_json` (pandas' ujson encoding rules), `ewm(...).mean/std/var`, `plot.pie` and `plot.box`.
 - **Categorical data**: `category` dtype (ordered or not), `pd.Categorical`, `pd.CategoricalDtype`, the `.cat` accessor, `pd.cut`/`pd.qcut` with `Interval` categories, categorical `groupby` (`observed=`), `value_counts` with unused categories, `CategoricalIndex`.
 - **Datetime and time series**: `datetime64`/`timedelta64` columns and indexes, `Timestamp`/`Timedelta`/`NaT`, `pd.to_datetime`/`to_timedelta`/`date_range`/`timedelta_range`, date offsets, the `.dt` accessor, partial-string indexing, `resample`/`asfreq`/`shift(freq=)`/time-window `rolling`, `pd.Grouper(freq=)`, `read_csv(parse_dates=)` and date formats in `to_csv`/`to_json`, `df.plot()` with a datetime index.

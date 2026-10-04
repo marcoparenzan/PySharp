@@ -12,7 +12,7 @@
     <!-- NuGet package metadata: the sqlite3 stdlib module, split out of PySharpLib so the core
          embeddable interpreter doesn't force every consumer to carry Microsoft.Data.Sqlite. -->
     <PackageId>PySharp.Sqlite3</PackageId>
-    <Version>2.2.0</Version>
+    <Version>2.3.0</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's sqlite3 module — a real DB-API 2.0 shim over Microsoft.Data.Sqlite. Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
