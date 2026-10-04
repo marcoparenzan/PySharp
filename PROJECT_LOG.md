@@ -131,3 +131,5 @@ block counts as 0m, so the figure understates the effort: each phase closes with
 **1 commit - +2466/-128 across 51 files - ~0h00m active by the commit-gap rule** (a single-commit block counts as 0m; the commit came 171 minutes after the 2.3.0 packaging commit, which bounds the effort).
 
 - `2fddb53` Phase 9: nullable dtypes and `pd.NA`, `describe(include=)`/`select_dtypes`, `interpolate`, `resample(origin=/offset=/kind='period')`, period multiples, numpy `datetime64`/`timedelta64` arrays
+
+- `71b4cf3` Bump of all 17 `PySharp.*` / `NDSharp.*` packages to 2.4.0 (19 files, +28/-18), packed into the local feed
