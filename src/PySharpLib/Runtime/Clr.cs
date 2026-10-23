@@ -119,6 +119,20 @@ public static class ClrMarshal
                 }
                 return false;
 
+            // A .NET method group passed where a delegate is expected (e.g. Speaker(Speaker.Beep)): the overload
+            // whose signature matches the delegate's Invoke, bound to the same instance (or static).
+            case ClrMethod method when typeof(Delegate).IsAssignableFrom(target) && target.GetMethod("Invoke") is { } invoke:
+            {
+                var parameters = invoke.GetParameters().Select(p => p.ParameterType).ToArray();
+                var flags = BindingFlags.Public | (method.Target is null ? BindingFlags.Static : BindingFlags.Instance);
+                var match = method.Type.GetMethods(flags).FirstOrDefault(m => m.Name == method.Name
+                    && m.ReturnType == invoke.ReturnType && m.GetParameters().Select(p => p.ParameterType).SequenceEqual(parameters));
+                if (match is null)
+                    return false;
+                result = method.Target is null ? Delegate.CreateDelegate(target, match) : Delegate.CreateDelegate(target, method.Target, match);
+                return true;
+            }
+
             case bool b when target == typeof(bool):
                 result = b;
                 return true;
@@ -255,6 +269,14 @@ public static class ClrBinder
     private const BindingFlags StaticFlags =
         BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy;
 
+    /// <summary>Runs a reflection call; the .NET exception thrown by the callee becomes the matching Python exception.</summary>
+    private static object? Clr(Func<object?> call)
+    {
+        try { return call(); }
+        catch (TargetInvocationException e) when (e.InnerException is { } inner) { throw ClrExceptions.ToPython(inner); }
+        catch (IndexOutOfRangeException e) { throw ClrExceptions.ToPython(e); } // Array.GetValue/SetValue throw directly
+    }
+
     /// <summary>Attribute access on a CLR object (instance) — property, field, or method group.</summary>
     public static bool TryGetMember(object? target, Type type, string name, bool isStatic, out object value)
     {
@@ -263,7 +285,7 @@ public static class ClrBinder
         var property = type.GetProperty(name, flags);
         if (property is not null && property.CanRead && property.GetIndexParameters().Length == 0)
         {
-            value = ClrMarshal.ToPython(property.GetValue(target));
+            value = ClrMarshal.ToPython(Clr(() => property.GetValue(target)));
             return true;
         }
 
@@ -301,7 +323,7 @@ public static class ClrBinder
         {
             if (!ClrMarshal.TryToClr(pyValue, property.PropertyType, out var v))
                 throw PyErr.TypeError($"cannot assign {PyOps.TypeName(pyValue)} to '{type.Name}.{name}' ({property.PropertyType.Name})");
-            property.SetValue(target, v);
+            Clr(() => { property.SetValue(target, v); return null; });
             return true;
         }
 
@@ -326,7 +348,7 @@ public static class ClrBinder
             throw PyErr.AttributeError($"'{method.Type.Name}' has no method '{method.Name}'");
 
         if (TryBind(candidates, args, out var chosen, out var marshalled))
-            return ClrMarshal.ToPython(chosen!.Invoke(method.Target, marshalled));
+            return ClrMarshal.ToPython(Clr(() => chosen!.Invoke(method.Target, marshalled)));
 
         throw PyErr.TypeError(
             $"no overload of '{method.Type.Name}.{method.Name}' matches {args.Length} argument(s) of the given types");
@@ -342,36 +364,66 @@ public static class ClrBinder
             return ClrMarshal.ToPython(Activator.CreateInstance(type));
 
         if (TryBind(candidates, args, out var chosen, out var marshalled))
-            return ClrMarshal.ToPython(((ConstructorInfo)chosen!).Invoke(marshalled));
+            return ClrMarshal.ToPython(Clr(() => ((ConstructorInfo)chosen!).Invoke(marshalled)));
 
         throw PyErr.TypeError($"no constructor of '{type.Name}' matches {args.Length} argument(s) of the given types");
     }
 
-    /// <summary>Indexer read: obj[index] via the type's default indexer (get_Item).</summary>
+    /// <summary>Indexer arguments: obj[x, y] arrives as a tuple and binds to a two-parameter indexer.</summary>
+    private static object[] IndexArguments(object index) => index is PyTuple tuple ? tuple.Items.ToArray() : new[] { index };
+
+    /// <summary>.NET array element positions (one int per dimension), or null if the index does not fit the array.</summary>
+    private static int[]? ArrayIndices(Array array, object index)
+    {
+        var items = IndexArguments(index);
+        if (items.Length != array.Rank) return null;
+        var indices = new int[items.Length];
+        for (int i = 0; i < items.Length; i++)
+        {
+            if (!ClrMarshal.TryToClr(items[i], typeof(int), out var position)) return null;
+            int value = (int)position!;
+            indices[i] = value < 0 && array.Rank == 1 ? value + array.Length : value; // a[-1] as in Python
+        }
+        return indices;
+    }
+
+    /// <summary>Indexer read: obj[index] via the type's default indexer (get_Item), or a .NET array element.</summary>
     public static bool TryGetIndex(ClrObject obj, object index, out object value)
     {
+        if (obj.Instance is Array array && ArrayIndices(array, index) is { } indices)
+        {
+            value = ClrMarshal.ToPython(Clr(() => array.GetValue(indices)));
+            return true;
+        }
         var getter = obj.Type.GetMethods(InstanceFlags)
             .Where(m => m.Name == "get_Item").ToArray();
-        if (getter.Length > 0 && TryBind(getter, new[] { index }, out var chosen, out var marshalled))
+        if (getter.Length > 0 && TryBind(getter, IndexArguments(index), out var chosen, out var marshalled))
         {
-            value = ClrMarshal.ToPython(chosen!.Invoke(obj.Instance, marshalled));
+            value = ClrMarshal.ToPython(Clr(() => chosen!.Invoke(obj.Instance, marshalled)));
             return true;
         }
         value = PyNone.Instance;
         return false;
     }
 
-    /// <summary>Indexer write: obj[index] = value via set_Item.</summary>
+    /// <summary>Indexer write: obj[index] = value via set_Item, or a .NET array element.</summary>
     public static bool TrySetIndex(ClrObject obj, object index, object pyValue)
     {
+        if (obj.Instance is Array array && ArrayIndices(array, index) is { } indices)
+        {
+            if (!ClrMarshal.TryToClr(pyValue, array.GetType().GetElementType()!, out var element))
+                throw PyErr.TypeError($"cannot store {PyOps.TypeName(pyValue)} in {array.GetType().Name}");
+            Clr(() => { array.SetValue(element, indices); return null; });
+            return true;
+        }
         var setter = obj.Type.GetMethods(InstanceFlags)
             .Where(m => m.Name == "set_Item").ToArray();
-        return TryBind(setter, new[] { index, pyValue }, out var chosen, out var marshalled)
+        return TryBind(setter, [.. IndexArguments(index), pyValue], out var chosen, out var marshalled)
             && Set(chosen!, obj.Instance, marshalled);
 
         static bool Set(MethodBase m, object target, object?[] args)
         {
-            m.Invoke(target, args);
+            Clr(() => m.Invoke(target, args));
             return true;
         }
     }
@@ -390,19 +442,22 @@ public static class ClrBinder
         }
     }
 
-    /// <summary>Pick the first overload whose parameters accept the marshalled arguments.</summary>
+    /// <summary>Pick the first overload whose parameters accept the marshalled arguments.
+    /// Trailing optional parameters (C# <c>= default</c>, <c>= 42</c>, …) may be omitted and take their default value.</summary>
     private static bool TryBind(MethodBase[] candidates, object[] args,
         out MethodBase? chosen, out object?[] marshalled)
     {
-        // Prefer exact arity; among those, the first that marshals cleanly.
-        foreach (var candidate in candidates.OrderBy(c => c.GetParameters().Length == args.Length ? 0 : 1))
+        // Prefer exact arity; then the overloads that need the fewest omitted optional parameters.
+        foreach (var candidate in candidates.OrderBy(c => c.GetParameters().Length - args.Length))
         {
             var ps = candidate.GetParameters();
-            if (ps.Length != args.Length)
+            if (ps.Length < args.Length || ps.Skip(args.Length).Any(p => !p.IsOptional))
                 continue;
             var converted = new object?[ps.Length];
+            for (int i = args.Length; i < ps.Length; i++)
+                converted[i] = DefaultArgument(ps[i]);
             bool ok = true;
-            for (int i = 0; i < ps.Length; i++)
+            for (int i = 0; i < args.Length; i++)
             {
                 if (!ClrMarshal.TryToClr(args[i], ps[i].ParameterType, out converted[i]))
                 {
@@ -420,5 +475,49 @@ public static class ClrBinder
         chosen = null;
         marshalled = Array.Empty<object?>();
         return false;
+    }
+
+    /// <summary>Value of an omitted optional parameter: its declared default, or default(T) for <c>= default</c>
+    /// on a struct (CancellationToken, TimeSpan…), which reflection reports as missing or null.</summary>
+    private static object? DefaultArgument(ParameterInfo parameter)
+    {
+        object? value = parameter.HasDefaultValue ? parameter.DefaultValue : null;
+        if (value is null or DBNull or Missing && parameter.ParameterType.IsValueType && Nullable.GetUnderlyingType(parameter.ParameterType) is null)
+            return Activator.CreateInstance(parameter.ParameterType);
+        if (value is not null && parameter.ParameterType.IsEnum && value.GetType() != parameter.ParameterType)
+            return Enum.ToObject(parameter.ParameterType, value);
+        return value is DBNull or Missing ? null : value;
+    }
+}
+
+/// <summary>Maps an exception thrown by .NET code called from Python to a Python exception, so scripts can catch it.
+/// The message is "<.NET type>: <message>" and the original is available as the <c>clr_exception</c> attribute.
+/// OperationCanceledException becomes KeyboardInterrupt: cancellation by the host or the user, not caught by
+/// <c>except Exception</c>.</summary>
+public static class ClrExceptions
+{
+    public static PyRaise ToPython(Exception error)
+    {
+        if (error is PyRaise raise) return raise;
+        var cls = error switch
+        {
+            OperationCanceledException => PyErr.KeyboardInterruptClass,
+            ArgumentException => PyErr.ValueErrorClass,
+            InvalidCastException => PyErr.TypeErrorClass,
+            IndexOutOfRangeException => PyErr.IndexErrorClass,
+            KeyNotFoundException => PyErr.KeyErrorClass,
+            NotImplementedException or NotSupportedException => PyErr.NotImplementedErrorClass,
+            FileNotFoundException or DirectoryNotFoundException => PyErr.FileNotFoundErrorClass,
+            UnauthorizedAccessException => PyErr.PermissionErrorClass,
+            TimeoutException => PyErr.TimeoutErrorClass,
+            IOException => PyErr.OSErrorClass,
+            OverflowException => PyErr.OverflowErrorClass,
+            DivideByZeroException => PyErr.ZeroDivisionErrorClass,
+            OutOfMemoryException => PyErr.MemoryErrorClass,
+            _ => PyErr.RuntimeErrorClass,
+        };
+        var result = PyErr.Raise(cls, $"{error.GetType().Name}: {error.Message}");
+        result.Value.Dict["clr_exception"] = new ClrObject(error);
+        return result;
     }
 }

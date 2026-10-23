@@ -44,6 +44,18 @@ public class ClrInteropTests
         public const double Pi = 3.14;
     }
 
+    public enum Shade { Light, Dark }
+
+    public sealed class Defaults
+    {
+        public string Describe(int x, int y = 7, string label = "pt", Shade shade = Shade.Dark, CancellationToken token = default)
+            => $"{label}({x},{y}) {shade} {token.CanBeCanceled}";
+        public string Pick(int x) => "one";
+        public string Pick(int x, int y = 0) => "two";
+        public Defaults(int size = 3) => Size = size;
+        public int Size { get; }
+    }
+
     public sealed class Point
     {
         public int X { get; }
@@ -167,6 +179,24 @@ public class ClrInteropTests
         => Assert.Equal("TypeError", RunWith(
             "try:\n    calc.Greet(1, 2, 3)\nexcept TypeError:\n    print('TypeError')",
             e => e.SetVariable("calc", new Calculator())));
+
+    [Fact]
+    public void Optional_parameters_can_be_omitted_and_take_their_defaults()
+        => Assert.Equal("pt(1,7) Dark False\nlab(1,2) Dark False\nlab(1,2) Light False", RunWith(
+            "d = Defaults()\nprint(d.Describe(1))\nprint(d.Describe(1, 2, 'lab'))\nprint(d.Describe(1, 2, 'lab', Shade.Light))",
+            e => { e.SetVariable("Defaults", typeof(Defaults)); e.SetVariable("Shade", typeof(Shade)); }));
+
+    [Fact]
+    public void Exact_arity_wins_over_optional_parameters()
+        => Assert.Equal("one two 3 5", RunWith(
+            "d = Defaults()\nprint(d.Pick(1), d.Pick(1, 2), d.Size, Defaults(5).Size)",
+            e => e.SetVariable("Defaults", typeof(Defaults))));
+
+    [Fact]
+    public void Missing_required_parameter_is_still_a_type_error()
+        => Assert.Equal("TypeError", RunWith(
+            "try:\n    Defaults().Describe()\nexcept TypeError:\n    print('TypeError')",
+            e => e.SetVariable("Defaults", typeof(Defaults))));
 
     [Fact]
     public void Injected_func_delegate_is_callable()

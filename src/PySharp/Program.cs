@@ -14,6 +14,11 @@ using PySharpLib.Runtime;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
+// `pysharp run script.py --flag x`: like `python script.py --flag x`, everything after the script belongs to the
+// script's sys.argv, options included — the command-line parser would otherwise take them for its own.
+if (args is ["run", var script, .. var scriptArgs] && !script.StartsWith('-'))
+    return RunCommand.RunScript(script, scriptArgs);
+
 var app = new CommandApp();
 app.Configure(config =>
 {
@@ -23,8 +28,10 @@ app.Configure(config =>
         .WithDescription("Run a Python script.")
         .WithExample("run", "script.py");
     config.AddCommand<InstallCommand>("install")
-        .WithDescription("Install a pure-Python package from PyPI into ./site-packages.")
-        .WithExample("install", "paho-mqtt==2.1.0");
+        .WithDescription("Install a pure-Python package into ./site-packages: from PyPI, a local wheel file, or --find-links folders.")
+        .WithExample("install", "paho-mqtt==2.1.0")
+        .WithExample("install", "dist/screen9-1.0.0-py3-none-any.whl")
+        .WithExample("install", "screen9", "--find-links", "dist");
     config.AddCommand<ReplCommand>("repl")
         .WithDescription("Start the interactive REPL.");
 });
@@ -112,22 +119,25 @@ internal sealed class RunCommand : Command<RunCommand.Settings>
     }
 
     public override int Execute(CommandContext context, Settings settings)
+        => RunScript(settings.File, settings.Args);
+
+    public static int RunScript(string file, IReadOnlyList<string> args)
     {
-        if (!File.Exists(settings.File))
+        if (!File.Exists(file))
         {
-            AnsiConsole.MarkupLineInterpolated($"[red]file not found: {settings.File}[/]");
+            AnsiConsole.MarkupLineInterpolated($"[red]file not found: {file}[/]");
             return 2;
         }
 
         return Host.Guard(() =>
         {
             var engine = Host.CreateEngine();
-            string scriptDir = Path.GetDirectoryName(Path.GetFullPath(settings.File))!;
+            string scriptDir = Path.GetDirectoryName(Path.GetFullPath(file))!;
             engine.Importer.SearchPaths.Insert(0, scriptDir);
             engine.Interp.Argv.Clear();
-            engine.Interp.Argv.Add(settings.File);
-            engine.Interp.Argv.AddRange(settings.Args);
-            engine.Run(File.ReadAllText(settings.File), settings.File);
+            engine.Interp.Argv.Add(file);
+            engine.Interp.Argv.AddRange(args);
+            engine.Run(File.ReadAllText(file), file);
             return 0;
         });
     }
@@ -138,14 +148,19 @@ internal sealed class InstallCommand : Command<InstallCommand.Settings>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "<requirement>")]
-        [Description("Package requirement, e.g. paho-mqtt==2.1.0.")]
+        [Description("Package requirement (e.g. paho-mqtt==2.1.0) or path to a .whl file.")]
         public string Requirement { get; init; } = "";
+
+        [CommandOption("-f|--find-links <DIR>")]
+        [Description("Folder searched for wheels before PyPI (repeatable).")]
+        public string[] FindLinks { get; init; } = [];
     }
 
     public override int Execute(CommandContext context, Settings settings)
         => Host.Guard(() =>
         {
             var installer = new PackageInstaller(Host.SitePackagesDir());
+            installer.FindLinks.AddRange(settings.FindLinks.Select(Path.GetFullPath));
             installer.Install(settings.Requirement);
             return 0;
         });

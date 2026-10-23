@@ -450,6 +450,27 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 
 ---
 
+## v2.5.0 — .NET packages installable with the mini-pip — 2026-10-22
+
+A package can now ship a .NET library inside a wheel and be installed independently of PySharp (first user: the
+`screen9` package of the Screen9 engine, whose Gorillas sample runs with `pysharp run`).
+
+- **`clr` module** (pythonnet style): `clr.AddReference(path or name)` loads an assembly and its namespaces become
+  importable modules (`from Screen9 import PCCanvas`); the core library (`from System import TimeSpan`) is importable
+  without it; dependencies are resolved from the referenced DLL's folder; `clr.GetClrType`.
+- **.NET exceptions are Python exceptions**: `ArgumentException` → `ValueError`, `InvalidOperationException` →
+  `RuntimeError`, IO → `OSError`/`FileNotFoundError`/`PermissionError`, `OperationCanceledException` →
+  `KeyboardInterrupt`, …, with the original as `e.clr_exception` (before, they escaped the script uncaught).
+- **Binder**: trailing optional parameters may be omitted (C# defaults, `= default` structs, enums); a .NET method
+  passes where a delegate is expected; `obj[x, y]` binds to multi-argument indexers; .NET arrays support `len`,
+  indexing and negative indices.
+- **Mini-pip**: `pysharp install file.whl`, `pysharp install name --find-links DIR` (highest or requested version,
+  names normalized as pip does, before PyPI); installing over an older version removes its `RECORD` files.
+- **CLI**: `pysharp run script.py --flag x` passes everything after the script to `sys.argv`, options included.
+- 15 new tests (interop, `clr`, local wheels). **Packaging:** all `PySharp.*` and `NDSharp.*` packages are 2.5.0.
+
+---
+
 ## v2.4.0 — pandas Phase 9
 
 - **Nullable dtypes and `pd.NA`**: `Int8`–`Int64`, `UInt8`–`UInt64`, `Float32/64`, `boolean`, `string` (Series, DataFrame, `pd.array`, `convert_dtypes`, `astype`), Kleene logic, masked reductions, sort/`value_counts`/groupby/describe/info, `.str` on `string`.

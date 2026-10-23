@@ -13,6 +13,7 @@ public static class StdlibModules
 {
     public static void RegisterAll(Importer importer)
     {
+        ClrModule.Register(importer); // `import clr` + .NET namespaces (System...) as modules
         importer.RegisterBuiltin("__future__", _ =>
         {
             // stub: the future features are already the default behavior

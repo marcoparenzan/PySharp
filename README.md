@@ -335,12 +335,32 @@ engine.Run("""
     """);
 ```
 
-What works today: instance & static **methods** (with overload resolution by arity/type),
+What works today: instance & static **methods** (with overload resolution by arity/type; trailing
+**optional parameters** may be omitted and take their C# default — `= 3`, `= default` on a struct such as
+`CancellationToken`, enum defaults),
 **properties** and **fields** (read/write), **indexers** (`obj[key]`), **constructors**
 (`Type(args)` on an injected `Type`), **iteration** over any `IEnumerable`, and calling an injected
 **delegate** (`Func<>`/`Action<>`) as a function. Values you inject are also readable back from
 `module.Dict` after `Run`. Out of scope for now: `ref`/`out` parameters, generic-method type
 inference, events, and passing Python functions as .NET delegates.
+
+### 5b. Loading .NET assemblies from Python (`clr`)
+
+Scripts can load .NET assemblies themselves, in the style of pythonnet — this is how a **package can ship a .NET
+library** (DLLs inside a wheel) and be installed independently of PySharp:
+
+```python
+import clr, os
+clr.AddReference(os.path.join(os.path.dirname(__file__), "Screen9.dll"))   # a path, or an assembly name
+from Screen9 import PCCanvas                                                # namespaces become modules
+from System import TimeSpan, Array, Int32                                   # the core library needs no AddReference
+buffer = Array.CreateInstance(clr.GetClrType(Int32), 121)                   # a real int[] (len, a[i], a[-1])
+```
+
+Dependencies of a referenced DLL are resolved from its folder. Exceptions thrown by .NET code become Python
+exceptions (`ArgumentException` → `ValueError`, `InvalidOperationException` → `RuntimeError`, IO → `OSError`, …,
+`OperationCanceledException` → `KeyboardInterrupt`), with the original as `e.clr_exception`. A .NET method can be
+passed where a delegate is expected (`Speaker(Speaker.Beep)`), and `obj[x, y]` binds to two-argument indexers.
 
 ### 6. Imports, site-packages and mini-pip
 
@@ -359,6 +379,16 @@ engine.Importer.SearchPaths.Add("site-packages");  // makes paho.mqtt importable
 engine.Importer.SearchPaths.Insert(0, "scripts");  // your own modules folder
 engine.Run("import paho.mqtt.client as mqtt");
 ```
+
+Packages distributed outside PyPI install the same way, from a wheel file or from folders searched before PyPI
+(pip's `--find-links`); installing a newer version first removes the files listed in the old one's `RECORD`:
+
+```powershell
+pysharp install dist/screen9-1.0.0-py3-none-any.whl
+pysharp install screen9 --find-links dist          # highest version found there, or screen9==1.0.0
+```
+
+`pysharp run script.py --flag x` passes everything after the script to `sys.argv`, options included, like `python`.
 
 ### 6. Error handling, tracebacks and variable inspection
 

@@ -575,6 +575,7 @@ public static class PyOps
         PyRange r => (int)r.Count,
         PyInstance inst when interp.TryCallMethod(inst, "__len__", Array.Empty<object>(), out var len)
             => (int)AsBigInt(len, "__len__"),
+        ClrObject { Instance: System.Collections.ICollection collection } => collection.Count, // .NET arrays, lists, dictionaries
         _ => throw PyErr.TypeError($"object of type '{TypeName(o)}' has no len()"),
     };
 
