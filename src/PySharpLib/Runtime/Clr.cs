@@ -341,6 +341,11 @@ public static class ClrBinder
 
     /// <summary>Invoke a CLR method group, resolving overloads by arity and marshalled argument types.</summary>
     public static object InvokeMethod(ClrMethod method, object[] args)
+        => ClrMarshal.ToPython(InvokeMethodRaw(method, args));
+
+    /// <summary>Calls the method and returns what it returned, not yet converted to a Python value: the suspendable
+    /// evaluator (<c>Interp.RunModuleAsync</c>) awaits a <see cref="Task"/>/<see cref="ValueTask"/> result before converting it.</summary>
+    public static object? InvokeMethodRaw(ClrMethod method, object[] args)
     {
         var flags = (method.Target is null ? StaticFlags : InstanceFlags);
         var candidates = method.Type.GetMethods(flags).Where(m => m.Name == method.Name).ToArray();
@@ -348,7 +353,7 @@ public static class ClrBinder
             throw PyErr.AttributeError($"'{method.Type.Name}' has no method '{method.Name}'");
 
         if (TryBind(candidates, args, out var chosen, out var marshalled))
-            return ClrMarshal.ToPython(Clr(() => chosen!.Invoke(method.Target, marshalled)));
+            return Clr(() => chosen!.Invoke(method.Target, marshalled));
 
         throw PyErr.TypeError(
             $"no overload of '{method.Type.Name}.{method.Name}' matches {args.Length} argument(s) of the given types");

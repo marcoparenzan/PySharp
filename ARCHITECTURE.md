@@ -280,6 +280,48 @@ separate per-thread stack (a traceback does not stitch across the thread boundar
 
 ---
 
+## 12d. Suspendable evaluator (`PyEngine.RunAsync`, `Interpretation/InterpAsync.cs`)
+
+**Problem.** A host with a single thread — a browser running .NET as WebAssembly — cannot block: a Python `sleep`
+that parks the thread freezes the page, and `Run` cannot even start there (it needs a thread with a 64 MB stack,
+§5; generators and coroutines use one thread each, §6). .NET's WebAssembly threads are experimental and not
+supported for Blazor, and need cross-origin isolation headers, so they were not an option.
+
+**Decision — a second, suspendable evaluator beside the first, not a rewrite of it.** `RunAsync` runs the same AST
+on the *caller's* thread with `async`/`await` (`ValueTask`), and the synchronous `Exec`/`Eval` stay untouched (the
+whole existing suite keeps testing them). Why not make `Eval` async everywhere: ~3800 lines of hot code would pay for
+state machines on every node, and every path that has no reason to wait would change.
+
+- **Where it can wait**: a call to a .NET method that returns `Task`/`Task<T>`/`ValueTask`/`ValueTask<T>` (the host's own
+  `async` method, seen from Python as `host.sleep(0.1)`: `ClrBinder.InvokeMethodRaw` returns the raw result and the
+  evaluator awaits it before `ClrMarshal.ToPython`), and a builtin with an `AsyncFn` (`time.sleep` has one). A
+  .NET exception from the awaited work becomes the Python exception as on the blocking path
+  (`OperationCanceledException` → `KeyboardInterrupt`).
+- **What it re-implements**: only what can contain a call — `ExecAsync` for block / expression / assign / augmented
+  assign / `if` / `while` / `for` / `return` / `try` / `with`, `EvalAsync` for the expressions that nest calls (call, attribute,
+  index, slice, unary/binary/bool/compare, if-expression, walrus, tuple/list/set/dict), `CallAsync` for bound
+  methods, functions, lambdas, static methods and `__call__`. Everything else, and every statement or expression
+  with no call inside (`NeedsAsync`, memoized by node identity: the AST nodes are records, equal by value), runs on
+  the synchronous evaluator through the same helpers (`BinaryOp`, `GetAttr`, `AssignTo`, `ApplyAugAssign`…), so
+  the two cannot drift apart on semantics. Control flow keeps using the same signal exceptions.
+- **State**: the synchronous evaluator keeps its frame stack and recursion count per thread, which a wait may
+  change; the suspendable one keeps frames in what it passes down and a depth counter in the instance. One
+  asynchronous run at a time per `Interp`.
+- **Not followed (they run synchronously, so a wait inside does not suspend)**: class bodies, `__init__` and other methods
+  reached through operators or instantiation, comprehensions, f-strings, `match`, callbacks passed to builtins
+  (`sorted(key=f)`), decorators, annotated assignments, and generators/coroutines (`async def` and `yield` still
+  need threads, so they are not available where threads are not). A .NET task returned inside one of these is not
+  awaited: the script sees the task object. Do the waiting in plain functions and methods.
+- **Stack**: `RunAsync` has no `BigStack`; the recursion depth is what the caller's stack allows (the limit of 1000
+  calls still applies). A wait unwinds nothing: the continuation resumes on the host's context.
+
+Used by the Screen9 website to run `gorillas.py` in the browser (the host's `sleep`/`tone` return tasks). Tests:
+`M11_Interop/RunAsyncTests.cs` — a wait is a real suspension (the run is not complete while a task is pending, and
+no thread is parked), runs on the caller's thread, results/exceptions/cancellation of tasks, waits inside loops,
+methods, `try/finally`, and a differential set of scripts that must print the same through `Run` and `RunAsync`.
+
+---
+
 ## 13. Known architectural limits (v1)
 
 - Tree-walking, not bytecode: simplicity/debuggability favored over performance.
@@ -287,6 +329,7 @@ separate per-thread stack (a traceback does not stitch across the thread boundar
   (`int.__eq__` is unreachable), because there is no real type object behind each value.
 - No `match`, complex numbers, custom metaclasses (beyond what `enum` needs), `exec()`/`eval()`.
   (`async`/`await` and an `asyncio` loop **are** now supported — see §6b.)
-- Coroutines and generators use one background thread each (§6, §6b): correct but not the cheapest.
+- Coroutines and generators use one background thread each (§6, §6b): correct but not the cheapest, and not available
+  where threads are not (a browser). `RunAsync` (§12d) waits without a thread, but only through plain calls.
 
 These limits are the natural starting point for future work (see `TODO.md`).

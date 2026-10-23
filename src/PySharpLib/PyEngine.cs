@@ -77,6 +77,28 @@ public sealed class PyEngine
         return module;
     }
 
+    /// <summary>
+    /// Like <see cref="Run(string, string)"/>, but on the <b>caller's thread</b> and able to wait: a call to a .NET method that
+    /// returns a <see cref="Task"/>/<see cref="ValueTask"/> (<c>host.sleep(0.1)</c>) and <c>time.sleep</c> are awaited instead of
+    /// blocking. For hosts with a single thread — a browser running .NET as WebAssembly — where a blocking
+    /// <c>sleep</c> would freeze the page and where <see cref="Run(string, string)"/> cannot even start (it needs a thread
+    /// with a large stack). See <see cref="Interpretation.Interp"/>'s suspendable evaluator for what can wait and what
+    /// (class bodies, <c>__init__</c>, comprehensions, callbacks of builtins, generators, coroutines) still runs
+    /// synchronously. The recursion depth is limited by the caller's stack: lower than <see cref="Run(string, string)"/>'s.
+    /// </summary>
+    public async ValueTask<PyModule> RunAsync(string source, string fileName = "<string>")
+    {
+        var module = CreateModule("__main__");
+        module.FileName = fileName;
+        foreach (var (name, value) in Globals)
+            module.Dict[name] = Runtime.ClrMarshal.ToPython(value);
+        var ast = Parser.Parse(source, fileName);
+        await Interp.RunModuleAsync(ast, module);
+        if (Importer.Modules.TryGet("atexit", out var atexitObj) && atexitObj is PyModule atexitModule)
+            Modules.AtexitModule.RunAtExit(Interp, atexitModule);
+        return module;
+    }
+
     /// <summary>Runs the source and returns what was written to stdout (for tests).</summary>
     public static string CaptureOutput(string source, string fileName = "<test>")
     {

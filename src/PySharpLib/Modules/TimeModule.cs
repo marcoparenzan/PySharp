@@ -31,7 +31,18 @@ public static class TimeModule
                 throw PyErr.ValueError("sleep length must be non-negative");
             Thread.Sleep(TimeSpan.FromSeconds(seconds));
             return PyNone.Instance;
-        });
+        })
+        {
+            // PyEngine.RunAsync: wait without holding a thread (a browser has only one).
+            AsyncFn = async (_, args, _) =>
+            {
+                double seconds = PyOps.AsDouble(args[0]);
+                if (seconds < 0)
+                    throw PyErr.ValueError("sleep length must be non-negative");
+                await Task.Delay(TimeSpan.FromSeconds(seconds));
+                return PyNone.Instance;
+            },
+        };
 
         d["strftime"] = new PyBuiltinFunction("strftime", (interp, args, _) =>
         {

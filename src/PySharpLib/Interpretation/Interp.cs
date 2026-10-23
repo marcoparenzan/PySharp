@@ -11,7 +11,7 @@ using PySharpLib.Runtime;
 namespace PySharpLib.Interpretation;
 
 /// <summary>Interprete tree-walking di PySharp.</summary>
-public sealed class Interp
+public sealed partial class Interp
 {
     private static readonly Dictionary<string, (string Dunder, string Reflected)> BinDunders = new()
     {
@@ -419,7 +419,13 @@ public sealed class Interp
     {
         var current = Eval(a.Target, env);
         var operand = Eval(a.Value, env);
+        ApplyAugAssign(a, env, current, operand);
+    }
 
+    /// <summary>The part of <c>target op= value</c> after both sides are evaluated (shared with the
+    /// suspendable evaluator, see InterpAsync.cs).</summary>
+    private void ApplyAugAssign(AugAssignStmt a, Env env, object current, object operand)
+    {
         // In-place for mutable types
         if (current is PyList list && a.Op == "+")
         {

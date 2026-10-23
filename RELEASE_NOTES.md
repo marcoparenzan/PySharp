@@ -450,6 +450,24 @@ course notebooks), Phase 1 of [NOTEBOOKS_PLAN.md](NOTEBOOKS_PLAN.md).
 
 ---
 
+## v2.6.0 — `PyEngine.RunAsync`: Python that waits instead of blocking a thread — 2026-10-23
+
+For hosts with a single thread (a browser running .NET as WebAssembly), where a Python `sleep` that blocks would
+freeze the page and `Run` cannot start (it needs a thread). Details in [ARCHITECTURE.md](ARCHITECTURE.md) §12d.
+
+- **`await engine.RunAsync(source)`** runs the script on the caller's thread. A call to a .NET method that returns a
+  `Task`/`ValueTask` (`host.sleep(0.1)` with `public Task sleep(double s)`) and `time.sleep` are **awaited**
+  instead of blocking; the awaited result becomes the Python value, an exception becomes the Python exception
+  (`OperationCanceledException` → `KeyboardInterrupt`).
+- Implemented as a second evaluator (`InterpAsync.cs`) over the same AST that re-implements only statements and
+  expressions that can contain a call and delegates the rest to the synchronous evaluator; `Run` is unchanged.
+- **Limits**: a wait inside a class body, `__init__`, a comprehension, an f-string, `match`, a decorator or a callback of a
+  builtin does not suspend; generators and coroutines (`yield`, `async def`) still use threads.
+- Small supporting changes: `Interp` is `partial`; `ClrBinder.InvokeMethodRaw`; `PyBuiltinFunction.AsyncFn`.
+- 14 new tests (`RunAsyncTests`). **Packaging:** only `PySharp.Interpreter` is 2.6.0 (the other packages stay at 2.5.0).
+
+---
+
 ## v2.5.0 — .NET packages installable with the mini-pip — 2026-10-22
 
 A package can now ship a .NET library inside a wheel and be installed independently of PySharp (first user: the
