@@ -369,12 +369,12 @@ internal static class NumpyFunctions
         Def("diagonal", (i, a, k) =>
         {
             var p = new Args("diagonal", i, a, k, "a", "offset", "axis1", "axis2");
-            return Conv.Wrap(np.Diagonal(p.ND(0), p.Int(1, 0)));
+            return Conv.Wrap(np.Diagonal(p.ND(0), p.Int(1, 0), p.Int(2, 0), p.Int(3, 1)));
         });
         Def("trace", (i, a, k) =>
         {
             var p = new Args("trace", i, a, k, "a", "offset", "axis1", "axis2", "dtype", "out");
-            return Conv.Result(np.Trace(p.ND(0), p.Int(1, 0)));
+            return p.Finish(5, np.Trace(p.ND(0), p.Int(1, 0), p.Int(2, 0), p.Int(3, 1), p.DType(4)));
         });
         Def("frombuffer", (i, a, k) =>
         {
@@ -571,7 +571,7 @@ internal static class NumpyFunctions
         Def("set_printoptions", (i, a, k) =>
         {
             var p = new Args("set_printoptions", i, a, k, "precision", "threshold", "edgeitems", "linewidth", "suppress", "nanstr", "infstr");
-            var o = PrintOptions.Default;
+            var o = NumpyPrint.For(i);
             if (p.Has(0)) o.Precision = p.Int(0, 8);
             if (p.Has(1)) o.Threshold = p.Int(1, 1000);
             if (p.Has(2)) o.EdgeItems = p.Int(2, 3);
@@ -583,7 +583,7 @@ internal static class NumpyFunctions
         });
         Def("get_printoptions", (i, a, k) =>
         {
-            var o = PrintOptions.Default;
+            var o = NumpyPrint.For(i);
             var d = new PyDict();
             d["precision"] = new BigInteger(o.Precision);
             d["threshold"] = new BigInteger(o.Threshold);
@@ -592,9 +592,9 @@ internal static class NumpyFunctions
             d["suppress"] = o.Suppress;
             return d;
         });
-        Def("array2string", (i, a, k) => ArrayFormat.Str(Conv.ND(a[0])));
-        Def("array_str", (i, a, k) => ArrayFormat.Str(Conv.ND(a[0])));
-        Def("array_repr", (i, a, k) => ArrayFormat.Repr(Conv.ND(a[0])));
+        Def("array2string", (i, a, k) => ArrayFormat.Str(Conv.ND(a[0]), NumpyPrint.For(i)));
+        Def("array_str", (i, a, k) => ArrayFormat.Str(Conv.ND(a[0]), NumpyPrint.For(i)));
+        Def("array_repr", (i, a, k) => ArrayFormat.Repr(Conv.ND(a[0]), NumpyPrint.For(i)));
 
         // ndarray-only methods that live in the same table so the class can pick them up
         Def("astype", (i, a, k) =>
@@ -642,6 +642,7 @@ internal static class NumpyFunctions
             if (p[1] is PyNone) return Conv.Wrap(np.Sort(nd, null));
             return Conv.Wrap(np.Sort(nd, p.Int(1, -1)));
         });
+        Def("sort_complex", (i, a, k) => Conv.Wrap(np.SortComplex(new Args("sort_complex", i, a, k, "a").ND(0))));
         Def("argsort", (i, a, k) =>
         {
             var p = new Args("argsort", i, a, k, "a", "axis", "kind", "order");
@@ -953,3 +954,5 @@ internal static class NumpyFunctions
         return new PyList(items);
     }
 }
+
+

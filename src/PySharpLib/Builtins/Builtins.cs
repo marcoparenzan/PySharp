@@ -696,11 +696,39 @@ public static class BuiltinsFactory
         // bool]`, referenced as the *string* "SchemaOrBool" throughout Schema's own fields) — a
         // documented, previously-unexercised Axis A gap until this was the first real scenario to
         // need it. See FASTAPI_PLAN.md Phase 4.
+        Add("compile", (_, args, kwargs) =>
+        {
+            if (args.Length < 3 || args.Length > 6 || args[1] is not string filename || args[2] is not string mode)
+                throw PyErr.TypeError("compile() requires source, filename and mode strings");
+            if (mode is not ("exec" or "eval")) throw PyErr.NotImplementedError("compile supports exec and eval modes");
+            object flags = args.Length > 3 ? args[3] : kwargs is not null && kwargs.TryGetValue("flags", out var f) ? f : BigInteger.Zero;
+            if (flags is not BigInteger flagValue) throw PyErr.TypeError("flags must be an integer");
+            if (flagValue != 0 && flagValue != 1024) throw PyErr.NotImplementedError("compile flags are not supported");
+            if (args.Length > 5 || kwargs is not null && kwargs.ContainsKey("optimize"))
+                throw PyErr.NotImplementedError("compile optimization is not supported");
+            if (kwargs is not null && kwargs.Keys.Any(k => k is not ("flags" or "dont_inherit" or "optimize")))
+                throw PyErr.TypeError("unexpected compile keyword argument");
+            if (flagValue == 1024)
+                return args[0] is string astSource ? AstModule.ParsePublic(astSource,filename,mode) : throw PyErr.TypeError("AST parsing requires a source string");
+            if (args[0] is PyInstance astNode) return AstModule.CompilePublic(astNode,filename,mode);
+            if (args[0] is not string source) throw PyErr.TypeError("compile requires string or supported AST");
+            try
+            {
+                return mode == "exec"
+                    ? new PyCompiledCode(filename, mode, Parsing.Parser.Parse(source, filename), null)
+                    : new PyCompiledCode(filename, mode, null, Parsing.Parser.ParseExpression(source));
+            }
+            catch (PySyntaxError ex) { throw PyErr.SyntaxLike(ex.Message); }
+        });
         Add("eval", (interp, args, kwargs) =>
         {
-            if (args.Length == 0 || args[0] is not string source)
-                throw PyErr.TypeError("eval() arg 1 must be a string");
-            var expr = Parsing.Parser.ParseExpression(source);
+            if (args.Length == 0) throw PyErr.TypeError("eval() requires a source or code object");
+            var expr = args[0] switch
+            {
+                string source => Parsing.Parser.ParseExpression(source),
+                PyCompiledCode { Expression: not null } code => code.Expression,
+                _ => throw PyErr.TypeError("eval() requires a string or eval code object")
+            };
 
             object? globalsArg = args.Length > 1 ? args[1]
                 : kwargs is not null && kwargs.TryGetValue("globals", out var g) ? g : null;
@@ -739,9 +767,14 @@ public static class BuiltinsFactory
         // this one package.
         Add("exec", (interp, args, kwargs) =>
         {
-            if (args.Length == 0 || args[0] is not string source)
-                throw PyErr.TypeError("exec() arg 1 must be a string");
-            var moduleAst = Parsing.Parser.Parse(source, "<string>");
+            if (args.Length == 0) throw PyErr.TypeError("exec() requires source or code");
+            var filename = args[0] is PyCompiledCode compiled ? compiled.FileName : "<string>";
+            var moduleAst = args[0] switch
+            {
+                string source => Parsing.Parser.Parse(source, filename),
+                PyCompiledCode { Statements: not null } code => code.Statements,
+                _ => throw PyErr.TypeError("exec() requires a string or exec code object")
+            };
 
             object? globalsArg = args.Length > 1 ? args[1]
                 : kwargs is not null && kwargs.TryGetValue("globals", out var g) ? g : null;
@@ -755,7 +788,7 @@ public static class BuiltinsFactory
             }
 
             var globalsDict = globalsArg as PyDict ?? throw PyErr.TypeError("exec() globals must be a dict");
-            var execModule = new PyModule("<string>", globalsDict) { Builtins = interp.BuiltinsModule };
+            var execModule = new PyModule("<string>", globalsDict) { Builtins = interp.BuiltinsModule, FileName = filename };
 
             object? localsArg = args.Length > 2 ? args[2]
                 : kwargs is not null && kwargs.TryGetValue("locals", out var l) ? l : null;

@@ -346,7 +346,7 @@ public sealed partial class Interp
                     foreach (var alias in fi.Names)
                     {
                         object value;
-                        if (resolved.Dict.TryGet(alias.DottedName, out var v))
+                        if (TryGetAttr(resolved, alias.DottedName, out var v))
                         {
                             value = v;
                         }
@@ -2252,6 +2252,7 @@ public sealed partial class Interp
 
     private bool CompareOnce(string op, object left, object right)
     {
+        if (ClrOperators.Binary(op, left, right, out var clrResult)) return (bool)clrResult;
         switch (op)
         {
             case "is":
@@ -2337,6 +2338,7 @@ public sealed partial class Interp
     /// collapsing it through `PyOps.Truthy`.</summary>
     internal object CompareRaw(string op, object left, object right)
     {
+        if (ClrOperators.Binary(op, left, right, out var clrResult)) return clrResult;
         switch (op)
         {
             case "is":
@@ -2453,6 +2455,7 @@ public sealed partial class Interp
 
     public object UnaryOp(string op, object operand)
     {
+        if (ClrOperators.Unary(op, operand, out var clrResult)) return clrResult;
         switch (op)
         {
             case "not":
@@ -2489,6 +2492,7 @@ public sealed partial class Interp
 
     public object BinaryOp(string op, object a, object b)
     {
+        if (ClrOperators.Binary(op, a, b, out var clrResult)) return clrResult;
         // numeri
         if (PyOps.IsNumber(a) && PyOps.IsNumber(b))
             return NumericOp(op, a, b);
@@ -2777,6 +2781,8 @@ public sealed partial class Interp
 
     public object GetItem(object obj, object index)
     {
+        if (obj is ClrMethod method) return ClrBinder.SelectGeneric(method, index);
+        if (obj is ClrType type) return ClrBinder.SelectGenericType(type, index);
         switch (obj)
         {
             case PyDict d:
@@ -3195,6 +3201,19 @@ public sealed partial class Interp
                 {
                     value = module.Dict;
                     return true;
+                }
+                // PEP 562: module-level __getattr__ resolves lazy exports after normal lookup.
+                if (module.Dict.TryGet("__getattr__", out var hook))
+                {
+                    try
+                    {
+                        value = Call(hook, new object[] { name });
+                        return true;
+                    }
+                    catch (PyRaise ex) when (PyErr.Matches(ex.Value, PyErr.AttributeErrorClass))
+                    {
+                        // AttributeError means absence; other errors from the lazy import propagate.
+                    }
                 }
                 value = PyNone.Instance;
                 return false;

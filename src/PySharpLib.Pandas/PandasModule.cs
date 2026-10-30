@@ -15,10 +15,13 @@ namespace PySharpLib.Pandas;
 /// <summary>Opt-in registration of the <c>pandas</c> module (Series / DataFrame / Index over NDSharp.Frame).</summary>
 public static class PandasRegistration
 {
+    // the pandas classes are static singletons: build the module once per process, not once per import
+    private static readonly SharedModule Shared = new(PandasModule.Create);
+
     public static void Register(Importer importer)
     {
         importer.RegisterSourceModule("_pandas_plot", PdPlot.Source);
-        importer.RegisterBuiltin("pandas", interp => { PdPlot.Remember(interp, importer); return PandasModule.Create(); });
+        importer.RegisterBuiltin("pandas", interp => { PdPlot.Remember(interp, importer); return Shared.Create(); });
     }
 }
 
@@ -124,3 +127,4 @@ internal static class PdFunctions
         return CellIsNa(PdConv.ToCell(v)) != negate;
     }
 }
+

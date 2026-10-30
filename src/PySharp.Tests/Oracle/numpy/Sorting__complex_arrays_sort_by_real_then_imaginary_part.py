@@ -1,0 +1,11 @@
+import numpy as np
+a = np.array([3 + 1j, 1 + 2j, 1 + 1j, 2 - 1j, 1 - 5j, 1 + 1j])
+s = np.sort(a)
+print(s.dtype, s.shape)
+print(s.real)
+print(s.imag)
+print(np.argsort(a, kind="stable"))
+b = np.array([[2 + 1j, 1 + 1j, 1 - 1j], [0 + 0j, 5 + 2j, 5 - 2j]])
+print(np.sort(b, axis=1).imag)
+print(np.sort(b, axis=0).real)
+print(np.sort(b, axis=None).imag)

@@ -15,7 +15,7 @@ namespace PySharpLib.Modules;
 /// chain, not FastAPI itself yet — actually called for it). Built on `PyFunction.Params`/`Defaults`,
 /// the same source `__annotations__` already reads (see Interp.cs's `case "__annotations__"`).
 /// </summary>
-public static class InspectModule
+public static partial class InspectModule
 {
     public static readonly PyInstance Empty = new(new PyClass("_empty", new List<PyClass>()));
 
@@ -47,6 +47,11 @@ public static class InspectModule
                 ? CleanDoc(s)
                 : PyNone.Instance);
 
+        d["getsource"] = new PyBuiltinFunction("getsource", (_, a, kw) =>
+        {
+            if (a.Length != 1 || kw is { Count: > 0 }) throw PyErr.TypeError("getsource() requires one positional argument");
+            return ReadSource(a[0]);
+        });
         d["Parameter"] = ParameterClass;
         d["Signature"] = SignatureClass;
         d["signature"] = new PyBuiltinFunction("signature", (interp, a, kw) =>
@@ -84,7 +89,7 @@ public static class InspectModule
         // shim's own `PyCode`). Found via real sqlalchemy's own `util/langhelpers.py`
         // (`inspect_getfullargspec`, ported from CPython's own `inspect.py`, checks
         // `iscode(func)` to special-case being handed a bare code object directly).
-        d["iscode"] = new PyBuiltinFunction("iscode", (_, a, _) => a[0] is PyCode);
+        d["iscode"] = new PyBuiltinFunction("iscode", (_, a, _) => a[0] is PyCode or PyCompiledCode);
         // Real CPython `inspect.CO_*` constants (mirroring `co_flags`'s own bits) — same real
         // sqlalchemy `inspect_getfullargspec` port needs these by name, not just the raw bit value.
         d["CO_OPTIMIZED"] = new BigInteger(0x01);

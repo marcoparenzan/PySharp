@@ -19,6 +19,7 @@ public sealed class PretrainedTheoryAttribute : TheoryAttribute
     }
 }
 
+[Collection("oracle-process-state")]
 public class OracleTests
 {
     private static string Root => Path.Combine(AppContext.BaseDirectory, "Oracle");
@@ -39,6 +40,9 @@ public class OracleTests
     {
         var dir = Path.Combine(Root, lib);
         var source = File.ReadAllText(Path.Combine(dir, name + ".py"));
+        // This snippet shares a historical fixed temp name with other tests. Isolate each run.
+        if (lib == "pandas" && name == "P3_io")
+            source = source.Replace("pysharp_pandas_io_test.csv", "pysharp_pandas_oracle_" + Guid.NewGuid().ToString("N") + ".csv");
         var expected = File.ReadAllText(Path.Combine(dir, name + ".expected"));
         var previous = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(dir);

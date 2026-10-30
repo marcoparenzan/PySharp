@@ -23,6 +23,20 @@ public static class SysModule
             : OperatingSystem.IsMacOS() ? "darwin" : "linux";
         d["maxsize"] = new BigInteger(long.MaxValue);
         d["maxunicode"] = new BigInteger(0x10FFFF);
+        d["_getframe"] = new PyBuiltinFunction("_getframe", (_, args, kwargs) =>
+        {
+            if (args.Length > 1 || kwargs is { Count: > 0 })
+                throw PyErr.TypeError("_getframe() accepts at most one positional argument");
+            if (args.Length == 0) return Interp.GetPythonFrame(0);
+            var depth = args[0] switch
+            {
+                BigInteger n => n,
+                bool b => new BigInteger(b ? 1 : 0),
+                _ => throw PyErr.TypeError("depth must be an integer")
+            };
+            if (depth > int.MaxValue) throw PyErr.ValueError("call stack is not deep enough");
+            return Interp.GetPythonFrame(depth < 0 ? 0 : (int)depth);
+        });
         d["argv"] = new PyList(interp.Argv.Select(x => (object)x));
         // Real CPython: sys.audit(event, *args) fires registered audit hooks (PEP 578) — a real
         // no-op here since nothing calls sys.addaudithook to register one. Found via real urllib3's

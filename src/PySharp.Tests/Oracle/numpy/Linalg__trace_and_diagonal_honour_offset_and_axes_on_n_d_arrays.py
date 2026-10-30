@@ -1,0 +1,13 @@
+import numpy as np
+a = np.arange(24).reshape(2, 3, 4)
+print(np.trace(a, axis1=1, axis2=2))
+print(np.trace(a, offset=1, axis1=1, axis2=2))
+print(np.trace(a, axis1=0, axis2=2))
+print(np.diagonal(a, axis1=1, axis2=2))
+print(np.diagonal(a, offset=-1, axis1=0, axis2=1).shape)
+print(np.diagonal(a, offset=5).shape)
+b = np.arange(120.0).reshape(2, 3, 4, 5)
+print(np.diagonal(b, 1, 2, 3).shape, np.trace(b, 0, 1, 3).tolist())
+print(a.trace(axis1=2, axis2=0), a.diagonal(1, 0, 2).tolist())
+print(np.trace(np.array([[200, 0], [0, 100]], dtype=np.uint8), dtype=np.float64))
+print(np.trace(np.arange(9).reshape(3, 3)), np.trace(np.eye(3), offset=1))

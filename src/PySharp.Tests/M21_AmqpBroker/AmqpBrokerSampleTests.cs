@@ -21,9 +21,9 @@ namespace PySharp.Tests.M21_AmqpBroker;
 [Collection("asyncio-run")]
 public class AmqpBrokerSampleTests : IClassFixture<PikaInstallFixture>
 {
-    // bin/Debug/net10.0 -> Debug -> bin -> PySharp.Tests -> src -> repo root -> samples
+    // bin/Debug/net11.0 -> Debug -> bin -> PySharp.Tests -> src -> repo root -> samples
     private static readonly string SamplesDir =
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples"));
+        Path.Combine(TestRepository.Root, "samples");
 
     private readonly PikaInstallFixture _pika;
 

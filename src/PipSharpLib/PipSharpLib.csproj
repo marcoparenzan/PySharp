@@ -1,17 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
   </ItemGroup>
-
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-
     <!-- NuGet package metadata: the mini-pip (pure-wheel installer from PyPI). -->
     <PackageId>PySharp.Pip</PackageId>
-    <Version>2.5.0</Version>
+    <Version>2.5.1-net11-preview.1</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PipSharp — a minimal pip for PySharp: resolves and extracts pure (py3-none-any) wheels from PyPI.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -21,9 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-
 </Project>

@@ -18,11 +18,12 @@ namespace PySharpLib.Modules;
 /// used to parse dict/tuple-shaped values out of AMQP URL query-string parameters — a path this
 /// project's own scenario 7 demo never actually exercises, but the bare `import ast` still needs a
 /// real module to succeed). See ROADMAP.md scenario 7.</summary>
-public static class AstModule
+public static partial class AstModule
 {
     public static PyModule Create()
     {
         var m = new PyModule("ast");
+        RegisterPublicAst(m);
         m.Dict["literal_eval"] = new PyBuiltinFunction("literal_eval", (_, a, _) =>
         {
             if (a.Length == 0 || a[0] is not string source)

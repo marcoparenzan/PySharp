@@ -39,6 +39,17 @@ public sealed class FastApiInstallFixture : IDisposable
         installer.Install("certifi");
         installer.Install("httpcore");
         installer.Install("h11");
+        // Preserve source/version evidence for reproducibility of the unpinned dependency probe.
+        var evidence = Path.Combine(@"D:\Dev\BuildArtifacts\PySharp", "dependency-evidence", "anyio");
+        Directory.CreateDirectory(evidence);
+        foreach (var source in Directory.EnumerateFiles(Path.Combine(SitePackages, "anyio"), "*.py", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(evidence, Path.GetRelativePath(Path.Combine(SitePackages, "anyio"), source));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(source, target, true);
+        }
+        foreach (var metadata in Directory.EnumerateFiles(SitePackages, "METADATA", SearchOption.AllDirectories).Where(p => Path.GetFileName(Path.GetDirectoryName(p)!).StartsWith("anyio-")))
+            File.Copy(metadata, Path.Combine(evidence, "METADATA"), true);
     }
 
     public void Dispose()

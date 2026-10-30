@@ -4,7 +4,7 @@
 param(
   [string]$Notebooks = 'D:\clones\sbirchfield.github.io\cvintro\notebooks',
   [string]$Out = (Join-Path $PSScriptRoot '..\NOTEBOOKS_BASELINE.md'),
-  [string]$Pysharp = (Join-Path $PSScriptRoot '..\src\PySharp\bin\Debug\net10.0\PySharp.dll')
+  [string]$Pysharp = (Join-Path $PSScriptRoot '..\src\PySharp\bin\Debug\net11.0\PySharp.dll')
 )
 $tmp = Join-Path $env:TEMP 'nbprobe'; New-Item -ItemType Directory -Force $tmp | Out-Null
 $rows = @()

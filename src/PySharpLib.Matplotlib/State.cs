@@ -105,10 +105,8 @@ internal static class State
 
     public static PyInstance Wrap(object native, Func<object, PyClass> classOf)
     {
-        if (Wrappers.TryGetValue(native, out var inst)) return inst;
-        inst = new PyInstance(classOf(native)) { Native = native };
-        Wrappers.Add(native, inst);
-        return inst;
+        // GetValue is atomic: two interpreters wrapping the same shared native object (a colormap, say) at once must get the same wrapper
+        return Wrappers.GetValue(native, n => new PyInstance(classOf(n)) { Native = n });
     }
 }
 
@@ -119,3 +117,4 @@ internal sealed class AxesGrid
     public int[] Shape { get; }
     public AxesGrid(PlotAxes[] flat, int[] shape) { Flat = flat; Shape = shape; }
 }
+

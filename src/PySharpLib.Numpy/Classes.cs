@@ -240,8 +240,8 @@ internal static class Classes
             throw PyErr.TypeError("ndarray cannot be constructed directly; use numpy.array(), numpy.zeros(), ..."));
 
         Add("__setstate__", (_, a, _) => NumpyPickle.SetState(a[0], a[1]));
-        Add("__repr__", (_, a, _) => ArrayFormat.Repr(Nd(a[0])));
-        Add("__str__", (_, a, _) => ArrayFormat.Str(Nd(a[0])));
+        Add("__repr__", (i, a, _) => ArrayFormat.Repr(Nd(a[0]), NumpyPrint.For(i)));
+        Add("__str__", (i, a, _) => ArrayFormat.Str(Nd(a[0]), NumpyPrint.For(i)));
         Add("__len__", (_, a, _) =>
         {
             var d = Nd(a[0]);
@@ -371,3 +371,4 @@ internal static class Classes
         cls.Dict["base"] = Native.Prop(s => Conv.ND(s).Base is { } b ? Conv.Wrap(b) : PyNone.Instance);
     }
 }
+

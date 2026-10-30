@@ -3781,7 +3781,7 @@ public class HttpxRequestChainFixesTests
 
     [Fact]
     public void MutableMapping_pop_popitem_setdefault_and_clear_are_real_mixin_methods()
-        => Assert.Equal("1\ndefault\nKeyError: missing\n3\n3\n('b', 2)\n{}", Run("""
+        => Assert.Equal("1\ndefault\nKeyError: 'missing'\n3\n3\n('b', 2)\n{}", Run("""
             from collections.abc import MutableMapping
             class MyMap(MutableMapping):
                 def __init__(self):

@@ -38,6 +38,12 @@ internal static class NumpyLinalg
             return new PyTuple(new object[] { Conv.Wrap(w), Conv.Wrap(v) });
         });
         Def("eigvalsh", (i, a, k) => Conv.Wrap(np.EigvalsH(new Args("eigvalsh", i, a, k, "a", "UPLO").ND(0))));
+        Def("eig", (i, a, k) =>
+        {
+            var (w, v) = np.Eig(new Args("eig", i, a, k, "a").ND(0));
+            return new PyTuple(new object[] { Conv.Wrap(w), Conv.Wrap(v) });
+        });
+        Def("eigvals", (i, a, k) => Conv.Wrap(np.Eigvals(new Args("eigvals", i, a, k, "a").ND(0))));
         Def("svd", (i, a, k) =>
         {
             var p = new Args("svd", i, a, k, "a", "full_matrices", "compute_uv", "hermitian");
@@ -66,3 +72,4 @@ internal static class NumpyLinalg
         return m;
     }
 }
+

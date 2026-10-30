@@ -1,0 +1,8 @@
+<Project>
+ <PropertyGroup>
+  <UseArtifactsOutput>true</UseArtifactsOutput>
+  <ArtifactsPath>D:\Dev\BuildArtifacts\PySharp</ArtifactsPath>
+  <PackageOutputPath>D:\Dev\NuGetLocalFeed</PackageOutputPath>
+ </PropertyGroup>
+ <ItemGroup><AssemblyMetadata Include="RepositoryRoot" Value="$(MSBuildThisFileDirectory)" /></ItemGroup>
+</Project>

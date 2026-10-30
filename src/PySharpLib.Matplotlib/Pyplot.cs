@@ -85,9 +85,16 @@ internal static class Modules
 {
     private static PyModule? _root, _pyplot, _patches, _cm, _colors, _gridspec, _style, _figure, _axes;
 
+    /// <summary>
+    /// Guards the lazily built module singletons. Each accessor used to publish its module object before filling it, so a second
+    /// interpreter importing at the same time saw a half-built module (<c>KeyError: Line2D</c>) and rebuilt shared classes concurrently.
+    /// The lock is re-entrant: building pyplot calls into the lines/cm modules.
+    /// </summary>
+    private static readonly object Gate = new();
+
     private static void Def(PyModule m, string name, BuiltinFn fn) => m.Dict[name] = Native.Fn(name, fn);
 
-    public static PyModule Root() => _root ??= BuildRoot();
+    public static PyModule Root() { lock (Gate) return _root ??= BuildRoot(); }
 
     private static PyModule BuildRoot()
     {
@@ -107,7 +114,7 @@ internal static class Modules
 
     // ------------------------------------------------------------------------------------------ pyplot
 
-    public static PyModule PyplotModule() => _pyplot ??= BuildPyplot();
+    public static PyModule PyplotModule() { lock (Gate) return _pyplot ??= BuildPyplot(); }
 
     private static PlotAxes CurrentAxes() => State.Gca();
 
@@ -245,7 +252,7 @@ internal static class Modules
 
     // ------------------------------------------------------------------------------------------ patches
 
-    public static PyModule Patches() => _patches ??= BuildPatches();
+    public static PyModule Patches() { lock (Gate) return _patches ??= BuildPatches(); }
 
     private static PyModule BuildPatches()
     {
@@ -306,7 +313,7 @@ internal static class Modules
 
     // ------------------------------------------------------------------------------------------ cm / colors
 
-    public static PyModule Cm() => _cm ??= BuildCm();
+    public static PyModule Cm() { lock (Gate) return _cm ??= BuildCm(); }
 
     private static PyModule BuildCm()
     {
@@ -318,7 +325,7 @@ internal static class Modules
         return m;
     }
 
-    public static PyModule ColorsModule() => _colors ??= BuildColors();
+    public static PyModule ColorsModule() { lock (Gate) return _colors ??= BuildColors(); }
 
     private static PyModule BuildColors()
     {
@@ -344,7 +351,7 @@ internal static class Modules
 
     // ------------------------------------------------------------------------------------------ gridspec, style, figure, axes
 
-    public static PyModule GridSpecModule() => _gridspec ??= BuildGridSpec();
+    public static PyModule GridSpecModule() { lock (Gate) return _gridspec ??= BuildGridSpec(); }
 
     private static PyModule BuildGridSpec()
     {
@@ -392,7 +399,9 @@ internal static class Modules
         return m;
     }
 
-    public static PyModule Style()
+    public static PyModule Style() { lock (Gate) return StyleCore(); }
+
+    private static PyModule StyleCore()
     {
         if (_style is not null) return _style;
         _style = new PyModule("matplotlib.style");
@@ -401,7 +410,9 @@ internal static class Modules
         return _style;
     }
 
-    public static PyModule FigureModule()
+    public static PyModule FigureModule() { lock (Gate) return FigureModuleCore(); }
+
+    private static PyModule FigureModuleCore()
     {
         if (_figure is not null) return _figure;
         _figure = new PyModule("matplotlib.figure");
@@ -441,7 +452,9 @@ internal static class Modules
 
     private static PyModule? _lines;
 
-    public static PyModule LinesModule()
+    public static PyModule LinesModule() { lock (Gate) return LinesModuleCore(); }
+
+    private static PyModule LinesModuleCore()
     {
         if (_lines is not null) return _lines;
         _lines = new PyModule("matplotlib.lines");
@@ -466,7 +479,9 @@ internal static class Modules
         return _lines;
     }
 
-    public static PyModule AxesModule()
+    public static PyModule AxesModule() { lock (Gate) return AxesModuleCore(); }
+
+    private static PyModule AxesModuleCore()
     {
         if (_axes is not null) return _axes;
         _axes = new PyModule("matplotlib.axes");
@@ -474,3 +489,4 @@ internal static class Modules
         return _axes;
     }
 }
+

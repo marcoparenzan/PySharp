@@ -28,11 +28,20 @@ public static class ImportlibModule
     public static PyModule Create(Importer importer)
     {
         var m = new PyModule("importlib");
-        m.Dict["import_module"] = new PyBuiltinFunction("import_module", (interp, a, _) =>
+        m.Dict["import_module"] = new PyBuiltinFunction("import_module", (interp, a, kw) =>
         {
-            string name = (string)a[0];
+            if(a.Length is < 1 or > 2 || a[0] is not string name) throw PyErr.TypeError("import_module requires a name string");
             if (name.StartsWith('.'))
-                throw PyErr.NotImplementedError("importlib.import_module: relative names are not supported yet");
+            {
+                var package = a.Length>1?a[1]:kw is not null && kw.TryGetValue("package",out var v)?v:PyNone.Instance;
+                if(package is not string pkg || pkg.Length==0) throw PyErr.TypeError("package is required for relative import");
+                int level=name.TakeWhile(c=>c=='.').Count();
+                var parts=pkg.Split('.');
+                if(level>parts.Length)throw PyErr.ImportError("attempted relative import beyond top-level package");
+                var prefix=string.Join(".",parts.Take(parts.Length-level+1));
+                var suffix=name[level..];
+                name=prefix+(suffix.Length>0?"."+suffix:"");
+            }
             return importer.Import(interp, name, 0, null!);
         });
         return m;

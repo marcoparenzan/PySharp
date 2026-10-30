@@ -1,18 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
   </ItemGroup>
-
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-
     <!-- NuGet package metadata: the psycopg2 stdlib module, split out of PySharpLib so the core
          embeddable interpreter doesn't force every consumer to carry Npgsql. -->
     <PackageId>PySharp.Psycopg2</PackageId>
-    <Version>2.5.0</Version>
+    <Version>2.5.1-net11-preview.1</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's psycopg2 module — a real DB-API 2.0 shim over Npgsql (Postgres). Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -22,13 +20,10 @@
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
-
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-
 </Project>

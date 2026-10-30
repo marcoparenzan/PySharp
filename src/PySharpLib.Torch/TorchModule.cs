@@ -19,12 +19,20 @@ namespace PySharpLib.Torch;
 /// <summary>Opt-in registration of <c>torch</c> (tensors, autograd, nn, optim, utils.data) over TorchSharp/libtorch.</summary>
 public static class TorchRegistration
 {
+    // The modules are built once per process (their classes are static singletons shared by every interpreter); one lock for all
+    // four because their builders fill the same classes.
+    private static readonly object BuildGate = new();
+    private static readonly SharedModule C = new(TorchModule.Create, BuildGate);
+    private static readonly SharedModule F = new(TorchFunctional.Create, BuildGate);
+    private static readonly SharedModule Init = new(TorchFunctional.CreateInit, BuildGate);
+    private static readonly SharedModule Utils = new(TorchSerialization.UtilsModule, BuildGate);
+
     public static void Register(Importer importer)
     {
-        importer.RegisterBuiltin("torch._C", _ => TorchModule.Create());
-        importer.RegisterBuiltin("torch._F", _ => TorchFunctional.Create());
-        importer.RegisterBuiltin("torch.nn.init", _ => TorchFunctional.CreateInit());
-        importer.RegisterBuiltin("torch._utils", _ => TorchSerialization.UtilsModule());
+        importer.RegisterBuiltin("torch._C", _ => C.Create());
+        importer.RegisterBuiltin("torch._F", _ => F.Create());
+        importer.RegisterBuiltin("torch.nn.init", _ => Init.Create());
+        importer.RegisterBuiltin("torch._utils", _ => Utils.Create());
         // every embedded py/<module>.py (or <module>.pkg.py for a package's __init__) is a Python-source module
         var names = PySource.ModuleNames().ToList();
         foreach (var (name, pkgFlag) in names)
@@ -527,3 +535,4 @@ internal static class TorchModule
         m.Dict["_save_tensor"] = Ops.Fn("_save_tensor", (i, a, kw) => throw PyErr.NotImplementedError("torch.save is not supported yet"));
     }
 }
+

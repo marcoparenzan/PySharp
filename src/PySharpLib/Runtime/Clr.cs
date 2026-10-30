@@ -52,11 +52,14 @@ public sealed class ClrMethod
     public Type Type { get; }
     public string Name { get; }
 
-    public ClrMethod(object? target, Type type, string name)
+    public Type[]? TypeArguments { get; }
+
+    public ClrMethod(object? target, Type type, string name, Type[]? typeArguments = null)
     {
         Target = target;
         Type = type;
         Name = name;
+        TypeArguments = typeArguments;
     }
 
     public override string ToString() => $"<clr method '{Type.Name}.{Name}'>";
@@ -348,7 +351,21 @@ public static class ClrBinder
     public static object? InvokeMethodRaw(ClrMethod method, object[] args)
     {
         var flags = (method.Target is null ? StaticFlags : InstanceFlags);
-        var candidates = method.Type.GetMethods(flags).Where(m => m.Name == method.Name).ToArray();
+        var methods = method.Type.GetMethods(flags).Where(m => m.Name == method.Name);
+        var closed = new List<MethodInfo>();
+        foreach (var candidate in methods)
+        {
+            if (method.TypeArguments is null)
+            {
+                if (!candidate.ContainsGenericParameters) closed.Add(candidate);
+            }
+            else if (candidate.IsGenericMethodDefinition && candidate.GetGenericArguments().Length == method.TypeArguments.Length)
+            {
+                try { closed.Add(candidate.MakeGenericMethod(method.TypeArguments)); }
+                catch (ArgumentException) { /* This overload's constraints do not accept the explicit types. */ }
+            }
+        }
+        var candidates = closed.ToArray();
         if (candidates.Length == 0)
             throw PyErr.AttributeError($"'{method.Type.Name}' has no method '{method.Name}'");
 
@@ -359,6 +376,28 @@ public static class ClrBinder
             $"no overload of '{method.Type.Name}.{method.Name}' matches {args.Length} argument(s) of the given types");
     }
 
+    /// <summary>Select explicit generic arguments for a CLR method group using method[Type] or method[TypeA, TypeB].</summary>
+    public static ClrMethod SelectGeneric(ClrMethod method, object index)
+    {
+        var values = index is PyTuple tuple ? tuple.Items.ToArray() : new[] { index };
+        if (values.Length == 0 || values.Any(v => v is not ClrType))
+            throw PyErr.TypeError("Generic arguments must be CLR types, not numeric values or constructor functions");
+        var types = values.Cast<ClrType>().Select(t => t.Type).ToArray();
+        if (!method.Type.GetMethods(method.Target is null ? StaticFlags : InstanceFlags)
+            .Any(m => m.Name == method.Name && m.IsGenericMethodDefinition && m.GetGenericArguments().Length == types.Length))
+            throw PyErr.TypeError("No generic method has this type-argument arity");
+        return new ClrMethod(method.Target, method.Type, method.Name, types);
+    }
+    /// <summary>Close a CLR generic type explicitly; no type inference or numeric conversions.</summary>
+    public static ClrType SelectGenericType(ClrType type, object index)
+    {
+        if(!type.Type.IsGenericTypeDefinition) throw PyErr.TypeError("CLR type is not an open generic definition");
+        var values=index is PyTuple tuple?tuple.Items.ToArray():new[]{index};
+        if(values.Length!=type.Type.GetGenericArguments().Length || values.Any(v=>v is not ClrType))
+            throw PyErr.TypeError("Wrong generic type arity or non-CLR type argument");
+        try { return new ClrType(type.Type.MakeGenericType(values.Cast<ClrType>().Select(v=>v.Type).ToArray())); }
+        catch(ArgumentException e) { throw PyErr.TypeError("CLR generic constraints failed: "+e.Message); }
+    }
     /// <summary>Construct a CLR instance (ClrType called like a function).</summary>
     public static object Construct(Type type, object[] args)
     {
@@ -455,7 +494,9 @@ public static class ClrBinder
         // Prefer exact arity; then the overloads that need the fewest omitted optional parameters.
         foreach (var candidate in candidates.OrderBy(c => c.GetParameters().Length - args.Length))
         {
+            if (candidate.ContainsGenericParameters) continue;
             var ps = candidate.GetParameters();
+            if (ps.Any(p => p.ParameterType.IsByRefLike || p.ParameterType.IsByRef)) continue;
             if (ps.Length < args.Length || ps.Skip(args.Length).Any(p => !p.IsOptional))
                 continue;
             var converted = new object?[ps.Length];

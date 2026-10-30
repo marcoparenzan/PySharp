@@ -84,6 +84,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("ctypes", _ => CtypesModule.Create());
         importer.RegisterBuiltin("math", _ => MathModule.Create());
         importer.RegisterBuiltin("decimal", _ => DecimalModule.Create());
+        importer.RegisterBuiltin("mathema", _ => MathemaModule.Create());
         importer.RegisterBuiltin("datetime", _ => DateTimeModule.Create());
         importer.RegisterBuiltin("ipaddress", _ => IpAddressModule.Create());
         importer.RegisterBuiltin("re", _ => ReModule.Create());

@@ -1,19 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
     <ProjectReference Include="..\PySharpLib.Numpy\PySharpLib.Numpy.csproj" />
-    <ProjectReference Include="..\NDSharp.Plot\NDSharp.Plot.csproj" />
+    <PackageReference Include="NDSharp.Plot" Version="2.6.3-net11-preview.2" Condition="'$(ScienceUseSourcePlots)' != 'true'" />
+    <ProjectReference Include="../../../NDSharp/src/NDSharp.Plot/NDSharp.Plot.csproj" Condition="'$(ScienceUseSourcePlots)' == 'true'" />
   </ItemGroup>
-
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-
     <!-- NuGet package metadata: the matplotlib module, a Python binding over NDSharp.Plot. -->
     <PackageId>PySharp.Matplotlib</PackageId>
-    <Version>2.5.0</Version>
+    <Version>2.5.1-net11-preview.2</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's matplotlib.pyplot module — a Python binding over NDSharp.Plot (SkiaSharp renderer). Opt-in companion to PySharp.Interpreter and PySharp.Numpy.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -23,9 +22,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-
 </Project>
