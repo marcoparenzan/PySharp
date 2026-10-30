@@ -61,7 +61,8 @@ public class OrmPostgresGapsTests
     // per-waiter list of single-token semaphores (no thread affinity at all).
     [Fact]
     public void Condition_notify_and_wait_work_correctly_across_different_worker_threads()
-        => Assert.Equal("producer done\nconsumer got: 42", Run("""
+        // The two prints come from two threads, so their order is a race (the consumer can print before the producer does): compare the lines, not their order.
+        => Assert.Equal(["consumer got: 42", "producer done"], Run("""
             import threading
 
             cond = threading.Condition()
@@ -87,7 +88,7 @@ public class OrmPostgresGapsTests
             t2.start()
             t1.join()
             t2.join()
-            """));
+            """).Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).Order(StringComparer.Ordinal).ToArray());
 
     // Real, general interpreter bug: zero-arg `super()`'s implicit `__class__` cell was only ever
     // set by post-hoc walking the finished class namespace for PySharp's own known wrapper shapes
