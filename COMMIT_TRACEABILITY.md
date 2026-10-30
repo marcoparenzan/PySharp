@@ -1,42 +1,42 @@
 # Commit Traceability — PySharp
 
-Un log che associa ogni commit del repository a: versione del pacchetto (`<Version>` in
-`src/PySharp/PySharp.csproj` al momento del commit), file toccati, ed il documento/fase di piano
-che quel commit rappresenta (`FASTAPI_PLAN.md`, `AIOMQTT_PLAN.md`, `ROADMAP.md`,
+A log that associates every commit of the repository with: the package version (`<Version>` in
+`src/PySharp/PySharp.csproj` at the time of the commit), the files touched, and the plan
+document/phase that commit represents (`FASTAPI_PLAN.md`, `AIOMQTT_PLAN.md`, `ROADMAP.md`,
 `RELEASE_NOTES.md`).
 
-**Metodologia e onestà sui limiti**: per i commit degli ultimi round (dal fix del deadlock
-nell'import system in poi, `0ac010b`→`ea5657e`), la correlazione con `FASTAPI_PLAN.md` è diretta —
-ho scritto io stesso quelle sezioni nella stessa sessione in cui i commit sono stati fatti, verificando
-il contenuto esatto di ogni commit (`git show --name-status`) contro i file citati nel piano. Per i
-commit precedenti (pydantic, match/case, subprocess, starlette, aiomqtt, il nucleo async/interop
-iniziale), la correlazione è **ricostruita** incrociando il messaggio di commit, i file
-effettivamente toccati e i riferimenti già presenti in `RELEASE_NOTES.md`/`FASTAPI_PLAN.md` — non
-da conoscenza diretta di quelle sessioni. Dove l'evidenza è forte (i file toccati corrispondono
-esattamente a quanto descritto in una sezione del piano) lo marco come tale; dove è solo plausibile
-lo dico esplicitamente.
+**Methodology and honesty about the limits**: for the commits of the last rounds (from the fix of the deadlock
+in the import system onwards, `0ac010b`→`ea5657e`), the correlation with `FASTAPI_PLAN.md` is direct —
+I wrote those sections myself in the same session in which the commits were made, checking
+the exact content of each commit (`git show --name-status`) against the files cited in the plan. For the
+earlier commits (pydantic, match/case, subprocess, starlette, aiomqtt, the initial async/interop
+core), the correlation is **reconstructed** by crossing the commit message, the files
+actually touched and the references already present in `RELEASE_NOTES.md`/`FASTAPI_PLAN.md` — not
+from direct knowledge of those sessions. Where the evidence is strong (the files touched correspond
+exactly to what is described in a section of the plan) I mark it as such; where it is only plausible
+I say so explicitly.
 
-I commit con più di 25 file modificati sono riassunti per directory (non elencati file per file) per
-tenere il documento leggibile — è il caso principalmente del commit iniziale (193 file) e di poche
-altre patch massicce.
-
----
-
-## Indice per era
-
-1. [Fondamenta e primo rilascio (v1.0.0)](#1-fondamenta-e-primo-rilascio-v100) — `40357da` → `d227d47`
-2. [Async/await, interop .NET, debug, REPL (v1.1.0 → v1.4.1)](#2-asyncawait-interop-net-debug-repl-v110--v141) — `9edbf3a` → `2ff0bae`
-3. [NumPy plan (solo documento)](#3-numpy-plan-solo-documento) — `f796b88`
-4. [Scenario aiomqtt (v1.4.1)](#4-scenario-aiomqtt-v141) — `2d66d9d` → `3fbc4ec`
-5. [pydantic v1 — Fase 1/2 di FASTAPI_PLAN.md (v1.4.1 → v1.5.0)](#5-pydantic-v1--fase-12-di-fastapi_planmd-v141--v150) — `7be5eed` → `c5e5646`
-6. [starlette + anyio — Fase 3 di FASTAPI_PLAN.md (v1.5.0)](#6-starlette--anyio--fase-3-di-fastapi_planmd-v150) — `341965c` → `69079fd`
-7. [FastAPI stesso — Fase 4 di FASTAPI_PLAN.md (v1.5.0)](#7-fastapi-stesso--fase-4-di-fastapi_planmd-v150) — `0ac010b` → `ea5657e`
+Commits with more than 25 modified files are summarised by directory (not listed file by file) to
+keep the document readable — this is mainly the case of the initial commit (193 files) and of a few
+other massive patches. The commit subjects are quoted verbatim, so a few remain in Italian.
 
 ---
 
-## Tabella riassuntiva
+## Index by era
 
-| # | Data | Hash | Versione | File | Oggetto |
+1. [Foundations and first release (v1.0.0)](#1-foundations-and-first-release-v100) — `40357da` → `d227d47`
+2. [Async/await, .NET interop, debug, REPL (v1.1.0 → v1.4.1)](#2-asyncawait-interop-net-debug-repl-v110--v141) — `9edbf3a` → `2ff0bae`
+3. [NumPy plan (document only)](#3-numpy-plan-document-only) — `f796b88`
+4. [aiomqtt scenario (v1.4.1)](#4-aiomqtt-scenario-v141) — `2d66d9d` → `3fbc4ec`
+5. [pydantic v1 — Phase 1/2 of FASTAPI_PLAN.md (v1.4.1 → v1.5.0)](#5-pydantic-v1--phase-12-of-fastapi_planmd-v141--v150) — `7be5eed` → `c5e5646`
+6. [starlette + anyio — Phase 3 of FASTAPI_PLAN.md (v1.5.0)](#6-starlette--anyio--phase-3-of-fastapi_planmd-v150) — `341965c` → `69079fd`
+7. [FastAPI itself — Phase 4 of FASTAPI_PLAN.md (v1.5.0)](#7-fastapi-itself--phase-4-of-fastapi_planmd-v150) — `0ac010b` → `ea5657e`
+
+---
+
+## Summary table
+
+| # | Date | Hash | Version | Files | Subject |
 |---|------|------|----------|------|---------|
 | 1 | 2026-07-24 | `40357da` | — | 2 | Initial commit |
 | 2 | 2026-07-24 | `24523e4` | 1.1.0 | 193 | Initial Commit |
@@ -80,249 +80,249 @@ altre patch massicce.
 
 ---
 
-## 1. Fondamenta e primo rilascio (v1.0.0)
+## 1. Foundations and first release (v1.0.0)
 
-### `40357da` — 2026-07-24 — Initial commit — v. — (2 file)
+### `40357da` — 2026-07-24 — Initial commit — v. — (2 files)
 
-Solo `.gitignore` e `LICENSE`. Il vero e proprio import del codice arriva nel commit successivo.
+Only `.gitignore` and `LICENSE`. The actual import of the code arrives in the next commit.
 
-### `24523e4` — 2026-07-24 — Initial Commit — v1.1.0 — (193 file)
+### `24523e4` — 2026-07-24 — Initial Commit — v1.1.0 — (193 files)
 
-L'intero corpo di codice iniziale, in un solo commit. Corrisponde a `RELEASE_NOTES.md`'s
-**v1.0.0** ("First functionally complete version" — M0-M9: lexer, parser, evaluator, funzioni/classi,
-import system, stdlib .NET-backed, mini-pip, ctypes-lite, sample Azure IoT Hub). File per directory:
+The whole initial body of code, in a single commit. It corresponds to `RELEASE_NOTES.md`'s
+**v1.0.0** ("First functionally complete version" — M0-M9: lexer, parser, evaluator, functions/classes,
+import system, .NET-backed stdlib, mini-pip, ctypes-lite, Azure IoT Hub sample). Files by directory:
 
-- `src/PySharp.Tests/` (111) — l'intera suite di test iniziale (corpus RustPython incluso)
-- `src/PySharpLib/` (47) — l'interprete stesso
-- `src/site-packages/` (16) — pacchetti scaricati per i test (scratch, poi rimossi — vedi commit 16/17)
-- `src/PySharp/` (3) — l'host CLI
-- `src/PipSharpLib/` (2) — il mini-pip
-- `samples/` (6), doc di progetto (`README.md`/`ARCHITECTURE.md`/`ROADMAP.md`/`RELEASE_NOTES.md`/`TODO.md`), `.vscode/tasks.json`, `src/PySharp.slnx`
+- `src/PySharp.Tests/` (111) — the whole initial test suite (RustPython corpus included)
+- `src/PySharpLib/` (47) — the interpreter itself
+- `src/site-packages/` (16) — packages downloaded for the tests (scratch, later removed — see commits 16/17)
+- `src/PySharp/` (3) — the CLI host
+- `src/PipSharpLib/` (2) — the mini-pip
+- `samples/` (6), project docs (`README.md`/`ARCHITECTURE.md`/`ROADMAP.md`/`RELEASE_NOTES.md`/`TODO.md`), `.vscode/tasks.json`, `src/PySharp.slnx`
 
-### `d227d47` — 2026-07-24 — Licence — v1.1.0 — (77 file)
+### `d227d47` — 2026-07-24 — Licence — v1.1.0 — (77 files)
 
-77 file modificati con un unico oggetto ("Licence") — quasi certamente l'aggiunta dell'header di
-licenza MIT in cima a ogni file sorgente `.cs` (il pattern `// Copyright (c) 2026 Marco Parenzan` /
-`// Licensed under the MIT License` visto in ogni file toccato nelle sessioni successive).
+77 files modified with a single subject ("Licence") — almost certainly the addition of the MIT
+licence header at the top of every `.cs` source file (the `// Copyright (c) 2026 Marco Parenzan` /
+`// Licensed under the MIT License` pattern seen in every file touched in the later sessions).
 
 ---
 
-## 2. Async/await, interop .NET, debug, REPL (v1.1.0 → v1.4.1)
+## 2. Async/await, .NET interop, debug, REPL (v1.1.0 → v1.4.1)
 
-### `9edbf3a` — 2026-07-25 — async/await support: coroutines + asyncio (scenario 2a/2b) — v1.1.0 — (38 file)
+### `9edbf3a` — 2026-07-25 — async/await support: coroutines + asyncio (scenario 2a/2b) — v1.1.0 — (38 files)
 
-Corrisponde a `RELEASE_NOTES.md`'s sezione **"Async/await and asyncio (scenario 2a/2b)"**:
-`async def`/`await`/`async for`/`async with` nel linguaggio, un `PyCoroutine` su thread dedicato con
-handshake a semaforo, il modulo `asyncio` (.NET event loop, `Future`/`Task`, `run`/`sleep`/`gather`,
-I/O socket asincrono), e `samples/async_api.py` come prova end-to-end (22 nuovi test in `M10_Async`).
-Questo è il fondamento su cui l'intera Fase 3/4 di `FASTAPI_PLAN.md` (starlette/fastapi) si
-appoggia mesi dopo.
+Corresponds to `RELEASE_NOTES.md`'s section **"Async/await and asyncio (scenario 2a/2b)"**:
+`async def`/`await`/`async for`/`async with` in the language, a `PyCoroutine` on a dedicated thread with
+a semaphore handshake, the `asyncio` module (.NET event loop, `Future`/`Task`, `run`/`sleep`/`gather`,
+async socket I/O), and `samples/async_api.py` as end-to-end proof (22 new tests in `M10_Async`).
+This is the foundation on which the whole Phase 3/4 of `FASTAPI_PLAN.md` (starlette/fastapi) rests
+months later.
 
 ### `9495568` — 2026-07-25 — test: de-flake Gather_completes_in_delay_order — v1.1.0 — (1 file)
 
-Fix di un singolo test reso non-deterministico dal timing di `asyncio.gather`.
+Fix of a single test made non-deterministic by the timing of `asyncio.gather`.
 
-### `407114d` — 2026-07-25 — feat: inject .NET objects into the Python scope (embedding interop) — v1.1.0 — (8 file)
+### `407114d` — 2026-07-25 — feat: inject .NET objects into the Python scope (embedding interop) — v1.1.0 — (8 files)
 
-Corrisponde a `RELEASE_NOTES.md`'s **".NET object injection (embedding interop)"**: `ClrObject`/
-`ClrType`/`ClrMethod` + marshalling bidirezionale, 18 test in `M11_Interop`.
+Corresponds to `RELEASE_NOTES.md`'s **".NET object injection (embedding interop)"**: `ClrObject`/
+`ClrType`/`ClrMethod` + bidirectional marshalling, 18 tests in `M11_Interop`.
 
-### `9573d51` — 2026-07-25 — docs: document async + .NET interop; bump packages to 1.2.0 — v1.2.0 — (6 file)
+### `9573d51` — 2026-07-25 — docs: document async + .NET interop; bump packages to 1.2.0 — v1.2.0 — (6 files)
 
-Solo documentazione + bump versione a 1.2.0 (coerente con il numero di versione osservato).
+Documentation only + version bump to 1.2.0 (consistent with the observed version number).
 
-### `b021d7d` — 2026-07-25 — feat: exceptions carry tracebacks + locals; add execution trace hook — v1.3.0 — (16 file)
+### `b021d7d` — 2026-07-25 — feat: exceptions carry tracebacks + locals; add execution trace hook — v1.3.0 — (16 files)
 
-Corrisponde a **"Tracebacks, variable inspection and a trace hook"**: `PyRaise.Traceback`,
-`PyFrameInfo`, `Interp.Trace` (Line/Call/Return/Exception), 9 test in `M12_Debug` — le fondamenta
-usate per tutta la diagnostica "debug-print-then-remove" delle sessioni successive.
+Corresponds to **"Tracebacks, variable inspection and a trace hook"**: `PyRaise.Traceback`,
+`PyFrameInfo`, `Interp.Trace` (Line/Call/Return/Exception), 9 tests in `M12_Debug` — the foundation
+used for all the "debug-print-then-remove" diagnostics of the later sessions.
 
-### `47b73a5` — 2026-07-25 — feat: multi-line input in the REPL — v1.4.0 — (8 file)
+### `47b73a5` — 2026-07-25 — feat: multi-line input in the REPL — v1.4.0 — (8 files)
 
-Corrisponde a **"Multi-line REPL input"**: `InteractiveInput` (`IsIncomplete`/`StartsBlock`), 32 test
+Corresponds to **"Multi-line REPL input"**: `InteractiveInput` (`IsIncomplete`/`StartsBlock`), 32 tests
 in `M13_Repl`.
 
-### `2ff0bae` — 2026-07-26 — feat(repl): show PySharp version and Python compatibility in the banner — v1.4.1 — (6 file)
+### `2ff0bae` — 2026-07-26 — feat(repl): show PySharp version and Python compatibility in the banner — v1.4.1 — (6 files)
 
-Banner REPL con versione + compatibilità Python dichiarata.
+REPL banner with version + declared Python compatibility.
 
 ---
 
-## 3. NumPy plan (solo documento)
+## 3. NumPy plan (document only)
 
 ### `f796b88` — 2026-07-27 — NUMPY_PLAN — v1.4.1 — (1 file)
 
-Solo la creazione di `NUMPY_PLAN.md` — nessuna implementazione in questo commit (uno scenario
-successivamente non perseguito nei commit qui tracciati, o rimandato).
+Only the creation of `NUMPY_PLAN.md` — no implementation in this commit (a scenario
+not pursued in the commits traced here, or postponed).
 
 ---
 
-## 4. Scenario aiomqtt (v1.4.1)
+## 4. aiomqtt scenario (v1.4.1)
 
-### `2d66d9d` — 2026-08-01 — aiomqtt support plan — v1.4.1 — (2 file)
+### `2d66d9d` — 2026-08-01 — aiomqtt support plan — v1.4.1 — (2 files)
 
-Creazione di `AIOMQTT_PLAN.md`.
+Creation of `AIOMQTT_PLAN.md`.
 
-### `f56aac9` — 2026-08-02 — AioMqtt sample scenario - impleementation support — v1.4.1 — (27 file)
+### `f56aac9` — 2026-08-02 — AioMqtt sample scenario - impleementation support — v1.4.1 — (27 files)
 
-Il grosso dell'implementazione del piano aiomqtt (real async IoT Hub sample) — coerente con la
-memoria di progetto: *"aiomqtt plan — AIOMQTT_PLAN.md complete: real-aiomqtt async IoT Hub sample
+The bulk of the implementation of the aiomqtt plan (real async IoT Hub sample) — consistent with the
+project memory: *"aiomqtt plan — AIOMQTT_PLAN.md complete: real-aiomqtt async IoT Hub sample
 runs live (2026-08-02)"*.
 
-### `38cc1d6` / `0d275d7` — 2026-08-02 — gitignore updated / .gitignore updated — v1.4.1 — (1 file ciascuno)
+### `38cc1d6` / `0d275d7` — 2026-08-02 — gitignore updated / .gitignore updated — v1.4.1 — (1 file each)
 
-Aggiustamenti minori a `.gitignore` (verosimilmente per escludere `site-packages/` scratch usato
-dai probe, un pattern che ricorre in tutta la storia successiva del progetto).
+Minor adjustments to `.gitignore` (probably to exclude the scratch `site-packages/` used
+by the probes, a pattern that recurs throughout the project's later history).
 
-### `d0b008d` / `7fd7bd6` — 2026-08-02 — Delete samples/site-packages directory / Delete src/site-packages directory — v1.4.1 — (16 file ciascuno)
+### `d0b008d` / `7fd7bd6` — 2026-08-02 — Delete samples/site-packages directory / Delete src/site-packages directory — v1.4.1 — (16 files each)
 
-Rimozione delle due directory `site-packages/` scratch (16 file ciascuna — gli stessi pacchetti
-visti nel commit iniziale) — il primo caso osservabile della disciplina "pulisci lo scratch a fine
-round" che ricorre in ogni sessione successiva.
+Removal of the two scratch `site-packages/` directories (16 files each — the same packages
+seen in the initial commit) — the first observable case of the "clean up the scratch at the end of the
+round" discipline that recurs in every later session.
 
-### `3fbc4ec` — 2026-08-02 — iothun aiomqtt test and fix done — v1.4.1 — (4 file)
+### `3fbc4ec` — 2026-08-02 — iothun aiomqtt test and fix done — v1.4.1 — (4 files)
 
-Chiusura dello scenario aiomqtt: test + fix finali.
+Closure of the aiomqtt scenario: final tests + fixes.
 
 ---
 
-## 5. pydantic v1 — Fase 1/2 di FASTAPI_PLAN.md (v1.4.1 → v1.5.0)
+## 5. pydantic v1 — Phase 1/2 of FASTAPI_PLAN.md (v1.4.1 → v1.5.0)
 
-### `7be5eed` — 2026-08-06 — feat: pydantic v1 gap-filling — generic aliases, decimal.Decimal, ~35 stdlib/interpreter fixes — v1.4.1 — (20 file)
+### `7be5eed` — 2026-08-06 — feat: pydantic v1 gap-filling — generic aliases, decimal.Decimal, ~35 stdlib/interpreter fixes — v1.4.1 — (20 files)
 
-Corrisponde alla **Fase 1** di `FASTAPI_PLAN.md` ("cross-cutting stdlib + the import-error-masking
-bug"): nuovi moduli reali `ColorSysModule`/`DateTimeModule`/`IpAddressModule`/`PathlibModule`/
-`PickleModule`/`ReModule`/`WeakrefModule`, `ComplexType` (il tipo `complex`), e fix profondi in
-`Interp.cs`/`GenericAliasModule.cs`/`Builtins.cs` — coerente con la memoria di progetto sui gap di
-pydantic v1 colmati in questo periodo.
+Corresponds to **Phase 1** of `FASTAPI_PLAN.md` ("cross-cutting stdlib + the import-error-masking
+bug"): new real modules `ColorSysModule`/`DateTimeModule`/`IpAddressModule`/`PathlibModule`/
+`PickleModule`/`ReModule`/`WeakrefModule`, `ComplexType` (the `complex` type), and deep fixes in
+`Interp.cs`/`GenericAliasModule.cs`/`Builtins.cs` — consistent with the project memory on the
+pydantic v1 gaps filled in this period.
 
-### `132cced` — 2026-08-06 — version updated and dotnet tool — v1.5.0 — (3 file)
+### `132cced` — 2026-08-06 — version updated and dotnet tool — v1.5.0 — (3 files)
 
-Bump di versione a 1.5.0 (l'ultima versione osservata in tutti i commit successivi) + aggiornamento
-del tool `dotnet`.
+Version bump to 1.5.0 (the last version observed in all the later commits) + update of
+the `dotnet` tool.
 
-### `c467f2c` — 2026-08-07 — pydantic implemented — v1.5.0 — (24 file)
+### `c467f2c` — 2026-08-07 — pydantic implemented — v1.5.0 — (24 files)
 
-`FASTAPI_PLAN.md` modificato + `M16_FastApi/PydanticSmokeTests.cs` — il completamento della Fase 1,
-con `import pydantic` che funziona per la prima volta end-to-end.
+`FASTAPI_PLAN.md` modified + `M16_FastApi/PydanticSmokeTests.cs` — the completion of Phase 1,
+with `import pydantic` working end-to-end for the first time.
 
-### `75b5ddb` — 2026-08-07 — Bug fixing — v1.5.0 — (13 file)
+### `75b5ddb` — 2026-08-07 — Bug fixing — v1.5.0 — (13 files)
 
-`M4_Functions/MetaclassTests.cs` (nuovo) + fix in `PyClass.cs`/`PyDict.cs`/`InspectModule.cs` —
-coerente con la **sezione 2.2.1** di `FASTAPI_PLAN.md` ("custom-metaclass support: the
+`M4_Functions/MetaclassTests.cs` (new) + fixes in `PyClass.cs`/`PyDict.cs`/`InspectModule.cs` —
+consistent with **section 2.2.1** of `FASTAPI_PLAN.md` ("custom-metaclass support: the
 blow-by-blow").
 
-### `c5e5646` — 2026-08-07 — Docs updated — v1.5.0 — (2 file)
+### `c5e5646` — 2026-08-07 — Docs updated — v1.5.0 — (2 files)
 
-Solo `README.md`/`ROADMAP.md`.
+Only `README.md`/`ROADMAP.md`.
 
 ---
 
-## 6. starlette + anyio — Fase 3 di FASTAPI_PLAN.md (v1.5.0)
+## 6. starlette + anyio — Phase 3 of FASTAPI_PLAN.md (v1.5.0)
 
-Tutti a v1.5.0 — nessun bump di versione ulteriore osservato in questa fase.
+All at v1.5.0 — no further version bump observed in this phase.
 
-### `341965c` — 2026-08-08 — FastPlan Phase 2 + Phase 3 — (17 file)
+### `341965c` — 2026-08-08 — FastPlan Phase 2 + Phase 3 — (17 files)
 
-Nuovi moduli reali `ContextVarsModule`/`ImportlibModule`/`ShlexModule`/`SignalModule`/
-`TextwrapModule` — l'avvio della **Fase 3** (starlette + anyio), sezione **3.1.1** del piano.
+New real modules `ContextVarsModule`/`ImportlibModule`/`ShlexModule`/`SignalModule`/
+`TextwrapModule` — the start of **Phase 3** (starlette + anyio), section **3.1.1** of the plan.
 
-### `e6d4c44` — 2026-08-08 — match/case support — (13 file)
+### `e6d4c44` — 2026-08-08 — match/case support — (13 files)
 
-Corrisponde alla **sezione 3.1.2**: `match`/`case` (PEP 634) — nuovo parsing in `Ast.cs`/`Parser.cs`/
-`AstDumper.cs`, nuovi test `M17_Match`/`M2_Parser/MatchParsingTests.cs`, `ConcurrentModule`/
-`ConcurrentFuture` (nuovi).
+Corresponds to **section 3.1.2**: `match`/`case` (PEP 634) — new parsing in `Ast.cs`/`Parser.cs`/
+`AstDumper.cs`, new tests `M17_Match`/`M2_Parser/MatchParsingTests.cs`, `ConcurrentModule`/
+`ConcurrentFuture` (new).
 
-### `02afb64` — 2026-08-08 — match/case parte 2 — (12 file)
+### `02afb64` — 2026-08-08 — match/case parte 2 (match/case part 2) — (12 files)
 
-Corrisponde alla **sezione 3.1.3**: 6 gap reali oltre `match`/`case` (`concurrent.futures`, `stat`,
-`chmod`, `ABC.register`, MRO Generic, `typing.override`) — nuovo `StatModule.cs`, fix in
+Corresponds to **section 3.1.3**: 6 real gaps beyond `match`/`case` (`concurrent.futures`, `stat`,
+`chmod`, `ABC.register`, Generic MRO, `typing.override`) — new `StatModule.cs`, fixes in
 `AbcModule.cs`/`GenericAliasModule.cs`.
 
-### `5b026ee` — 2026-08-08 — subprocess e altro — (27 file)
+### `5b026ee` — 2026-08-08 — subprocess e altro (subprocess and more) — (27 files)
 
-Corrisponde alla **sezione 3.1.4**: 12 gap reali fino a `applications`/`routing`/`responses`/
-`requests` — nuovi `EmailModule`/`HtmlModule`/`HttpModule`/`SubprocessModule`/`TempfileModule`/
-`TracebackModule`, più `BigStack.cs` (nuovo — lo stack a 64MB per thread dedicato, poi decisivo per
-tutto il modello a thread-per-coroutine/generatore).
+Corresponds to **section 3.1.4**: 12 real gaps up to `applications`/`routing`/`responses`/
+`requests` — new `EmailModule`/`HtmlModule`/`HttpModule`/`SubprocessModule`/`TempfileModule`/
+`TracebackModule`, plus `BigStack.cs` (new — the 64MB stack per dedicated thread, later decisive for
+the whole thread-per-coroutine/generator model).
 
-### `04f2ff7` — 2026-08-08 — Starlette support — (7 file)
+### `04f2ff7` — 2026-08-08 — Starlette support — (7 files)
 
-Corrisponde alla **sezione 3.1.5**: gli ultimi 4 gap (`mimetypes`) — `import starlette` funziona
-per la prima volta completamente. Nuovi `MimetypesModule`/`SecretsModule`.
+Corresponds to **section 3.1.5**: the last 4 gaps (`mimetypes`) — `import starlette` works
+completely for the first time. New `MimetypesModule`/`SecretsModule`.
 
-### `aefd30f` — 2026-08-08 — scope/receive/send and bug fixing — (9 file)
+### `aefd30f` — 2026-08-08 — scope/receive/send and bug fixing — (9 files)
 
-Corrisponde alla **sezione 3.1.6**: il primo vero dispatch ASGI (scope/receive/send costruiti a
-mano) — due bug di correttezza significativi trovati. Nuovo `ArrayModule.cs`.
+Corresponds to **section 3.1.6**: the first real ASGI dispatch (scope/receive/send built by
+hand) — two significant correctness bugs found. New `ArrayModule.cs`.
 
-### `7056951` — 2026-08-08 — ASGI dispatch e altri fix (asyncio, queue, isfunction, groups) — (8 file)
+### `7056951` — 2026-08-08 — ASGI dispatch e altri fix (ASGI dispatch and other fixes: asyncio, queue, isfunction, groups) — (8 files)
 
-Corrisponde alla **sezione 3.1.7**: 8 gap reali oltre il simbolo asyncio privato — nuovo
-`QueueModule.cs` (coda thread-safe reale), fix `isfunction`/`groups(default)`.
+Corresponds to **section 3.1.7**: 8 real gaps beyond the private asyncio symbol — new
+`QueueModule.cs` (real thread-safe queue), `isfunction`/`groups(default)` fixes.
 
-### `389736b` — 2026-08-08 — fix: real asyncio.current_task(), Future[T]() PEP 585, and threading.local across @contextmanager — (12 file)
+### `389736b` — 2026-08-08 — fix: real asyncio.current_task(), Future[T]() PEP 585, and threading.local across @contextmanager — (12 files)
 
-Corrisponde alla **sezione 3.1.8**: `asyncio.current_task()` reale, subscript `Future[T]()`, e il
-bug strutturale `threading.local` attraverso `@contextmanager` — il primo dei commit di questa
-sessione che ho scritto/verificato direttamente io.
+Corresponds to **section 3.1.8**: real `asyncio.current_task()`, `Future[T]()` subscript, and the
+structural bug of `threading.local` across `@contextmanager` — the first of the commits of this
+session that I wrote/verified directly.
 
-### `7b4aa4f` — 2026-08-08 — fix: real bound-method detection closes the starlette 404 path end-to-end — (5 file)
+### `7b4aa4f` — 2026-08-08 — fix: real bound-method detection closes the starlette 404 path end-to-end — (5 files)
 
-Corrisponde alla **sezione 3.1.9**: `iscoroutinefunction` non vedeva attraverso un bound method —
-il path 404 si chiude completamente, verificato end-to-end contro starlette reale.
+Corresponds to **section 3.1.9**: `iscoroutinefunction` did not see through a bound method —
+the 404 path closes completely, verified end-to-end against the real starlette.
 
-### `6612c4e` — 2026-08-08 — feat: real staticfiles.py support — (9 file)
+### `6612c4e` — 2026-08-08 — feat: real staticfiles.py support — (9 files)
 
-Corrisponde alla **sezione 3.1.10**: 7 gap reali (`importlib.util`/`find_spec`, `os.stat`/
+Corresponds to **section 3.1.10**: 7 real gaps (`importlib.util`/`find_spec`, `os.stat`/
 `os.path.*`, `NotADirectoryError`, `collections.abc.Mapping.get`).
 
-### `f7b1ce2` — 2026-08-08 — feat: real async generators — (11 file)
+### `f7b1ce2` — 2026-08-08 — feat: real async generators — (11 files)
 
-Corrisponde alla **sezione 3.1.12**: `PyAsyncGenerator` (nuova classe ibrida yield/await),
-`iter_text`/`iter_bytes`/`iter_json` reali, `asynccontextmanager` finalmente utilizzabile.
+Corresponds to **section 3.1.12**: `PyAsyncGenerator` (new hybrid yield/await class), real
+`iter_text`/`iter_bytes`/`iter_json`, `asynccontextmanager` finally usable.
 
-### `51a6f7d` — 2026-08-08 — docs: verify lifespan events and StaticFiles(packages=) — (2 file)
+### `51a6f7d` — 2026-08-08 — docs: verify lifespan events and StaticFiles(packages=) — (2 files)
 
-Corrisponde alla **sezione 3.1.13**: solo verifica (zero bug trovati) — nessuna modifica al codice
-dell'interprete, solo `FASTAPI_PLAN.md`/`ROADMAP.md`.
+Corresponds to **section 3.1.13**: verification only (zero bugs found) — no change to the
+interpreter's code, only `FASTAPI_PLAN.md`/`ROADMAP.md`.
 
-### `69079fd` — 2026-08-08 — feat: real minimal ASGI server (Phase 3.2) — (9 file)
+### `69079fd` — 2026-08-08 — feat: real minimal ASGI server (Phase 3.2) — (9 files)
 
-Corrisponde alla **sezione 3.1.14**: `samples/asgi_server.py` (nuovo, non nel diff di libreria ma
-parte del commit), fix `sys.path` (nuovo costruttore `PyModule(name, PyDict)` in `Env.cs`),
-`bytes.partition`/`rpartition`. **Chiude la Fase 3.**
+Corresponds to **section 3.1.14**: `samples/asgi_server.py` (new, not in the library diff but
+part of the commit), `sys.path` fix (new constructor `PyModule(name, PyDict)` in `Env.cs`),
+`bytes.partition`/`rpartition`. **Closes Phase 3.**
 
 ---
 
-## 7. FastAPI stesso — Fase 4 di FASTAPI_PLAN.md (v1.5.0)
+## 7. FastAPI itself — Phase 4 of FASTAPI_PLAN.md (v1.5.0)
 
-### `0ac010b` — 2026-08-08 — fix: real deadlock in import system + fastapi/pydantic v1 version pinning — (8 file)
+### `0ac010b` — 2026-08-08 — fix: real deadlock in import system + fastapi/pydantic v1 version pinning — (8 files)
 
-Corrisponde alla **sezione 4.1.1**: l'avvio della Fase 4. Il deadlock serio nel sistema di import
-(`Importer.ImportAbsolute` teneva un lock durante l'esecuzione di codice arbitrario), pinning delle
-versioni (`fastapi==0.99.1`/`starlette==0.27.0`/`pydantic==1.10.13`), `Morsel._reserved`,
+Corresponds to **section 4.1.1**: the start of Phase 4. The serious deadlock in the import system
+(`Importer.ImportAbsolute` held a lock while running arbitrary code), version pinning
+(`fastapi==0.99.1`/`starlette==0.27.0`/`pydantic==1.10.13`), `Morsel._reserved`,
 `email.message.Message`, `typing.TypeGuard`.
 
-### `c22f5da` — 2026-08-08 — fix: unify NoneType identity, issubclass delegation for typing generics, thread-safe GenericAliasModule — (6 file)
+### `c22f5da` — 2026-08-08 — fix: unify NoneType identity, issubclass delegation for typing generics, thread-safe GenericAliasModule — (6 files)
 
-Corrisponde alla **sezione 4.1.2**: due bug di identità/ereditarietà (`NoneType`, `issubclass` sui
-generici typing), un secondo bug di concorrenza (`OriginMap`/`ArgsTransform` non thread-safe, fix
-con `ConcurrentDictionary`), `inspect.Parameter.replace`.
+Corresponds to **section 4.1.2**: two identity/inheritance bugs (`NoneType`, `issubclass` on
+typing generics), a second concurrency bug (`OriginMap`/`ArgsTransform` not thread-safe, fixed with
+`ConcurrentDictionary`), `inspect.Parameter.replace`.
 
-### `ea5657e` — 2026-08-08 — feat: import fastapi succeeds — real eval()/ForwardRef, two concurrency bugs fixed (Phase 4.1 done) — (12 file)
+### `ea5657e` — 2026-08-08 — feat: import fastapi succeeds — real eval()/ForwardRef, two concurrency bugs fixed (Phase 4.1 done) — (12 files)
 
-Corrisponde alla **sezione 4.1.3**: `eval()` reale (nuovo), `typing.ForwardRef` reale (nuovo, in
-`GenericAliasModule.cs`), `typing_extensions._AnnotatedAlias` reale, un terzo bug di concorrenza
-(`GenericPlaceholder`, fix con `[ThreadStatic]`), fix generale di `hash()`, nuovi `BinasciiModule.cs`
-+ `http.client`. **`import fastapi` funziona — traguardo della Fase 4.1.**
+Corresponds to **section 4.1.3**: real `eval()` (new), real `typing.ForwardRef` (new, in
+`GenericAliasModule.cs`), real `typing_extensions._AnnotatedAlias`, a third concurrency bug
+(`GenericPlaceholder`, fixed with `[ThreadStatic]`), general fix of `hash()`, new `BinasciiModule.cs`
++ `http.client`. **`import fastapi` works — milestone of Phase 4.1.**
 
 ---
 
-## Nota su versione e commit
+## Note on version and commits
 
-Il numero di versione (`<Version>` in `PySharp.csproj`) **non viene incrementato ad ogni commit** —
-resta fermo a `1.5.0` per tutti i 19 commit dal `132cced` (2026-08-06) in poi, che coprono l'intera
-Fase 2/3/4 di `FASTAPI_PLAN.md` (pydantic → starlette → fastapi). La versione è quindi un indicatore
-di **release pubblicata**, non di ogni singolo passo di sviluppo — per la granularità "ogni singolo
-cambiamento", il commit hash è l'unità di riferimento corretta, non la versione.
+The version number (`<Version>` in `PySharp.csproj`) **is not incremented at every commit** —
+it stays at `1.5.0` for all the 19 commits from `132cced` (2026-08-06) onwards, which cover the whole
+Phase 2/3/4 of `FASTAPI_PLAN.md` (pydantic → starlette → fastapi). The version is therefore an indicator
+of a **published release**, not of every single development step — for the "every single
+change" granularity, the commit hash is the correct reference unit, not the version.
