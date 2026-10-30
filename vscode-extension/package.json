@@ -1,0 +1,86 @@
+{
+  "name": "pysharp",
+  "displayName": "PySharp",
+  "description": "Write and run Python on PySharp, the Python interpreter written in C#: run a file or a selection, open a REPL, install pure-Python packages. Needs the pysharp .NET tool.",
+  "version": "0.1.0",
+  "publisher": "marcoparenzan",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages", "Other"],
+  "activationEvents": [
+    "onLanguage:pysharp",
+    "onLanguage:python",
+    "onCommand:pysharp.runFile"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "pysharp",
+        "aliases": ["PySharp", "pysharp"],
+        "extensions": [".pys"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pysharp",
+        "scopeName": "source.pysharp",
+        "path": "./syntaxes/pysharp.tmLanguage.json"
+      }
+    ],
+    "taskDefinitions": [
+      { "type": "pysharp", "properties": {} }
+    ],
+    "commands": [
+      { "command": "pysharp.runFile", "title": "Run File", "category": "PySharp", "icon": "$(play)" },
+      { "command": "pysharp.runSelection", "title": "Run Selection or Line", "category": "PySharp" },
+      { "command": "pysharp.startRepl", "title": "Start REPL", "category": "PySharp" },
+      { "command": "pysharp.installPackage", "title": "Install Package...", "category": "PySharp" },
+      { "command": "pysharp.showVersion", "title": "Show Version", "category": "PySharp" }
+    ],
+    "menus": {
+      "editor/title/run": [
+        { "command": "pysharp.runFile", "when": "resourceLangId == python || resourceLangId == pysharp", "group": "navigation@1" }
+      ],
+      "editor/context": [
+        { "command": "pysharp.runSelection", "when": "editorHasSelection && (editorLangId == python || editorLangId == pysharp)", "group": "navigation@9" }
+      ],
+      "commandPalette": [
+        { "command": "pysharp.runFile", "when": "editorLangId == python || editorLangId == pysharp" },
+        { "command": "pysharp.runSelection", "when": "editorLangId == python || editorLangId == pysharp" }
+      ]
+    },
+    "configuration": {
+      "title": "PySharp",
+      "properties": {
+        "pysharp.executablePath": {
+          "type": "string",
+          "default": "pysharp",
+          "description": "The pysharp command. Install it with: dotnet tool install --global PySharp --add-source D:\\Dev\\NuGetLocalFeed --prerelease (or run ScienceSharp\\Install-Suite.ps1 -Tools)."
+        },
+        "pysharp.runArguments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to the script after its file name (they become sys.argv[1:])."
+        },
+        "pysharp.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the PySharp version in the status bar when a Python or PySharp file is open."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -w -p ./tsconfig.json",
+    "test": "npm run compile && node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}

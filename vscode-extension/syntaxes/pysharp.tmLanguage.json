@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "PySharp",
+  "scopeName": "source.pysharp",
+  "patterns": [
+    { "include": "source.python" }
+  ]
+}
