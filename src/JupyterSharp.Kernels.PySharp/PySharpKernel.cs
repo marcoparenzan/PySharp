@@ -1,9 +1,9 @@
-using JupyterNet.Kernels.Abstractions;
+using JupyterSharp.Kernels.Abstractions;
 using PySharpLib;
 using PySharpLib.Parsing;
 using PySharpLib.Runtime;
 
-namespace JupyterNet.Kernels.PySharp;
+namespace JupyterSharp.Kernels.PySharp;
 
 /// <summary>
 /// Runs Python cells on PySharp's own from-scratch interpreter (<see cref="PyEngine"/>).
@@ -22,6 +22,7 @@ public sealed class PySharpKernel : IKernel
 
     public PySharpKernel()
     {
+        NativeSupport.Register(); // OpenCV natives come from the NuGet cache when they are not bundled (see NativeSupport)
         _engine = new PyEngine(_stdout);
         PySharpLib.Numpy.NumpyRegistration.Register(_engine.Importer);
         PySharpLib.Cv2.Cv2Registration.Register(_engine.Importer);
@@ -118,6 +119,10 @@ public sealed class PySharpKernel : IKernel
         catch (PySyntaxError ex)
         {
             sink.WriteError($"SyntaxError: {ex.Message} (line {ex.Line})");
+        }
+        catch (Exception ex) when (NativeSupport.IsMissingNative(ex))
+        {
+            sink.WriteError(NativeSupport.Explain(ex));
         }
 
         return Task.CompletedTask;
