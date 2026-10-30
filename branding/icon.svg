@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="PySharp">
+<title>PySharp</title>
+<g>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#0B2F6B"/>
+  <path d="M38 46L64 66L38 86" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M72 88L98 88" fill="none" stroke="#35C7C7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>
