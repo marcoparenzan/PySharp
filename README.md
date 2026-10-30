@@ -1,6 +1,17 @@
 # PySharp
 
-A **Python 3.x interpreter written entirely from scratch in C# (.NET 10)** — no CPython embedding —
+> **Part of [ScienceSharp](../ScienceSharp)** — the Science suite. Targets **.NET 11**. Status: preview, not published. License: MIT.
+> **Form:** global tool `pysharp` (CLI) plus NuGet libraries. VS Code extension `marcoparenzan.pysharp` (run, REPL, install package).
+
+| [README](README.md) | [USAGE](USAGE.md) (install first) | [ARCHITECTURE](ARCHITECTURE.md) | [ROADMAP](ROADMAP.md) | [OPENPOINTS](OPENPOINTS.md) |
+| --- | --- | --- | --- | --- |
+
+## Science source-plot integration profile
+
+The Matplotlib binding retains its NDSharp.Plot NuGet preview default. Building with ScienceUseSourcePlots=true opts into the active Science NDSharp.Plot project and its shared PlotSharp contour kernel. MathemaSharp/ops/BuildPySharpKernel.cs -- --source-plots creates a separate kernel-source-plots output; default kernel remains package-based.
+MathemaSharp/notebooks/NDSharp/pysharp/02-contours-kernel.ipynb was executed in the real JupyterNet/PySharp kernel on .NET11: line and filled contour PNG outputs320×240 verified, no review image files or screenshots. Latest Science gate --no-images passed31/31. Existing build warnings remain visible, no new package release or native JupyterSharp/pixel parity claim.
+
+A **Python 3.x interpreter written entirely from scratch in C# (.NET 11)** — no CPython embedding —
 designed to be **embedded as a library in a .NET app** and to run "pure" Python code without dragging
 along a native runtime.
 
@@ -61,11 +72,16 @@ samples/                     iothub_device_mqtt.py + config.iothub_device_mqtt.j
 
 Rough size: ~13,000 lines of C#, 21 stdlib modules, 85 corpus snippets.
 
+> **NDSharp lives in its own repository** (`D:\Dev\2026\repos\NDSharp`: `NDSharp`, `.Plot`, `.Frame`, `.Image`, `.Wavelets`).
+> This repo consumes them as NuGet packages (`PySharpLib.Numpy` → `NDSharp`, `.Pandas` → `NDSharp.Frame`, `.Matplotlib` →
+> `NDSharp.Plot`, `.Cv2` → `NDSharp.Image`, `.Pywt` → `NDSharp.Wavelets`), resolved from the local feed `D:\Dev\NuGetLocalFeed`.
+> To change the array library: edit and `dotnet pack` in NDSharp, copy the `.nupkg` to the feed, bump the version here.
+
 ---
 
 ## Requirements
 
-- **.NET SDK 10** (the project targets `net10.0`).
+- **.NET SDK 11** (the project targets `net11.0`).
 - Internet connection for `install` (downloads wheels from PyPI).
 - Windows for the `ctypes` module on system DLLs (kernel32/msvcrt); the rest is cross-platform.
 - For the IoT Hub e2e: an Azure IoT Hub and a registered device (or its connection string).
@@ -228,7 +244,7 @@ dependencies). If you also want to install pure PyPI packages at runtime, add **
 </ItemGroup>
 ```
 
-Requirement: `net10.0`.
+Requirement: `net11.0`.
 
 **Database modules (`sqlite3`/`pyodbc`/`psycopg2`) are opt-in, separate packages** — `PySharpLib`
 itself carries no DB driver dependency, so referencing it alone does *not* make `import sqlite3` work.
@@ -619,3 +635,4 @@ modules**, you do not modify the core.
 
 The sample `config.json` contains a device **SharedAccessKey**: do NOT commit it. Add `config.json`
 to `.gitignore` before initializing a repository.
+

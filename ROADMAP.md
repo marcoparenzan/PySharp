@@ -552,6 +552,44 @@ events, and passing Python callables **into** .NET as delegates (the reverse dir
 
 ---
 
+### Cross-cutting — Concurrency and process-wide singletons (partly done, open items below)
+
+**Why it matters.** Several engines in one process is a normal deployment (ASP.NET host with an engine per request —
+Scenario 11 —, a notebook server, parallel test classes). Every `PyEngine.Run` already executes on its own big-stack thread, and
+generators/coroutines/`threading` use more. What was *not* designed for it: the bindings keep their classes (`Series`, `DataFrame`,
+`Timestamp`, `Tensor`, the pyplot classes…) as **static singletons shared by all engines**, and used to rebuild them on every `import`.
+Two engines importing at once corrupted a `Dictionary`, which — being static — stayed corrupted for the rest of the process. It showed up as
+sporadic mass failures of the pandas oracle block (74–78 tests at once) before it was root-caused.
+
+**Done**
+- `SharedModule` (`PySharpLib.Importing`): builds a module once per process under a lock and hands each importer a shallow copy of its
+  namespace. Used by pandas and torch (torch: one lock for its four modules, they fill the same classes).
+- matplotlib: module singletons were published *before* being filled (`KeyError: Line2D` in a second importer); now guarded by one re-entrant
+  lock, and the wrapper table uses the atomic `ConditionalWeakTable.GetValue`.
+- numpy: `np.set_printoptions` is per engine (`NumpyPrint`, like pandas' display options), persisting across `Run` calls of the same engine.
+- NDSharp.Plot 2.6.2: `Colormap.Names` enumerated a registry that `Get` mutates lazily.
+- Tests: `PySharp.Tests/M23_Concurrency` — concurrent imports of pandas/numpy/matplotlib/pywt/cv2/torch, print-options isolation, and
+  `ParallelOracleAudit` (every oracle snippet run at once, one engine each, compared with its golden output). Each regression test was
+  checked to fail on the old code.
+
+**Known limits (not fixed)**
+- **pyplot state is process-global** (`State.Figures`, current figure/axes, rcParams, show sink). Several engines *drawing* at once corrupt it;
+  importing concurrently is safe. Real matplotlib's pyplot is not thread-safe either, but an engine-per-request host wants a chart per request.
+  Fix: move `State` to a per-engine object (pandas' `PdOptions.PerEngine` is the pattern) and reach it through the `Interp` every builtin receives.
+- **torch's default random generator is one per process** (`torch.manual_seed` is global) — same in real PyTorch, so not a defect; hosts that need
+  reproducible per-request randomness must pass explicit generators.
+- `PrintOptions.Default` in NDSharp itself is still a process-wide object for direct C# callers (the numpy binding no longer uses it).
+
+**Open work**
+1. Write down the **engine thread-safety contract** (README/ARCHITECTURE): which of {one engine used by one thread at a time, many engines in one
+   process, one engine shared by several threads} is supported, per binding.
+2. Per-engine pyplot `State` (above), then add matplotlib back to `ParallelOracleAudit`.
+3. Audit the bindings not yet covered by the audit: sqlite3 / psycopg2 / pyodbc, the stdlib modules in `PySharpLib` (any `static` mutable table:
+   `grep "static (readonly )?(Dictionary|List|HashSet|PyClass|PyDict)"`), `Importer`/`PyEngine` statics, and `PySharpLib.Torch` object caches.
+4. Make the same check part of CI: run `M23_Concurrency` repeatedly (the original defect appeared about once in ten full-suite runs).
+5. Test-suite noise to keep separate from the above: 6 `FastApiSmokeTests` fail in every run (pre-existing), `FastApiDemoSample`/`ThreadingLocal`
+   fail occasionally, and one batch of runs showed mass failures in the PyPI-dependent tests (pip/paho/pydantic) that is suspected, not proven, to
+   be PyPI rate limiting after many back-to-back runs.
 ## Interpreter evolution log (per scenario)
 
 Every scenario brings interpreter feature evolution with it. This records *what was added to the core*
@@ -1116,3 +1154,4 @@ in scenario 1).
   consecutive full-suite runs.
 
 _Update these numbers at every milestone._
+
