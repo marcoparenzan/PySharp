@@ -225,7 +225,7 @@ public static class PyErr
         return inst;
     }
 
-    /// <summary>Tutte le classi eccezione da pubblicare nei builtins.</summary>
+        /// <summary>All the exception classes to publish in the builtins.</summary>
     public static IEnumerable<PyClass> AllClasses()
     {
         yield return BaseException;

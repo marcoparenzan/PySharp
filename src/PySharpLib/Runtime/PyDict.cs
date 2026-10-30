@@ -68,7 +68,7 @@ public sealed class PyDict
     public IEnumerable<object> Values => _entries.Select(e => e.Value);
     public IEnumerable<KeyValuePair<object, object>> Entries => _entries;
 
-    /// <summary>Prima coppia (per popitem LIFO si usa Last).</summary>
+        /// <summary>First pair (for LIFO popitem, Last is used).</summary>
     public KeyValuePair<object, object>? LastEntry => _entries.Last?.Value;
 
     public PyDict Copy()

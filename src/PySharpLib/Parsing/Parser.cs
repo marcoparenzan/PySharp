@@ -488,7 +488,7 @@ public sealed class Parser
             return new AugAssignStmt(first, op[..^1], value) { Line = t.Line, Col = t.Column };
         }
 
-        // Plain assignment (anche multiplo: a = b = c)
+                // Plain assignment (also multiple: a = b = c)
         if (Cur.Is(TokenKind.Op, "="))
         {
             var targets = new List<Expr> { first };
@@ -777,7 +777,7 @@ public sealed class Parser
         return new ClassDef(name, bases, body, decorators) { Line = t.Line, Col = t.Column };
     }
 
-    /// <summary>':' NEWLINE INDENT stmt+ DEDENT, oppure ':' simple_stmts sulla stessa riga.</summary>
+        /// <summary>':' NEWLINE INDENT stmt+ DEDENT, or ':' simple_stmts on the same line.</summary>
     private List<Stmt> ParseSuite()
     {
         Expect(TokenKind.Op, ":");
@@ -1337,7 +1337,7 @@ public sealed class Parser
         return v;
     }
 
-    /// <summary>Concatenazione di letterali stringa/bytes adiacenti, incluse f-string.</summary>
+        /// <summary>Concatenation of adjacent string/bytes literals, including f-strings.</summary>
     private Expr ParseStringConcatenation()
     {
         var t = Cur;
@@ -1611,7 +1611,7 @@ public sealed class Parser
         }
 
         Expect(TokenKind.Op, ")");
-        return first; // espressione tra parentesi
+                return first; // parenthesised expression
     }
 
     private Expr ParseListAtom()
