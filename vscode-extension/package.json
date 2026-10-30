@@ -1,5 +1,6 @@
 {
   "name": "pysharp",
+  "icon": "icon.png",
   "displayName": "PySharp",
   "description": "Write and run Python on PySharp, the Python interpreter written in C#: run a file or a selection, open a REPL, install pure-Python packages. Needs the pysharp .NET tool.",
   "version": "0.1.0",
