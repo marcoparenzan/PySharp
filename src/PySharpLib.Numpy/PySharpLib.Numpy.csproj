@@ -2,7 +2,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\PySharpLib\PySharpLib.csproj" />
-    <PackageReference Include="NDSharp" Version="2.8.1-net11-preview.1" />
+    <ProjectReference Include="../../../NDSharp/src/NDSharp/NDSharp.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -11,7 +11,7 @@
     <!-- NuGet package metadata: the numpy module, as a thin Python-facing binding over the native
          NDSharp array library. Opt-in companion to PySharp.Interpreter. -->
     <PackageId>PySharp.Numpy</PackageId>
-    <Version>2.5.1-net11-preview.1</Version>
+    <Version>2.5.1-net11-preview.2</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp's numpy module — a Python binding over the native .NET NDSharp array library (not real numpy). Opt-in companion to PySharp.Interpreter.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

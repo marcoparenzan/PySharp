@@ -45,6 +45,16 @@ Companion packages: `PySharp.Numpy`, `.Pandas`, `.Matplotlib`, `.Cv2`, `.Pywt`, 
 Embedding (reference, run code, capture output, exchange data, inject .NET objects, trace hook) is documented in
 [README.md](README.md#embedding-the-engine-in-a-net-app).
 
+### Typed array views from source
+
+Use a project reference to `src/PySharpLib.Numpy/PySharpLib.Numpy.csproj` with the
+sibling NDSharp checkout available; no updated package was produced.
+`NumpyArrayViews.ToView<double>(pythonArray)` exports exact double storage.
+`NumpyArrayViews.FromView(view, DType.Float64)` imports an ndarray without copying.
+Inject its wrapper through `engine.SetVariable("shared", wrapper)` before `Run`;
+each `Run` creates a new main module. Do not write shared storage during execution.
+Scalar coercion, dtype conversion and original wrapper identity are not provided.
+
 ### In notebooks
 
 JupyterSharp runs `pysharp` cells through the plugin `JupyterSharp.Kernels.PySharp` (`src/JupyterSharp.Kernels.PySharp`). Build it with

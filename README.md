@@ -13,6 +13,14 @@
 | [README](README.md) | [USAGE](USAGE.md) (install first) | [ARCHITECTURE](ARCHITECTURE.md) | [ROADMAP](ROADMAP.md) | [OPENPOINTS](OPENPOINTS.md) |
 | --- | --- | --- | --- | --- |
 
+## Typed ndarray views (source branch)
+
+`NumpyArrayViews` in the optional numpy binding exposes explicit host APIs for
+zero-copy ndarray/view interop. Shapes, strides and offset are preserved; values
+are not converted. Python builtin registries remain unchanged. The binding now
+references sibling NDSharp source; installed packages are not updated. Full common-core
+ecosystem validation remains pending.
+
 ## Science source-plot integration profile
 
 The Matplotlib binding retains its NDSharp.Plot NuGet preview default. Building with ScienceUseSourcePlots=true opts into the active Science NDSharp.Plot project and its shared PlotSharp contour kernel. MathemaSharp/ops/BuildPySharpKernel.cs -- --source-plots creates a separate kernel-source-plots output; default kernel remains package-based.

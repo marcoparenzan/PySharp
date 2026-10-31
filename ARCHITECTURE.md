@@ -1,5 +1,17 @@
 # PySharp interpreter architecture
 
+## Typed ndarray host adapter (common-core step 0, partial)
+
+`NumpyArrayViews.ToView<T>` accepts ndarray native wrappers only, not Python scalars
+or sequences. Exact CLR storage types are required. `FromView(view, dtype)` creates
+an ndarray even for rank-zero data; metadata is copied and elements are shared.
+Negative and zero strides are preserved. Base/Tag wrapper identity is not transferred.
+Shared writes require host synchronization with interpreter execution. No Python
+builtin or automatic conversion path was changed. PySharpLib.Numpy references
+sibling NDSharp source for the new contract; no interpreter-core dependency added.
+The prior source-plot profile no longer means all array dependencies are package-based:
+the numpy binding uses source NDSharp in both profiles.
+
 This document describes how the interpreter is built and records the design decisions made during
 development, with the *why* of each — so they can be revisited when the library is extracted as a
 standalone component.

@@ -4,6 +4,7 @@ Suite-wide points are in [../ScienceSharp/OPENPOINTS.md](../ScienceSharp/OPENPOI
 
 | # | Point | Status |
 | --- | --- | --- |
+| P-16 | Common-core step 0: NumpyArrayViews host adapter implemented and unit/in-interpreter tested. Source NDSharp dependency replaces numpy package pin; complete ecosystem gate and cross-language corpus pending. Shared writes require synchronization; Base/Tag identity not transferred. | partial |
 | P-1 | **VS Code extension** `marcoparenzan.pysharp` 0.1.0 is built and installed (run file, selection, REPL, install package, status bar). Open: diagnostics from `pysharp` errors, IntelliSense, debugger, and a click-through test in VS Code (only the command-building code is unit-tested, 8 tests). | partly done |
 | P-2 | The kernel plugin `JupyterSharp.Kernels.PySharp` is not packed into the feed, and references `JupyterSharp.Kernels.Abstractions` `0.3.1-net11-preview.2` while the host is at `.3`. | open |
 | P-3 | `pysharp` was updated globally from 2.5.0 to `2.5.1-net11-preview.4` on 2026-10-30. Note: `pysharp --version` prints the assembly version `2.5.1.0`, not the package version. | done |
