@@ -17,7 +17,9 @@ and 13 skipped, after change 1512 passed and 13 skipped. Shared ndarray storage
 supports signed/broadcast strides; explicit dtype and exact CLR type required.
 Numpy binding source version 2.5.1-net11-preview.2 references NDSharp source.
 No Python builtin changes, packages or publications. Full ecosystem gate and
-cross-language integration corpus remain pending; step 0 is not declared done.
+cross-language arithmetic corpus remain pending; step 0 is not declared done.
+Storage interop coverage now adds 28 dtype cases and one Mat/Python transpose
+round-trip: suite 1541 passed, 13 skipped, compared with 1512/13 before these tests.
 
 ## Method: scenario-driven development
 

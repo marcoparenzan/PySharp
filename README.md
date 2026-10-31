@@ -15,6 +15,10 @@
 
 ## Typed ndarray views (source branch)
 
+The source test suite includes 28 dtype byte-preservation cases and a real Python
+transpose round-trip of MatSharp storage. These validate host adapters, not a full
+cross-language arithmetic corpus. No ecosystem gate has been rerun for this step.
+
 `NumpyArrayViews` in the optional numpy binding exposes explicit host APIs for
 zero-copy ndarray/view interop. Shapes, strides and offset are preserved; values
 are not converted. Python builtin registries remain unchanged. The binding now

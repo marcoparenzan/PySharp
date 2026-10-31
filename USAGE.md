@@ -47,6 +47,10 @@ Embedding (reference, run code, capture output, exchange data, inject .NET objec
 
 ### Typed array views from source
 
+The source test suite also requires the sibling MatSharp checkout for test-only
+cross-view coverage. Run `dotnet test src/PySharp.Tests -c Release` from PySharp.
+This checks every declared NDSharp dtype and Mat/Python storage round-trips.
+
 Use a project reference to `src/PySharpLib.Numpy/PySharpLib.Numpy.csproj` with the
 sibling NDSharp checkout available; no updated package was produced.
 `NumpyArrayViews.ToView<double>(pythonArray)` exports exact double storage.

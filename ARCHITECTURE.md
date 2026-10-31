@@ -2,6 +2,10 @@
 
 ## Typed ndarray host adapter (common-core step 0, partial)
 
+The test project alone references the MatSharp NDSharp bridge for common-core
+interop tests; production Python projects do not depend on MatSharp. All 28 dtype
+variants are checked byte-for-byte, including temporal and complex storage tags.
+
 `NumpyArrayViews.ToView<T>` accepts ndarray native wrappers only, not Python scalars
 or sequences. Exact CLR storage types are required. `FromView(view, dtype)` creates
 an ndarray even for rank-zero data; metadata is copied and elements are shared.
