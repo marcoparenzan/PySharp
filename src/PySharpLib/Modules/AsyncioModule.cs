@@ -765,6 +765,16 @@ public static class AsyncioModule
             // behavior entirely (C#'s `new`-hiding resolves by static type, and FutureTable's own
             // delegate casts to PyFuture, not PyTask).
             ["cancel"] = new PyBuiltinFunction("Task.cancel", (_, a, _) => ((PyTask)a[0]).Cancel()),
+            ["cancelling"] = new PyBuiltinFunction("Task.cancelling", (_, a, k) =>
+            {
+                if (a.Length != 1 || k is { Count: > 0 }) throw PyErr.TypeError("Task.cancelling() takes no arguments");
+                return ((PyTask)a[0]).Cancelling();
+            }),
+            ["uncancel"] = new PyBuiltinFunction("Task.uncancel", (_, a, k) =>
+            {
+                if (a.Length != 1 || k is { Count: > 0 }) throw PyErr.TypeError("Task.uncancel() takes no arguments");
+                return ((PyTask)a[0]).Uncancel();
+            }),
             // Real Task.get_coro() — the underlying coroutine object, e.g. for real anyio's own
             // `_task_started(task)` (`getcoroutinestate(task.get_coro())`).
             ["get_coro"] = new PyBuiltinFunction("Task.get_coro", (_, a, _) => ((PyTask)a[0]).GetCoro()),

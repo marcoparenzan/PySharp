@@ -1,5 +1,16 @@
 # PySharp interpreter architecture
 
+## Per-task cancellation request counters
+
+PyTask owns a BigInteger requestcount,incremented byaccepted Cancel anddecremented
+byUncancel withzeroclamp. Counters aredistinct fromcompleted cancelled state;
+Python3.12 semantics retain MustCancel afteruncancel reacheszero. Only TaskTable
+adds cancelling/uncancel;FutureTable unchanged. Newmethodarguments validated.
+PyCoroutine delivers first-resume exceptions beforeexecuting thebody;this fixes
+pre-start cancellation,not byloosening expectations. Five lifecycle/signaturetests
+reuse existingasyncio-run collection;no existingtest serialization changed.
+LiveCPython3.11.7 andofficial3.12source confirmtarget semantics;3.13+rescission notclaimed.
+
 ## Typed ndarray host adapter (common-core step 0, partial)
 
 The test project alone references the MatSharp NDSharp bridge for common-core

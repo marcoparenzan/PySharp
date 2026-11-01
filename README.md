@@ -13,6 +13,14 @@
 | [README](README.md) | [USAGE](USAGE.md) (install first) | [ARCHITECTURE](ARCHITECTURE.md) | [ROADMAP](ROADMAP.md) | [OPENPOINTS](OPENPOINTS.md) |
 | --- | --- | --- | --- | --- |
 
+## Task cancellation counters (source branch)
+
+Task.cancelling()/uncancel() now match the declared Python3.12 counter semantics;
+pre-start cancellation is delivered before coroutine body execution. Existing
+FastAPI/anyio failures restored, full suite1546passed/13skipped. Uncancel doesnot
+rescind pending cancellation (that changed inCPython3.13). No completeasyncio parity
+ornew installedpackage is implied.
+
 ## Typed ndarray views (source branch)
 
 The source test suite includes 28 dtype byte-preservation cases and a real Python

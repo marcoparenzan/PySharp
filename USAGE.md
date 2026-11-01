@@ -45,6 +45,15 @@ Companion packages: `PySharp.Numpy`, `.Pandas`, `.Matplotlib`, `.Cv2`, `.Pywt`, 
 Embedding (reference, run code, capture output, exchange data, inject .NET objects, trace hook) is documented in
 [README.md](README.md#embedding-the-engine-in-a-net-app).
 
+### Task cancellation reference
+
+On `agent/py-task-cancellation`, Task.cancelling returns accepted requests minus
+uncancel calls;uncancel clamps atzero anddoesnot undo alreadyrequested cancellation
+under advertisedPython3.12 semantics. Cancel aftercompletion doesnot increment.
+Run `python ops/TaskCancellationReference.py` withCPython3.11/3.12 forreference and
+`dotnet test src/PySharp.Tests -c Release --filter FullyQualifiedName~TaskCancellationCountTests`
+forfive lifecycle/signaturetests. No installedglobaltool updated.
+
 ### Typed array views from source
 
 The source test suite also requires the sibling MatSharp checkout for test-only

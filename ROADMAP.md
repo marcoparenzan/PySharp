@@ -10,6 +10,15 @@ it. It is not a commitment to become a CPython replacement: it is the map of *ho
 
 ---
 
+## Task.cancelling blocker resolved — source branch
+
+Per-task cancelling/uncancel andpre-start cancellation delivery added;five newtests.
+Baseline1539passed/2failed/13skipped,after1546passed/0failed/13skipped. FastAPI/anyio
+scenarios restored. Source interpreter2.6.1-net11-preview.3,no packageproduced.
+DeclaredPython3.12 semantics verified againstlocal3.11.7 andofficial3.12source;
+3.13+uncancel rescission notimplemented. Finalecosystemgate/overallreview tracked
+separately;fullasyncio orfullcommon-core completion notclaimed.
+
 ## Language common core — step 0 (partial source implementation)
 
 NumpyArrayViews host interop and five tests added; Release baseline 1507 passed

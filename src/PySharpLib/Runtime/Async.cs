@@ -4,6 +4,7 @@
 // root for full license information.
 
 using System.Diagnostics;
+using System.Numerics;
 using System.Net.Sockets;
 using PySharpLib.Interpretation;
 
@@ -133,6 +134,13 @@ public sealed class PyCoroutine
                 _resume.Wait();
                 try
                 {
+                    // Throw into a not-yet-started coroutine before executing its body.
+                    if (_sentError is not null)
+                    {
+                        var error = _sentError;
+                        _sentError = null;
+                        throw error;
+                    }
                     ReturnValue = interp.ExecFunctionBody(_fn, _env);
                 }
                 catch (ReturnSignal r)
@@ -648,6 +656,20 @@ public sealed class PyTask : PyFuture
 {
     private readonly PyCoroutine _coro;
     private readonly Interp _interp;
+    private BigInteger _cancellationRequests;
+
+    /// <summary>Number of accepted cancel requests minus uncancel calls, clamped at zero.
+    /// This is distinct from the completed cancelled state and remains after cancellation delivery.</summary>
+    public BigInteger Cancelling() => _cancellationRequests;
+
+    /// <summary>Reduces the request count if positive and returns the remainder.
+    /// Matches the declared Python3.12 semantics: does not rescind a pending CancelledError
+    /// or undo completed cancellation. Python3.13 changed pending cancellation rescission.</summary>
+    public BigInteger Uncancel()
+    {
+        if (_cancellationRequests.Sign > 0) _cancellationRequests -= BigInteger.One;
+        return _cancellationRequests;
+    }
 
     /// <summary>Real Task.get_name()/set_name() (added CPython 3.8) — per-instance, not a shared
     /// counter (this project's own established caution around process-wide mutable state). Falls
@@ -690,6 +712,7 @@ public sealed class PyTask : PyFuture
     {
         if (IsDone)
             return false;
+        _cancellationRequests += BigInteger.One;
         var waiter = FutWaiter;
         if (waiter is not null && !waiter.IsDone)
         {
