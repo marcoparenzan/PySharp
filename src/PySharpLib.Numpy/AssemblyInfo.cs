@@ -12,3 +12,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("PySharpLib.Pywt")]
 [assembly: InternalsVisibleTo("PySharpLib.Pandas")]
 [assembly: InternalsVisibleTo("PySharpLib.Torch")]
+[assembly: InternalsVisibleTo("PySharp.Tests")]

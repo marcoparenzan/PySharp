@@ -156,23 +156,27 @@ internal static class NumpyFunctions
         Def("sum", (i, a, k) =>
         {
             var p = new Args("sum", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            if (NumpyReductions.TrySum(p, out var fast)) return fast;
             return p.Finish(3, np.Sum(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
         });
         Def("prod", (i, a, k) =>
         {
             var p = new Args("prod", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            if (NumpyReductions.TryProd(p, out var fast)) return fast;
             return p.Finish(3, np.Prod(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
         });
         Alias("product", "prod");
         Def("max", (i, a, k) =>
         {
             var p = new Args("max", i, a, k, "a", "axis", "out", "keepdims");
+            if (NumpyReductions.TryMax(p, out var fast)) return fast;
             return p.Finish(2, np.Max(p.ND(0), p.Axes(1), p.Bool(3, false)));
         });
         Alias("amax", "max");
         Def("min", (i, a, k) =>
         {
             var p = new Args("min", i, a, k, "a", "axis", "out", "keepdims");
+            if (NumpyReductions.TryMin(p, out var fast)) return fast;
             return p.Finish(2, np.Min(p.ND(0), p.Axes(1), p.Bool(3, false)));
         });
         Alias("amin", "min");
@@ -184,16 +188,19 @@ internal static class NumpyFunctions
         Def("mean", (i, a, k) =>
         {
             var p = new Args("mean", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            if (NumpyReductions.TryMean(p, out var fast)) return fast;
             return p.Finish(3, np.Mean(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
         });
         Def("std", (i, a, k) =>
         {
             var p = new Args("std", i, a, k, "a", "axis", "dtype", "out", "ddof", "keepdims");
+            if (NumpyReductions.TryStd(p, out var fast)) return fast;
             return p.Finish(3, np.Std(p.ND(0), p.Axes(1), p.Bool(5, false), p.Int(4, 0)));
         });
         Def("var", (i, a, k) =>
         {
             var p = new Args("var", i, a, k, "a", "axis", "dtype", "out", "ddof", "keepdims");
+            if (NumpyReductions.TryVar(p, out var fast)) return fast;
             return p.Finish(3, np.Var(p.ND(0), p.Axes(1), p.Bool(5, false), p.Int(4, 0)));
         });
         Def("argmax", (i, a, k) =>
@@ -209,11 +216,13 @@ internal static class NumpyFunctions
         Def("cumsum", (i, a, k) =>
         {
             var p = new Args("cumsum", i, a, k, "a", "axis", "dtype", "out");
+            if (NumpyReductions.TryCumSum(p, out var fast)) return fast;
             return p.Finish(3, np.CumSum(p.ND(0), p.Axis(1), p.DType(2)));
         });
         Def("cumprod", (i, a, k) =>
         {
             var p = new Args("cumprod", i, a, k, "a", "axis", "dtype", "out");
+            if (NumpyReductions.TryCumProd(p, out var fast)) return fast;
             return p.Finish(3, np.CumProd(p.ND(0), p.Axis(1), p.DType(2)));
         });
         Def("any", (i, a, k) =>
