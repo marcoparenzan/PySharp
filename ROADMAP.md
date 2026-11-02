@@ -1,5 +1,16 @@
 # Roadmap — PySharp toward CPython
 
+## Language common core — step 2: numpy reductions on the shared kernels (2026-11-02)
+
+`PySharpLib.Numpy/NumpyReductions.cs` answers `sum prod max min mean std var cumsum cumprod` (functions and methods) from `MathemaSharp.Kernels`
+when the array is float64, C-contiguous, non-empty, the axis is `None` or one axis, and there is no `dtype=` or `out=` (`ddof` must leave at least one degree of freedom).
+NumPy defaults: NaN propagates, `ddof=0`, sums use NumPy's pairwise algorithm and variance its two-pass one, so **results are bit-identical to NDSharp's**.
+Every other call is answered by NDSharp as before (other dtypes, several axes, transposed or sliced arrays, empty arrays, `argmax`, `ptp`, `median`, `any`, `all`, `nan*`).
+
+* Source version `PySharp.Numpy 2.5.1-net11-preview.3` (project reference to the Kernels source; no package produced, nothing published). PySharp is a public repository: the change is on a local branch, not pushed.
+* Tests: `NumpyReductionKernelTests` runs 88 expressions with the kernel path off and on and compares values (shortest round-trip text), shape and Python type; ineligible calls must not reach the kernels. Suite 1546 → 1634 passed, 13 skipped (unchanged skips).
+* The equivalence is against NDSharp, which already follows NumPy's algorithms; it is not a comparison with CPython/NumPy (NumPy is not installed here).
+
 This document tracks **the distance between PySharp and a real CPython** and the strategy to reduce
 it. It is not a commitment to become a CPython replacement: it is the map of *how much is missing* and
 *how it gets filled in*, one step at a time.
