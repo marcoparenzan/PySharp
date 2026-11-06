@@ -1,6 +1,6 @@
 using JupyterSharp.Kernels.Abstractions;
 
-namespace JupyterSharp.Kernels.PySharp;
+namespace PySharp.JupyterSharp.Kernel;
 
 /// <summary>The entire surface JupyterSharp.Host needs to load this plugin — see IKernelPlugin.</summary>
 public sealed class PySharpKernelPlugin : IKernelPlugin

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <PropertyGroup>
-    <PackageId>JupyterSharp.Kernels.PySharp</PackageId>
+    <PackageId>PySharp.JupyterSharp.Kernel</PackageId>
     <Version>0.1.1-net11-preview.5</Version>
     <Authors>Marco Parenzan</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

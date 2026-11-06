@@ -3,7 +3,7 @@ using PySharpLib;
 using PySharpLib.Parsing;
 using PySharpLib.Runtime;
 
-namespace JupyterSharp.Kernels.PySharp;
+namespace PySharp.JupyterSharp.Kernel;
 
 /// <summary>
 /// Runs Python cells on PySharp's own from-scratch interpreter (<see cref="PyEngine"/>).

@@ -70,7 +70,7 @@ Scalar coercion, dtype conversion and original wrapper identity are not provided
 
 ### In notebooks
 
-JupyterSharp runs `pysharp` cells through the plugin `JupyterSharp.Kernels.PySharp` (`src/JupyterSharp.Kernels.PySharp`). Build it with
+JupyterSharp runs `pysharp` cells through the plugin `PySharp.JupyterSharp.Kernel` (`src/PySharp.JupyterSharp.Kernel`). Build it with
 `dotnet run --file D:\Dev\Science\MathemaSharp\ops\BuildPySharpKernel.cs`, or use the packaged JupyterSharp VS Code extension, which bundles it.
 Cell state persists across cells; the last expression is echoed; DataFrames show as HTML; matplotlib figures show inline.
 
@@ -79,7 +79,7 @@ Cell state persists across cells; the last expression is echoed; DataFrames show
 The default build (what the gate uses) bundles libtorch and OpenCV. The **VS Code extension does not**, to keep it small (43 MB instead of 153 MB).
 Install them once with `D:\Dev\Science\ScienceSharp\Install-Natives.ps1` (they go into the NuGet cache; `-Check` shows the state). TorchSharp finds libtorch there by
 itself; the PySharp kernel plugin gives OpenCvSharp a resolver for the cache. Without them, a cell that uses `torch` or `cv2` says what to run. OpenCV is Windows-only.
-To build a plugin without the big natives yourself: `dotnet publish -p:PySharpExternalNatives=true` on `src/JupyterSharp.Kernels.PySharp`.
+To build a plugin without the big natives yourself: `dotnet publish -p:PySharpExternalNatives=true` on `src/PySharp.JupyterSharp.Kernel`.
 
 ### In VS Code
 

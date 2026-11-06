@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\JupyterSharp.Kernels.PySharp\JupyterSharp.Kernels.PySharp.csproj" />
+    <ProjectReference Include="..\PySharp.JupyterSharp.Kernel\PySharp.JupyterSharp.Kernel.csproj" />
   </ItemGroup>
 
 </Project>

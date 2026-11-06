@@ -1,6 +1,6 @@
-using JupyterSharp.Kernels.PySharp;
+using PySharp.JupyterSharp.Kernel;
 
-namespace JupyterSharp.Kernels.PySharp.Tests;
+namespace PySharp.JupyterSharp.Kernel.Tests;
 
 /// <summary>Skipped, with the reason in the report, when the build output still bundles the OpenCV native (the default build does).</summary>
 public sealed class FactIfOpenCvNotBundledAttribute : FactAttribute
@@ -115,7 +115,7 @@ public class NativeSupportTests : IDisposable
         finally { Environment.SetEnvironmentVariable("NUGET_PACKAGES", previous); }
     }
 
-    private sealed class Sink : JupyterSharp.Kernels.Abstractions.IKernelOutputSink
+    private sealed class Sink : global::JupyterSharp.Kernels.Abstractions.IKernelOutputSink
     {
         public List<string> Errors { get; } = [];
         public void WriteText(string text) { }

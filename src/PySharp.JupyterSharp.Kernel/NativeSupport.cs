@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-namespace JupyterSharp.Kernels.PySharp;
+namespace PySharp.JupyterSharp.Kernel;
 
 /// <summary>
 /// The big native libraries (libtorch for <c>import torch</c>, OpenCV for <c>import cv2</c>) are not bundled in the VS Code extension, to keep it small.
