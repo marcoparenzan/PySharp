@@ -716,6 +716,25 @@ internal static class NumpyFunctions
             return Conv.Wrap(np.Sort(nd, p.Int(1, -1)));
         });
         Def("sort_complex", (i, a, k) => Conv.Wrap(np.SortComplex(new Args("sort_complex", i, a, k, "a").ND(0))));
+        Def("partition", (i, a, k) =>
+        {
+            var p = new Args("partition", i, a, k, "a", "kth", "axis", "kind", "order");
+            var kth = Conv.ND(p.Required(1)).AsType(DType.Int64).Copy().Data<long>().Select(x => (int)x).ToArray();
+            if (p.Has(4)) throw PyErr.NotImplementedError("partition(order=...) is not implemented");
+            return Conv.Wrap(np.Partition(p.ND(0), kth, p[2] is PyNone ? null : p.Int(2, -1)));
+        });
+        Def("argpartition", (i, a, k) =>
+        {
+            var p = new Args("argpartition", i, a, k, "a", "kth", "axis", "kind", "order");
+            var kth = Conv.ND(p.Required(1)).AsType(DType.Int64).Copy().Data<long>().Select(x => (int)x).ToArray();
+            if (p.Has(4)) throw PyErr.NotImplementedError("argpartition(order=...) is not implemented");
+            return Conv.Wrap(np.ArgPartition(p.ND(0), kth, p[2] is PyNone ? null : p.Int(2, -1)));
+        });
+        Def("lexsort", (i, a, k) =>
+        {
+            var p = new Args("lexsort", i, a, k, "keys", "axis");
+            return Conv.Wrap(np.LexSort(p.ND(0), p.Int(1, -1)));
+        });
         Def("searchsorted", (i, a, k) =>
         {
             var p = new Args("searchsorted", i, a, k, "a", "v", "side", "sorter");
