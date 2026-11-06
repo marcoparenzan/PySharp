@@ -667,6 +667,31 @@ internal static class NumpyFunctions
             var p = new Args("bincount", i, a, k, "x", "weights", "minlength");
             return Conv.Wrap(np.BinCount(p.ND(0), p.NDOpt(1), p.Int(2, 0)));
         });
+        Def("trapezoid", (i, a, k) =>
+        {
+            var p = new Args("trapezoid", i, a, k, "y", "x", "dx", "axis");
+            return Conv.Wrap(np.Trapezoid(p.ND(0), p.NDOpt(1), p.Double(2, 1.0), p.Int(3, -1)));
+        });
+        Alias("trapz", "trapezoid");
+        Def("histogram", (i, a, k) =>
+        {
+            var p = new Args("histogram", i, a, k, "a", "bins", "range", "density", "weights");
+            if (p.Has(4)) throw PyErr.NotImplementedError("histogram(weights=...) is not implemented");
+            (double, double)? range = null;
+            if (p.Has(2))
+            {
+                var r = Conv.ND(p[2]!).AsType(DType.Float64).Copy().Data<double>();
+                if (r.Length != 2) throw PyErr.ValueError("range must have two values");
+                range = (r[0], r[1]);
+            }
+            bool density = p.Bool(3, false);
+            if (p.Has(1) && p[1] is string) throw PyErr.NotImplementedError("histogram(bins=<string>) is not implemented");
+            var binsArg = p.Has(1) ? Conv.ND(p[1]!) : null;   // a scalar is a number of bins, anything else the edges (numpy ignores range then)
+            (NDArray hist, NDArray edges) = binsArg is { Ndim: > 0 }
+                ? np.Histogram(p.ND(0), binsArg, density)
+                : np.Histogram(p.ND(0), binsArg is null ? 10 : Convert.ToInt32(binsArg.Copy().GetAt(0)), range, density);
+            return new PyTuple(new object[] { Conv.Wrap(hist), Conv.Wrap(edges) });
+        });
         Def("unravel_index", (i, a, k) =>
         {
             var p = new Args("unravel_index", i, a, k, "indices", "shape", "order");
