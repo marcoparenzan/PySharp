@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Marco Parenzan
 // Licensed under the MIT License. See the LICENSE file in the project root.
 using PySharpLib.Numpy;
+using NDSharp;
 using PySharpLib.Runtime;
 
 namespace PySharp.Tests.M14_Numpy;
@@ -41,7 +42,7 @@ public class NumpyReductionKernelTests
         "a3.sum()", "a3.mean(axis=0)", "a3.std(axis=1)", "a3.var(ddof=1)", "a3.max(axis=2)", "a3.min()", "a3.cumsum(axis=1)", "v1000.sum()",
     ];
 
-    // Not eligible for the kernels (other dtypes, dtype=, out=, several axes, non-contiguous, empty, degenerate ddof, scalars): same answers through NDSharp.
+    // Other dtypes, dtype=, several axes, non-contiguous, empty, degenerate ddof, scalars: NDSharp now answers these with the kernels too (since 2026-11-06); same answers as its general engine.
     static readonly string[] Delegated =
     [
         "np.sum(i3)", "np.sum(f32)", "np.sum(a3, dtype=np.float32)", "np.sum(a3, axis=(0, 2))", "np.sum(t)", "np.sum(t, axis=0)", "np.sum(sl, axis=1)", "np.sum(z0)",
@@ -49,9 +50,13 @@ public class NumpyReductionKernelTests
         "np.cumsum(t, axis=2)", "np.cumsum(sl)", "np.prod(i3)", "np.var(i3)",
     ];
 
+    /// <summary>Calls the kernels answered during the last <see cref="Run"/>. NDSharp counts per execution context, so numpy calls of other
+    /// test classes running in parallel do not disturb it.</summary>
+    static long calls;
+
     static string Run(string expression, bool kernels)
     {
-        NumpyReductions.Enabled = kernels;
+        using var scope = KernelPath.Begin(kernels);
         try
         {
             var output = new StringWriter();
@@ -60,7 +65,7 @@ public class NumpyReductionKernelTests
             return output.ToString();
         }
         catch (Exception e) { return "error: " + e.GetType().Name + ": " + e.Message; }
-        finally { NumpyReductions.Enabled = true; }
+        finally { calls = scope.Calls; }
     }
 
     public static IEnumerable<object[]> PlainCases() => Plain.Select(e => new object[] { e });
@@ -70,20 +75,29 @@ public class NumpyReductionKernelTests
     public void KernelsAreBitIdenticalToNDSharp(string expression)
     {
         string baseline = Run(expression, kernels: false);
-        long before = NumpyReductions.KernelCalls;
         string actual = Run(expression, kernels: true);
         Assert.Equal(baseline, actual);
         Assert.False(actual.StartsWith("error"), actual);
-        Assert.True(NumpyReductions.KernelCalls > before, $"{expression} did not reach the kernels");
+        Assert.True(calls > 0, $"{expression} did not reach the kernels");
     }
 
     [Theory, MemberData(nameof(DelegatedCases))]
-    public void IneligibleCallsStayWithNDSharp(string expression)
+    public void OtherDtypesLayoutsAndAxesMatchToo(string expression)
     {
         string baseline = Run(expression, kernels: false);
-        long before = NumpyReductions.KernelCalls;
         string actual = Run(expression, kernels: true);
         Assert.Equal(baseline, actual);
-        Assert.Equal(before, NumpyReductions.KernelCalls);
+        Assert.True(calls > 0, $"{expression} did not reach the kernels");
+    }
+
+    [Fact]
+    public void WithTheFastPathOffNumpyStillAnswersEveryCall()
+    {
+        foreach (var expression in Plain.Take(10))
+        {
+            string actual = Run(expression, kernels: false);
+            Assert.False(actual.StartsWith("error"), actual);
+            Assert.Equal(0, calls);
+        }
     }
 }

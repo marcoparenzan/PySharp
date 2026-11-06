@@ -2,13 +2,15 @@
 
 ## Language common core — step 2: numpy reductions on the shared kernels (2026-11-02)
 
-`PySharpLib.Numpy/NumpyReductions.cs` answers `sum prod max min mean std var cumsum cumprod` (functions and methods) from `MathemaSharp.Kernels`
-when the array is float64, C-contiguous, non-empty, the axis is `None` or one axis, and there is no `dtype=` or `out=` (`ddof` must leave at least one degree of freedom).
-NumPy defaults: NaN propagates, `ddof=0`, sums use NumPy's pairwise algorithm and variance its two-pass one, so **results are bit-identical to NDSharp's**.
-Every other call is answered by NDSharp as before (other dtypes, several axes, transposed or sliced arrays, empty arrays, `argmax`, `ptp`, `median`, `any`, `all`, `nan*`).
+NDSharp (`KernelPath`) runs `sum prod max min mean std var cumsum cumprod` (functions and methods) on `MathemaSharp.Kernels` for every real dtype except float16,
+over one axis, several axes or `None`, any layout (transposed, flipped, broadcast), empty arrays and `dtype=`. NaN propagates, `ddof` is honoured (a `ddof` that leaves no degree of freedom
+gives numpy's `inf` or `nan`), sums use NumPy's pairwise algorithm when the reduced elements are adjacent and plain left-to-right from the first element otherwise, variance is two-pass,
+so **results are bit-identical to NDSharp's former engine** (the engine is still there as the test oracle and for float16, complex and the temporal dtypes).
+`PySharpLib.Numpy` has no kernels code: it calls NDSharp, which references `MathemaSharp.Kernels` for this fast path (Marco allowed NDSharp to depend on MathemaSharp, 2026-11-06). An earlier version of this step had an optional `PySharp.Numpy.Kernels` package with a provider hook; it was removed the same day as redundant.
+Not on the kernels: float16, complex, `argmax`, `ptp`, `median`, `any`, `all`, `nan*`.
 
-* Source version `PySharp.Numpy 2.5.1-net11-preview.3` (project reference to the Kernels source; no package produced, nothing published). PySharp is a public repository: the change is on a local branch, not pushed.
-* Tests: `NumpyReductionKernelTests` runs 88 expressions with the kernel path off and on and compares values (shortest round-trip text), shape and Python type; ineligible calls must not reach the kernels. Suite 1546 → 1634 passed, 13 skipped (unchanged skips).
+* Source versions `NDSharp 2.8.1-net11-preview.3`, `PySharp.Numpy 2.5.1-net11-preview.4`, `PySharp 2.5.1-net11-preview.5`, `JupyterSharp.Kernels.PySharp 0.1.1-net11-preview.5` (project references; no package produced, nothing published). PySharp is a public repository: the change is on a local branch, not pushed.
+* Tests: `NumpyReductionKernelTests` runs 88 expressions with the NDSharp kernel path off and on (`KernelPath.Begin`) and compares values (shortest round-trip text), shape and Python type; the former "must stay on the engine" cases (other dtypes, `dtype=`, several axes, transposed, empty, degenerate `ddof`) now must reach the kernels and give the same text. Counts are per test context (numpy calls of other test classes running in parallel do not disturb them). Suite 1546 → 1635 passed, 13 skipped (unchanged skips); a test checks that numpy answers the same with the fast path off.
 * The equivalence is against NDSharp, which already follows NumPy's algorithms; it is not a comparison with CPython/NumPy (NumPy is not installed here).
 
 This document tracks **the distance between PySharp and a real CPython** and the strategy to reduce
@@ -1186,3 +1188,5 @@ in scenario 1).
 
 _Update these numbers at every milestone._
 
+
+* numpy `quantile` and `percentile` now accept every `method=` (13 values, through NDSharp on the kernels); `median` also runs on the kernels. `NumpyQuantileMethodTests` (15 cases, values by hand, not compared with CPython/NumPy).

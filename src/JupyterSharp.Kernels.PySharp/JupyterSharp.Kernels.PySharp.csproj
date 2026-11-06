@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -7,7 +7,7 @@
   </PropertyGroup>
   <PropertyGroup>
     <PackageId>JupyterSharp.Kernels.PySharp</PackageId>
-    <Version>0.1.1-net11-preview.4</Version>
+    <Version>0.1.1-net11-preview.5</Version>
     <Authors>Marco Parenzan</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>A JupyterSharp kernel plugin that runs Python cells on this repo's own PyEngine, with session state shared across cells.</Description>
