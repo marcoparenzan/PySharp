@@ -1191,3 +1191,4 @@ _Update these numbers at every milestone._
 
 * numpy `quantile` and `percentile` now accept every `method=` (13 values, through NDSharp on the kernels); `median` also runs on the kernels. `NumpyQuantileMethodTests` (15 cases, values by hand, not compared with CPython/NumPy).
 * numpy `trapezoid`/`trapz`, `histogram` (integer bins, explicit edges, `range`, `density`; no `weights`, no bin-rule strings) are new, and `gradient` runs on the kernels: `NumpyCalculusTests` (4 cases, values by hand, not compared with CPython/NumPy). Suite 1654 passed, 13 skipped.
+* numpy `nansum nanprod nanmean nanvar nanstd nanmax nanmin nanmedian nanpercentile nanquantile nanargmax nanargmin nancumsum nancumprod` are new (NDSharp, on the kernels); `any`, `all`, `count_nonzero`, `argmax`, `argmin`, `diff` and float16 reductions run on the kernels too: `NumpyNanFunctionsTests` (15 cases, values by hand, not compared with CPython/NumPy). Suite 1669 passed, 13 skipped.

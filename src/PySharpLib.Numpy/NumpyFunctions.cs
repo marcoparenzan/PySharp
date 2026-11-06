@@ -216,6 +216,79 @@ internal static class NumpyFunctions
             var p = new Args("cumprod", i, a, k, "a", "axis", "dtype", "out");
             return p.Finish(3, np.CumProd(p.ND(0), p.Axis(1), p.DType(2)));
         });
+        // ---------------------------------------------------------------- nan* (NDSharp, on the MathemaSharp kernels)
+        Def("nansum", (i, a, k) =>
+        {
+            var p = new Args("nansum", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            return p.Finish(3, np.NanSum(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
+        });
+        Def("nanprod", (i, a, k) =>
+        {
+            var p = new Args("nanprod", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            return p.Finish(3, np.NanProd(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
+        });
+        Def("nanmean", (i, a, k) =>
+        {
+            var p = new Args("nanmean", i, a, k, "a", "axis", "dtype", "out", "keepdims");
+            return p.Finish(3, np.NanMean(p.ND(0), p.Axes(1), p.Bool(4, false), p.DType(2)));
+        });
+        Def("nanvar", (i, a, k) =>
+        {
+            var p = new Args("nanvar", i, a, k, "a", "axis", "dtype", "out", "ddof", "keepdims");
+            if (p.Has(2)) throw PyErr.NotImplementedError("nanvar(dtype=...) is not implemented");
+            return p.Finish(3, np.NanVar(p.ND(0), p.Axes(1), p.Bool(5, false), p.Int(4, 0)));
+        });
+        Def("nanstd", (i, a, k) =>
+        {
+            var p = new Args("nanstd", i, a, k, "a", "axis", "dtype", "out", "ddof", "keepdims");
+            if (p.Has(2)) throw PyErr.NotImplementedError("nanstd(dtype=...) is not implemented");
+            return p.Finish(3, np.NanStd(p.ND(0), p.Axes(1), p.Bool(5, false), p.Int(4, 0)));
+        });
+        Def("nanmax", (i, a, k) =>
+        {
+            var p = new Args("nanmax", i, a, k, "a", "axis", "out", "keepdims");
+            return p.Finish(2, np.NanMax(p.ND(0), p.Axes(1), p.Bool(3, false)));
+        });
+        Def("nanmin", (i, a, k) =>
+        {
+            var p = new Args("nanmin", i, a, k, "a", "axis", "out", "keepdims");
+            return p.Finish(2, np.NanMin(p.ND(0), p.Axes(1), p.Bool(3, false)));
+        });
+        Def("nanmedian", (i, a, k) =>
+        {
+            var p = new Args("nanmedian", i, a, k, "a", "axis", "out", "overwrite_input", "keepdims");
+            return p.Finish(2, np.NanMedian(p.ND(0), p.Axes(1), p.Bool(4, false)));
+        });
+        Def("nanpercentile", (i, a, k) =>
+        {
+            var p = new Args("nanpercentile", i, a, k, "a", "q", "axis", "out", "overwrite_input", "method", "keepdims");
+            return p.Finish(3, np.NanPercentile(p.ND(0), p.ND(1), p.Axes(2), p.Bool(6, false), false, p.Has(5) ? (string)p[5]! : "linear"));
+        });
+        Def("nanquantile", (i, a, k) =>
+        {
+            var p = new Args("nanquantile", i, a, k, "a", "q", "axis", "out", "overwrite_input", "method", "keepdims");
+            return p.Finish(3, np.NanPercentile(p.ND(0), p.ND(1), p.Axes(2), p.Bool(6, false), true, p.Has(5) ? (string)p[5]! : "linear"));
+        });
+        Def("nanargmax", (i, a, k) =>
+        {
+            var p = new Args("nanargmax", i, a, k, "a", "axis", "out", "keepdims");
+            return p.Finish(2, np.NanArgMax(p.ND(0), p.Axis(1), p.Bool(3, false)));
+        });
+        Def("nanargmin", (i, a, k) =>
+        {
+            var p = new Args("nanargmin", i, a, k, "a", "axis", "out", "keepdims");
+            return p.Finish(2, np.NanArgMin(p.ND(0), p.Axis(1), p.Bool(3, false)));
+        });
+        Def("nancumsum", (i, a, k) =>
+        {
+            var p = new Args("nancumsum", i, a, k, "a", "axis", "dtype", "out");
+            return p.Finish(3, np.NanCumSum(p.ND(0), p.Axis(1), p.DType(2)));
+        });
+        Def("nancumprod", (i, a, k) =>
+        {
+            var p = new Args("nancumprod", i, a, k, "a", "axis", "dtype", "out");
+            return p.Finish(3, np.NanCumProd(p.ND(0), p.Axis(1), p.DType(2)));
+        });
         Def("any", (i, a, k) =>
         {
             var p = new Args("any", i, a, k, "a", "axis", "out", "keepdims");
