@@ -716,6 +716,11 @@ internal static class NumpyFunctions
             return Conv.Wrap(np.Sort(nd, p.Int(1, -1)));
         });
         Def("sort_complex", (i, a, k) => Conv.Wrap(np.SortComplex(new Args("sort_complex", i, a, k, "a").ND(0))));
+        Def("searchsorted", (i, a, k) =>
+        {
+            var p = new Args("searchsorted", i, a, k, "a", "v", "side", "sorter");
+            return Conv.Wrap(np.SearchSorted(p.ND(0), p.ND(1), p.Has(2) ? (string)p[2]! : "left", p.NDOpt(3)));
+        });
         Def("argsort", (i, a, k) =>
         {
             var p = new Args("argsort", i, a, k, "a", "axis", "kind", "order");
