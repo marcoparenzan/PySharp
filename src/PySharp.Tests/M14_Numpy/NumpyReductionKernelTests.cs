@@ -6,8 +6,8 @@ using PySharpLib.Runtime;
 
 namespace PySharp.Tests.M14_Numpy;
 
-/// <summary>The kernel-backed numpy reductions must give exactly what NDSharp gave: every expression runs with the kernel path off and on,
-/// and the results (values as shortest round-trip text, shape, Python type) must be identical.</summary>
+/// <summary>The numpy reductions and scans run on the MathemaSharp kernels (through NDSharp). Every expression must reach the kernels and print its reference text: values as shortest
+/// round-trip text, shape and Python type.</summary>
 [Collection("NumpyReductionKernels")]
 public class NumpyReductionKernelTests
 {
@@ -54,9 +54,9 @@ public class NumpyReductionKernelTests
     /// test classes running in parallel do not disturb it.</summary>
     static long calls;
 
-    static string Run(string expression, bool kernels)
+    static string Run(string expression)
     {
-        using var scope = KernelPath.Begin(kernels);
+        using var scope = KernelPath.Begin();
         try
         {
             var output = new StringWriter();
@@ -68,36 +68,40 @@ public class NumpyReductionKernelTests
         finally { calls = scope.Calls; }
     }
 
+    // The reference texts (Fixtures/numpy-reductions-golden.txt) are what these expressions printed on 2026-11-06 on the kernels. At the array level the kernels were required to
+    // agree bit for bit with NDSharp's former general engine (see NDSharp.Tests Golden); this file freezes what Python sees: values as shortest round-trip text, shape and type.
+    static readonly Lazy<Dictionary<string, string>> Reference = new(() =>
+        File.ReadLines(Path.Combine(AppContext.BaseDirectory, "Fixtures", "numpy-reductions-golden.txt"))
+            .Select(l => l.Split('\t', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1].Replace("\\n", "\n")));
+
+    static void Check(string expression, string actual)
+    {
+        if (Reference.Value.TryGetValue(expression, out var expected)) { Assert.Equal(expected, actual); return; }
+        if (Environment.GetEnvironmentVariable("NDSHARP_GOLDEN") == "add" && Environment.GetEnvironmentVariable("NDSHARP_GOLDEN_FILE") is { } file)
+        {
+            File.AppendAllText(file, expression + "\t" + actual.Replace("\n", "\\n") + "\n");
+            return;
+        }
+        Assert.Fail($"no reference text for '{expression}' in Fixtures/numpy-reductions-golden.txt (check it by hand, then add it with NDSHARP_GOLDEN=add and NDSHARP_GOLDEN_FILE)");
+    }
+
     public static IEnumerable<object[]> PlainCases() => Plain.Select(e => new object[] { e });
-    public static IEnumerable<object[]> DelegatedCases() => Delegated.Select(e => new object[] { e });
+    public static IEnumerable<object[]> DelegatedCases() => Delegated.Distinct().Select(e => new object[] { e });
 
     [Theory, MemberData(nameof(PlainCases))]
-    public void KernelsAreBitIdenticalToNDSharp(string expression)
+    public void PlainCallsRunOnTheKernelsAndKeepTheirReferenceText(string expression)
     {
-        string baseline = Run(expression, kernels: false);
-        string actual = Run(expression, kernels: true);
-        Assert.Equal(baseline, actual);
+        string actual = Run(expression);
         Assert.False(actual.StartsWith("error"), actual);
         Assert.True(calls > 0, $"{expression} did not reach the kernels");
+        Check(expression, actual);
     }
 
     [Theory, MemberData(nameof(DelegatedCases))]
-    public void OtherDtypesLayoutsAndAxesMatchToo(string expression)
+    public void OtherDtypesLayoutsAndAxesKeepTheirReferenceText(string expression)
     {
-        string baseline = Run(expression, kernels: false);
-        string actual = Run(expression, kernels: true);
-        Assert.Equal(baseline, actual);
+        string actual = Run(expression);
         Assert.True(calls > 0, $"{expression} did not reach the kernels");
-    }
-
-    [Fact]
-    public void WithTheFastPathOffNumpyStillAnswersEveryCall()
-    {
-        foreach (var expression in Plain.Take(10))
-        {
-            string actual = Run(expression, kernels: false);
-            Assert.False(actual.StartsWith("error"), actual);
-            Assert.Equal(0, calls);
-        }
+        Check(expression, actual);
     }
 }
