@@ -35,6 +35,7 @@ public class OracleTests
     public static IEnumerable<object[]> Torch() => Snippets("torch");
     public static IEnumerable<object[]> Torchvision() => Snippets("torchvision");
     public static IEnumerable<object[]> Pandas() => Snippets("pandas");
+    public static IEnumerable<object[]> Math() => Snippets("math");
 
     private static void RunCase(string lib, string name)
     {
@@ -70,6 +71,10 @@ public class OracleTests
     /// <summary>Pretrained-model snippets download torchvision weights (tens to hundreds of MB, cached in ~/.cache/torch/hub): opt-in.</summary>
     [PretrainedTheory, MemberData(nameof(Torchvision))]
     public void Torchvision_snippet_matches_real_torchvision(string name) => RunCase("torchvision", name);
+
+    /// <summary>The math module against real CPython: special functions, small-argument exp/log, hypot and the error cases (MathemaSharp.Core is behind them).</summary>
+    [Theory, MemberData(nameof(Math))]
+    public void Math_snippet_matches_real_cpython(string name) => RunCase("math", name);
 
     [Theory, MemberData(nameof(Numpy))]
     public void Numpy_snippet_matches_real_numpy(string name) => RunCase("numpy", name);

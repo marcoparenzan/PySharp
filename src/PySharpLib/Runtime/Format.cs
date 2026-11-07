@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Marco Parenzan
+﻿// Copyright (c) 2026 Marco Parenzan
 //
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
@@ -104,7 +104,9 @@ public static class PyFormat
                 negative = d < 0 || (d == 0 && double.IsNegative(d));
                 double abs = Math.Abs(d);
                 int prec = precision >= 0 ? precision : 6;
-                body = type switch
+                body = !double.IsFinite(abs)
+                    ? (type is 'F' or 'E' or 'G' ? (double.IsNaN(abs) ? "NAN" : "INF") : (double.IsNaN(abs) ? "nan" : "inf"))   // as CPython: no digits, no exponent
+                    : type switch
                 {
                     'e' => abs.ToString("0." + new string('0', prec) + "e+00", CultureInfo.InvariantCulture),
                     'E' => abs.ToString("0." + new string('0', prec) + "E+00", CultureInfo.InvariantCulture),

@@ -1,9 +1,11 @@
-// Copyright (c) 2026 Marco Parenzan
+﻿// Copyright (c) 2026 Marco Parenzan
 //
 // Licensed under the MIT License. See the LICENSE file in the project
 // root for full license information.
 
 using System.Numerics;
+using MathemaSharp;
+using MathemaSharp.Core;
 using PySharpLib.Runtime;
 
 namespace PySharpLib.Modules;
@@ -35,12 +37,34 @@ public static class MathModule
         F1("cosh", Math.Cosh);
         F1("tanh", Math.Tanh);
         F1("exp", Math.Exp);
-        F1("expm1", x => Math.Exp(x) - 1);
+        // expm1 and log1p are exact for small arguments (the old Math.Exp(x) - 1 and Math.Log(1 + x) lost every digit below 1e-16), and
+        // report out-of-range arguments as CPython does.
+        F1("expm1", x =>
+        {
+            var r = SpecialFunctions.ExpM1(x);
+            if (double.IsInfinity(r) && double.IsFinite(x)) throw PyErr.OverflowError("math range error");
+            return r;
+        });
         F1("radians", x => x * Math.PI / 180);
         F1("degrees", x => x * 180 / Math.PI);
-        F1("erf", Erf);
-        F1("gamma", Gamma);
-        F1("lgamma", x => Math.Log(Math.Abs(Gamma(x))));
+        // The error and gamma functions are MathemaSharp.Core.SpecialFunctions, accurate to a few ulp against libm
+        // (the old local Erf was Abramowitz-Stegun 7.1.26, about 1e-7).
+        F1("erf", SpecialFunctions.Erf);
+        F1("erfc", SpecialFunctions.Erfc);
+        F1("gamma", x =>
+        {
+            var r = SpecialFunctions.Gamma(x);
+            if (double.IsNaN(r) && !double.IsNaN(x)) throw PyErr.ValueError("math domain error");   // a pole, or -inf
+            if (double.IsInfinity(r) && double.IsFinite(x)) throw PyErr.OverflowError("math range error");
+            return r;
+        });
+        F1("lgamma", x =>
+        {
+            if (double.IsFinite(x) && x <= 0 && Math.Floor(x) == x) throw PyErr.ValueError("math domain error");   // a pole
+            var r = SpecialFunctions.LogAbsGamma(x);
+            if (double.IsPositiveInfinity(r) && double.IsFinite(x)) throw PyErr.OverflowError("math range error");
+            return r;
+        });
 
         d["log"] = new PyBuiltinFunction("log", (_, a, _) =>
         {
@@ -51,13 +75,24 @@ public static class MathModule
         });
         d["log2"] = new PyBuiltinFunction("log2", (_, a, _) => Math.Log2(PyOps.AsDouble(a[0])));
         d["log10"] = new PyBuiltinFunction("log10", (_, a, _) => Math.Log10(PyOps.AsDouble(a[0])));
-        d["log1p"] = new PyBuiltinFunction("log1p", (_, a, _) => Math.Log(1 + PyOps.AsDouble(a[0])));
+        d["log1p"] = new PyBuiltinFunction("log1p", (_, a, _) =>
+        {
+            double x = PyOps.AsDouble(a[0]);
+            if (x <= -1) throw PyErr.ValueError("math domain error");
+            return SpecialFunctions.LogP1(x);
+        });
         d["pow"] = new PyBuiltinFunction("pow", (_, a, _) =>
             Math.Pow(PyOps.AsDouble(a[0]), PyOps.AsDouble(a[1])));
         d["atan2"] = new PyBuiltinFunction("atan2", (_, a, _) =>
             Math.Atan2(PyOps.AsDouble(a[0]), PyOps.AsDouble(a[1])));
+        // hypot of any number of coordinates, by folding MathemaSharp's two-argument hypot: no overflow or underflow in the squares
+        // (the old square-root-of-the-sum-of-squares gave inf for hypot(1e200, 1e200)).
         d["hypot"] = new PyBuiltinFunction("hypot", (_, a, _) =>
-            Math.Sqrt(a.Sum(x => { double v = PyOps.AsDouble(x); return v * v; })));
+        {
+            double r = 0;
+            foreach (var x in a) r = GenericMath.Hypot(r, PyOps.AsDouble(x));
+            return r;
+        });
         d["copysign"] = new PyBuiltinFunction("copysign", (_, a, _) =>
             Math.CopySign(PyOps.AsDouble(a[0]), PyOps.AsDouble(a[1])));
         // fmod: remainder with the dividend's sign (as in C), which is the semantics of % on double in .NET
@@ -142,33 +177,5 @@ public static class MathModule
         });
 
         return m;
-    }
-
-    private static double Erf(double x)
-    {
-        // Abramowitz & Stegun 7.1.26
-        double t = 1.0 / (1.0 + 0.3275911 * Math.Abs(x));
-        double y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
-                          + 0.254829592) * t * Math.Exp(-x * x);
-        return Math.Sign(x) * y;
-    }
-
-    private static double Gamma(double x)
-    {
-        // Lanczos approximation
-        double[] g =
-        {
-            0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-            771.32342877765313, -176.61502916214059, 12.507343278686905,
-            -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
-        };
-        if (x < 0.5)
-            return Math.PI / (Math.Sin(Math.PI * x) * Gamma(1 - x));
-        x -= 1;
-        double a = g[0];
-        double t = x + 7.5;
-        for (int i = 1; i < g.Length; i++)
-            a += g[i] / (x + i);
-        return Math.Sqrt(2 * Math.PI) * Math.Pow(t, x + 0.5) * Math.Exp(-t) * a;
     }
 }

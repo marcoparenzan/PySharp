@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <!-- NuGet package metadata: the interpreter as a standalone, embeddable library. -->
     <PackageId>PySharp.Interpreter</PackageId>
-    <Version>2.6.1-net11-preview.3</Version>
+    <Version>2.6.1-net11-preview.4</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp — a Python 3.x interpreter written from scratch in C# (.NET 11), embeddable as a library via the PyEngine facade. No CPython dependency.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -18,5 +18,9 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Reusable mathematics lives in MathemaSharp: PySharpLib delegates to it (special functions, small-argument exp/log, hypot) instead of keeping its own copies. -->
+    <ProjectReference Include="../../../MathemaSharp/src/libs/MathemaSharp.Core/MathemaSharp.Core.csproj" />
   </ItemGroup>
 </Project>
