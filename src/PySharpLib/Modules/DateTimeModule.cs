@@ -272,6 +272,16 @@ public static class DateTimeModule
 
     // ------------------------------------------------------------------ time (of day)
 
+    /// <summary>"+HH:MM" for a datetime whose tzinfo is a `timezone` (real CPython prints the offset of
+    /// aware datetimes in isoformat()/str()); empty for naive ones.</summary>
+    private static string OffsetSuffix(object dt)
+    {
+        if (dt is not PyInstance { } i || !i.Dict.TryGet("tzinfo", out var tz) || tz is not PyInstance tzi || tzi.Class != TimeZoneClass)
+            return "";
+        var off = (TimeSpan)Field(tzi, "__offset__");
+        return (off < TimeSpan.Zero ? "-" : "+") + off.Duration().ToString(@"hh\:mm", CultureInfo.InvariantCulture);
+    }
+
     private static string MicroSuffix(long ticks) => ticks % TimeSpan.TicksPerSecond / 10 is var us and not 0 ? "." + us.ToString("D6", CultureInfo.InvariantCulture) : "";
 
     private static PyClass BuildTimeClass()
@@ -360,7 +370,20 @@ public static class DateTimeModule
         cls.Dict["microsecond"] = new PyProperty { Getter = new PyBuiltinFunction("datetime.microsecond", (_, a, _) => new BigInteger(Value(a[0]).Ticks % TimeSpan.TicksPerSecond / 10)) };
         cls.Dict["tzinfo"] = new PyProperty { Getter = new PyBuiltinFunction("datetime.tzinfo", (_, a, _) => Field(a[0], "tzinfo")) };
 
-        Add("now", (_, _, _) => MakeDateTime(DateTime.Now));
+        // Real CPython: now(tz=None) — naive local time when tz is omitted, or an aware datetime in
+        // tz's own offset when given (`datetime.now(timezone.utc)`, the standard way to get a UTC
+        // timestamp; before this it ignored `tz` and returned local wall time).
+        Add("now", (_, a, kwargs) =>
+        {
+            object? tz = a.Length > 0 ? a[0] : kwargs is not null && kwargs.TryGetValue("tz", out var t) ? t : null;
+            if (tz is PyInstance tzi && tzi.Class == TimeZoneClass)
+            {
+                var inst = MakeDateTime(DateTime.SpecifyKind(DateTime.UtcNow.Add((TimeSpan)Field(tzi, "__offset__")), DateTimeKind.Unspecified));
+                inst.Dict["tzinfo"] = tz;
+                return inst;
+            }
+            return MakeDateTime(DateTime.Now);
+        });
         Add("utcnow", (_, _, _) => MakeDateTime(DateTime.UtcNow));
         Add("today", (_, _, _) => MakeDateTime(DateTime.Now));
         // Real CPython: fromtimestamp(ts, tz=None) — naive local time when tz is omitted, or an
@@ -389,9 +412,9 @@ public static class DateTimeModule
         Add("isoformat", (_, a, kwargs) =>
         {
             string sep = kwargs is not null && kwargs.TryGetValue("sep", out var s) ? (string)s : "T";
-            return Value(a[0]).ToString($"yyyy-MM-dd{sep}HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks);
+            return Value(a[0]).ToString($"yyyy-MM-dd{sep}HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks) + OffsetSuffix(a[0]);
         });
-        Add("__str__", (_, a, _) => Value(a[0]).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks));
+        Add("__str__", (_, a, _) => Value(a[0]).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + MicroSuffix(Value(a[0]).Ticks) + OffsetSuffix(a[0]));
         Add("__repr__", (_, a, _) =>
         {
             var v = Value(a[0]);

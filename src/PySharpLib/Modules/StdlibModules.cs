@@ -85,6 +85,7 @@ public static class StdlibModules
         importer.RegisterBuiltin("math", _ => MathModule.Create());
         importer.RegisterBuiltin("decimal", _ => DecimalModule.Create());
         importer.RegisterBuiltin("mathema", _ => MathemaModule.Create());
+        importer.RegisterBuiltin("pysharp_signing", _ => SigningModule.Create());
         importer.RegisterBuiltin("datetime", _ => DateTimeModule.Create());
         importer.RegisterBuiltin("ipaddress", _ => IpAddressModule.Create());
         importer.RegisterBuiltin("re", _ => ReModule.Create());

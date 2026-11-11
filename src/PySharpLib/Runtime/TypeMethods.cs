@@ -1272,6 +1272,30 @@ public static class DictMethods
         return t;
     }
 
+    /// <summary>bytes.fromhex/bytearray.fromhex: ASCII whitespace is allowed between byte pairs (never
+    /// inside one); anything else that is not a hex digit is a ValueError naming the position, like
+    /// CPython's "non-hexadecimal number found in fromhex() arg at position N".</summary>
+    internal static byte[] FromHex(object[] a)
+    {
+        if (a.Length == 0 || a[^1] is not string text)
+            throw PyErr.TypeError("fromhex() argument must be str");
+        var result = new List<byte>(text.Length / 2);
+        for (int i = 0; i < text.Length;)
+        {
+            if (text[i] == (char)32 || (text[i] >= (char)9 && text[i] <= (char)13)) { i++; continue; } // ASCII whitespace
+            int hi = Uri.IsHexDigit(text[i]) ? Convert.ToInt32(text[i].ToString(), 16) : -1;
+            if (hi < 0)
+                throw PyErr.Raise(PyErr.ValueErrorClass, $"non-hexadecimal number found in fromhex() arg at position {i}");
+            int j = i + 1;
+            int lo = j < text.Length && Uri.IsHexDigit(text[j]) ? Convert.ToInt32(text[j].ToString(), 16) : -1;
+            if (lo < 0)
+                throw PyErr.Raise(PyErr.ValueErrorClass, $"non-hexadecimal number found in fromhex() arg at position {j}");
+            result.Add((byte)(hi << 4 | lo));
+            i += 2;
+        }
+        return result.ToArray();
+    }
+
     // Accepts either a raw PyDict (the literal-dict-method-call shape) or a PyInstance whose class
     // derives from the "dict" pseudo-base (a real `class Foo(dict): ...` subclass instance — see
     // PyInstance.Mapping's own doc comment), so the exact same method bodies serve both shapes.
@@ -1498,6 +1522,10 @@ public static class BytesMethods
             return StrModules.GetEncoding(encoding).GetString(B(a).Data);
         });
         Add("hex", (_, a, _) => Convert.ToHexString(B(a).Data).ToLowerInvariant());
+        // Real CPython: bytes.fromhex(string) is a classmethod — `bytes.fromhex("00ff")`; the unbound
+        // call shape (like dict.fromkeys above), and also tolerated off an instance
+        // (`b"".fromhex("00ff")`, where args[0] is the instance and the string comes last).
+        Add("fromhex", (_, a, _) => new PyBytes(DictMethods.FromHex(a)));
         Add("find", (_, a, _) =>
         {
             var data = B(a).Data;
@@ -1704,6 +1732,7 @@ public static class ByteArrayMethods
             return PyNone.Instance;
         });
         Add("hex", (_, a, _) => Convert.ToHexString(BA(a).Data.ToArray()).ToLowerInvariant());
+        Add("fromhex", (_, a, _) => new PyByteArray(DictMethods.FromHex(a)));
         return t;
     }
 

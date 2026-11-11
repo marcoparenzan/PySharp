@@ -25,7 +25,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pysharp</ToolCommandName>
     <PackageId>PySharp</PackageId>
-    <Version>2.5.1-net11-preview.5</Version>
+    <Version>2.5.1-net11-preview.10</Version>
     <Authors>Marco Parenzan</Authors>
     <Description>PySharp — interprete Python 3.x scritto in C#, come strumento da riga di comando.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

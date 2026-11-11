@@ -129,6 +129,9 @@ public static class OsModule
                 Directory.Move(src, dst);
             return PyNone.Instance;
         });
+        // os.replace: like rename, but the contract is "overwrite an existing destination" on every
+        // platform (used for atomic-style file swaps).
+        d["replace"] = d["rename"];
         d["chmod"] = new PyBuiltinFunction("chmod", (interp, a, _) =>
         {
             string path = PathArg(interp, a[0]);

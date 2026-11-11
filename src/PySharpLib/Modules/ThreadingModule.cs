@@ -472,7 +472,18 @@ public static class ThreadingModule
                 }
             })
             { IsBackground = true };
+            inst.Dict["_thread"] = thread;
             thread.Start();
+            return PyNone.Instance;
+        });
+        // Timer is a Thread subclass in CPython, so join([timeout]) waits for the callback to finish.
+        Add("join", (_, a, _) =>
+        {
+            if (((PyInstance)a[0]).Dict.TryGet("_thread", out var t) && t is Thread th)
+            {
+                if (a.Length > 1 && a[1] is not PyNone) th.Join(TimeSpan.FromSeconds(PyOps.AsDouble(a[1])));
+                else th.Join();
+            }
             return PyNone.Instance;
         });
         Add("cancel", (_, a, _) =>

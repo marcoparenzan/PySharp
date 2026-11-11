@@ -2359,8 +2359,11 @@ public sealed partial class Interp
             if (right is PyInstance ri && TryCallMethod(ri, CmpDunders[op], new[] { left }, out var r2)
                 && r2 is not PyNotImplemented)
                 return r2;
-            bool eq = PyOps.PyEquals(left, right);
-            return op == "==" ? eq : !eq;
+            // Python's default object.__ne__ inverts __eq__: when neither side defines __ne__ (an Enum/IntEnum
+            // member, or a class that only defines __eq__), `!=` must still consult __eq__ instead of falling
+            // straight to the structural comparison, which sees an enum member and an int as different.
+            if (op == "!=") return !RichEquals(left, right);
+            return PyOps.PyEquals(left, right);
         }
 
         int? cmp = TryOrder(left, right);

@@ -69,6 +69,18 @@ public static class FileObject
         {
             throw PyErr.Raise(PyErr.PermissionErrorClass, $"[Errno 13] Permission denied: '{path}'");
         }
+        catch (IOException ex)
+        {
+            // Any other I/O failure used to escape as an unhandled .NET exception and end the whole process, so
+            // `except OSError` could never catch it. On Windows a file another handle has open (or that is being
+            // replaced) is ERROR_SHARING_VIOLATION (32) / ERROR_LOCK_VIOLATION (33): CPython raises PermissionError
+            // (WinError 32). Everything else is a plain OSError.
+            int win32 = ex.HResult & 0xFFFF;
+            if (OperatingSystem.IsWindows() && (win32 == 32 || win32 == 33))
+                throw PyErr.Raise(PyErr.PermissionErrorClass,
+                    $"[WinError {win32}] The process cannot access the file because it is being used by another process: '{path}'");
+            throw PyErr.Raise(PyErr.OSErrorClass, $"[Errno 5] Input/output error: '{path}' ({ex.Message})");
+        }
 
         var handle = new Handle { Stream = stream, Binary = binary };
         if (!binary)

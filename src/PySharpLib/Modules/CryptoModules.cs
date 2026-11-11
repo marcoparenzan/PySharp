@@ -118,6 +118,15 @@ public static class CryptoModules
             return PyNone.Instance;
         });
 
+        // Constant-time comparison (same implementation as secrets.compare_digest): the length may
+        // leak, the content never short-circuits.
+        d["compare_digest"] = new PyBuiltinFunction("compare_digest", (_, a, _) =>
+        {
+            byte[] x = a[0] is string sx ? System.Text.Encoding.ASCII.GetBytes(sx) : AsBytes(a[0]);
+            byte[] y = a[1] is string sy ? System.Text.Encoding.ASCII.GetBytes(sy) : AsBytes(a[1]);
+            return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(x, y);
+        });
+
         d["new"] = new PyBuiltinFunction("new", (_, a, kwargs) =>
         {
             var key = AsBytes(a[0]);

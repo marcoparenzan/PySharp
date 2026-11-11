@@ -4,6 +4,27 @@ Versions follow the development milestones. Dates are completion dates.
 
 ---
 
+## Unreleased — stdlib gaps found by a long-running IoT device agent
+
+Found while running the AzureIoTForge device agent (DPS + MQTT + twin + hot-swappable payload) under PySharp. All are plain CPython behaviour; covered by `M6_Stdlib/DeviceRuntimeGapsTests.cs`.
+
+- **`datetime.now(tz)`** honoured `tz` never: it always returned naive local time, so `datetime.now(timezone.utc)` was wrong by the local offset. It now returns an aware datetime in `tz`'s offset.
+- **`datetime.isoformat()` / `str()`** of an aware datetime (tzinfo is a `timezone`) now append the offset (`+00:00`); naive datetimes are unchanged.
+- **`os.replace`** added (overwrites an existing destination, like `os.rename` here).
+- **`hmac.compare_digest`** added (constant-time, bytes or ASCII str).
+- **`threading.Timer.join([timeout])`** added.
+
+- **`bytes.fromhex` / `bytearray.fromhex`** added (ASCII whitespace allowed between byte pairs; `ValueError` with the position on a bad digit or odd length, like CPython).
+- **`pysharp_signing`** (new PySharp-specific builtin, like `mathema`; CPython has no asymmetric crypto in its stdlib): `generate_keypair(alg)`, `sign(alg, private_pem, data)`, `verify(alg, public_pem, data, signature) -> bool`. Algorithms `ecdsa-p256-sha256`, `ecdsa-p384-sha384`, `rsa-pss-sha256`; PEM keys; ECDSA signatures are IEEE P1363 (r||s); `verify` returns False for a bad signature and raises `ValueError` for an unknown algorithm or an unusable key. Backed by .NET `System.Security.Cryptography`; tests in `M6_Stdlib/SigningModuleTests.cs` include .NET⇄PySharp interop in both directions. Ed25519 is not offered (not in the stable BCL).
+
+- **`!=` follows `==` when a type defines only `__eq__`** (fix): Enum/IntEnum/IntFlag members and classes that define `__eq__` without `__ne__` gave `!=` the structural comparison instead of inverting `__eq__`, so `E.A == 0` and `E.A != 0` were both true (an inverted `rc != MQTT_ERR_SUCCESS` check in paho-mqtt). Covered by `M6_Stdlib/NotEqualDerivedFromEqTests.cs`.
+
+- **`open()` failing on a locked file raises a catchable `OSError`** (fix): an I/O failure such as a file another handle holds (Windows sharing/lock violation) escaped as an unhandled .NET `IOException` that ended the whole process, so no `except OSError` could catch it. It is now `PermissionError` (`[WinError 32]`) for sharing and lock violations and `OSError` otherwise, like CPython. Found when three AzureIoTForge device agents polled files a worker process was replacing; one died after ~4 minutes. Covered by `M6_Stdlib/OpenIoErrorTests.cs`.
+
+Not changed (workarounds exist, larger work): `importlib.util.spec_from_file_location`/`module_from_spec`, `importlib.reload`, `urllib.request.urlopen`.
+
+---
+
 ## v1.0.0 — 2026-07-24
 
 First functionally complete version. A Python 3.x interpreter written from scratch in C# (.NET 10)

@@ -548,7 +548,7 @@ scenario by scenario in [ROADMAP.md](ROADMAP.md).
   `collections.abc`, `functools`, `enum`, `math`, `decimal`, `struct`, `socket`, `ssl`, `threading`,
   `asyncio` (incl. `Lock`/`Event`/`Semaphore`/`Queue`, `wait`, `add_reader`/`add_writer`,
   `run_in_executor`), `contextlib`, `dataclasses` (real field-driven `__init__`/`__repr__`/`__eq__`,
-  `frozen=True`, `is_dataclass`), `hashlib`/`hmac`/`base64`, `urllib.parse`, `os`, `sys`, `time`, `io`,
+  `frozen=True`, `is_dataclass`), `hashlib`/`hmac`/`base64`, `pysharp_signing` (PySharp-specific ECDSA/RSA-PSS sign and verify with PEM keys), `urllib.parse`, `os`, `sys`, `time`, `io`,
   `string`, `types`, `re` (a real `System.Text.RegularExpressions`-backed engine), `datetime`,
   `ipaddress`, `pathlib`, `weakref`, `pickle`, `colorsys`, `itertools`, `operator`, `abc`, `inspect`
   (`signature`/`Signature`/`Parameter`); real (not stub) `typing` (`get_type_hints`, `Annotated`,
