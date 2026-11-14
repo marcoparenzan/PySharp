@@ -10,5 +10,6 @@
   <Project Path="PySharp/PySharp.csproj" />
   <Project Path="PySharp.Tests/PySharp.Tests.csproj" />
   <Project Path="PySharp.JupyterSharp.Kernel/PySharp.JupyterSharp.Kernel.csproj" />
+  <Project Path="PySharp.CodeSharp/PySharp.CodeSharp.csproj" />
   <Project Path="PySharp.JupyterSharp.Kernel.Tests/PySharp.JupyterSharp.Kernel.Tests.csproj" />
 </Solution>

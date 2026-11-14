@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageId>PySharp.CodeSharp</PackageId>
+    <Version>0.1.0-net11-preview.1</Version>
+    <Authors>Marco Parenzan</Authors>
+    <Copyright>Copyright (c) 2026 Marco Parenzan</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Description>PySharp adapter for the CodeSharp language contract (ILanguage / ILanguageSession).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PySharpLib/PySharpLib.csproj" />
+    <PackageReference Include="CodeSharp" Version="0.1.0-net11-preview.1" />
+  </ItemGroup>
+</Project>

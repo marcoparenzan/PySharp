@@ -25,3 +25,8 @@ Suite-wide points are in [../ScienceSharp/OPENPOINTS.md](../ScienceSharp/OPENPOI
 | P-13 | On first `import torch`, TorchSharp copies about 250 MB of native files from the NuGet cache into a `cpu` folder next to its `TorchSharp.dll`, which is inside the extension folder. That is TorchSharp's own mechanism (its "consolidate native binaries" step); it does not change the package size but doubles the disk use per installed extension version. | known |
 | P-14 | OpenCV natives exist only for Windows: `NDSharp.Image` references only `OpenCvSharp4.runtime.win`. On Linux and macOS `import cv2` cannot work, and the kernel says so instead of asking for an install. | open |
 | P-15 | The package versions in `ScienceSharp\Install-Natives.ps1` (libtorch-cpu 2.10.0, TorchSharp 0.107.0, OpenCvSharp4.runtime.win 4.11.0.20250507) are written by hand and must follow `PySharpLib.Torch.csproj` and `NDSharp.Image`. | open |
+
+## Open: CodeSharp adapter
+
+- Interrupting a running script (cancellation token into the interpreter) is not possible yet; the adapter does not claim `LanguageCapabilities.Cancellation`.
+

@@ -360,3 +360,8 @@ methods, `try/finally`, and a differential set of scripts that must print the sa
   where threads are not (a browser). `RunAsync` (§12d) waits without a thread, but only through plain calls.
 
 These limits are the natural starting point for future work (see `TODO.md`).
+
+## CodeSharp adapter
+
+`PySharp.CodeSharp` implements the CodeSharp contract (`PySharpLanguage` : `ILanguage`, id `pysharp`, extension `.py`). The interpreter does not depend on CodeSharp; only this adapter does. The session keeps its own __main__ module because PyEngine.Run creates a new one on every call; cancellation and input redirection are not claimed. Tests: `CodeSharpAdapterTests`.
+
